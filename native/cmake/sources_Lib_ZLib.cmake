@@ -1,0 +1,18 @@
+set(Lib_ZLib_SOURCES
+  ${RAN_SRC}/Lib_ZLib/adler32.c
+  ${RAN_SRC}/Lib_ZLib/compress.c
+  ${RAN_SRC}/Lib_ZLib/crc32.c
+  ${RAN_SRC}/Lib_ZLib/deflate.c
+  ${RAN_SRC}/Lib_ZLib/gzio.c
+  ${RAN_SRC}/Lib_ZLib/infback.c
+  ${RAN_SRC}/Lib_ZLib/inffast.c
+  ${RAN_SRC}/Lib_ZLib/inflate.c
+  ${RAN_SRC}/Lib_ZLib/inftrees.c
+  ${RAN_SRC}/Lib_ZLib/ioapi.c
+  ${RAN_SRC}/Lib_ZLib/mztools.c
+  ${RAN_SRC}/Lib_ZLib/trees.c
+  ${RAN_SRC}/Lib_ZLib/uncompr.c
+  ${RAN_SRC}/Lib_ZLib/unzip.c
+  ${RAN_SRC}/Lib_ZLib/zip.c
+  ${RAN_SRC}/Lib_ZLib/zutil.c
+)

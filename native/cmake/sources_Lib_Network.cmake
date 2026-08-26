@@ -1,0 +1,30 @@
+# Client-side subset only. Lib_Network is shared with the servers; the ODBC,
+# IOCP and *ServerThread files are server code and are not built for mobile.
+set(Lib_Network_SOURCES
+  ${RAN_SRC}/Lib_Network/s_NetClient.cpp
+  ${RAN_SRC}/Lib_Network/s_NetClientMsg.cpp
+  ${RAN_SRC}/Lib_Network/s_NetClientMsgDelCharacter.cpp
+  ${RAN_SRC}/Lib_Network/s_NetClientMsgLogin.cpp
+  ${RAN_SRC}/Lib_Network/s_NetClientMsgRegister.cpp
+  ${RAN_SRC}/Lib_Network/s_NetClientWebMsg.cpp
+  ${RAN_SRC}/Lib_Network/s_NetGlobal.cpp
+  ${RAN_SRC}/Lib_Network/s_Util.cpp
+  ${RAN_SRC}/Lib_Network/s_CBit.cpp
+  ${RAN_SRC}/Lib_Network/s_CLock.cpp
+  ${RAN_SRC}/Lib_Network/s_CMemPooler.cpp
+  ${RAN_SRC}/Lib_Network/s_CSMsgList.cpp
+  ${RAN_SRC}/Lib_Network/s_CMinMd5.cpp
+  ${RAN_SRC}/Lib_Network/s_CRandomNumber.cpp
+  ${RAN_SRC}/Lib_Network/s_CSystemInfo.cpp
+  ${RAN_SRC}/Lib_Network/s_CGetFileSize.cpp
+  ${RAN_SRC}/Lib_Network/SendMsgBuffer.cpp
+  ${RAN_SRC}/Lib_Network/RcvMsgBuffer.cpp
+  ${RAN_SRC}/Lib_Network/MinLzo.cpp
+  ${RAN_SRC}/Lib_Network/minTea.cpp
+  ${RAN_SRC}/Lib_Network/minUuid.cpp
+  ${RAN_SRC}/Lib_Network/des.cpp
+  ${RAN_SRC}/Lib_Network/dhkey.cpp
+  ${RAN_SRC}/Lib_Network/gamecode.cpp
+  ${RAN_SRC}/Lib_Network/NETCOMMENTS.cpp
+  ${RAN_SRC}/Lib_Network/NSPCID.cpp
+)
