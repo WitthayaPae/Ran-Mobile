@@ -39,9 +39,12 @@ for A in $ABIS; do
 done
 [ -n "$HAVE" ] || { echo "[!] nothing built — run ./build.sh first"; exit 1; }
 
-# manifest -> base APK
+# resources (the splash window background) -> flat archive, then link
+"$BT/aapt2.exe" compile --dir "$(cygpath -w "$HERE/android/res")" -o "$(cygpath -w "$OUT/res.zip")"
+
+# manifest + resources -> base APK
 "$BT/aapt2.exe" link -o "$OUT/base.apk" -I "$PLATFORM" \
-  --manifest "$HERE/android/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34
+  --manifest "$HERE/android/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34 "$(cygpath -w "$OUT/res.zip")"
 
 # aapt2 link cannot add arbitrary files, so the lib/ tree goes in with a plain
 # zip update — STORED, because Android loads .so straight out of the APK.

@@ -52,6 +52,10 @@ const char *kVS =
     "layout(location=2) in vec2 aUV;\n"
     "layout(location=3) in vec3 aNormal;\n"
     "layout(location=4) in vec3 aBlend;\n"
+    //  The second texture coordinate set. Only a few things use it - the moon
+    //  picks its phase out of a 2x2 atlas with it - but nothing could before,
+    //  because only the first set was ever read off the vertex.
+    "layout(location=5) in vec2 aUV2;\n"
     "uniform mat4 uMVP;\n"
     "uniform mat4 uWorld;\n"
     "uniform vec2 uViewport;\n"
@@ -62,6 +66,7 @@ const char *kVS =
     "uniform vec3 uCameraPos;\n"
     "out vec4 vColor;\n"
     "out vec2 vUV;\n"
+    "out vec2 vUV2;\n"
     "out vec3 vWorldPos;\n"
     "out vec3 vNormal;\n"
     "void main() {\n"
@@ -104,6 +109,7 @@ const char *kVS =
     "    }\n"
     "    vColor = aColor.bgra;\n"   // D3DCOLOR is B,G,R,A in memory
     "    vUV = aUV;\n"
+    "    vUV2 = aUV2;\n"
     "}\n";
 
 const char *kFS =
@@ -111,6 +117,7 @@ const char *kFS =
     "precision mediump float;\n"
     "in vec4 vColor;\n"
     "in vec2 vUV;\n"
+    "in vec2 vUV2;\n"
     "in vec3 vWorldPos;\n"
     "in vec3 vNormal;\n"
     "uniform int   uLighting;\n"
@@ -123,6 +130,10 @@ const char *kFS =
     "uniform vec3  uLightAtten[8];\n"
     "uniform vec3  uGlobalAmbient;\n"
     "uniform vec3  uMatDiffuse;\n"
+    "uniform int   uSpecularOn;\n"
+    "uniform vec3  uMatSpecular;\n"
+    "uniform float uMatPower;\n"
+    "uniform vec3  uLightSpecular[8];\n"
     "uniform int   uHasVertexColor;\n"
     "uniform vec3  uMatAmbient;\n"
     "uniform vec3  uMatEmissive;\n"
@@ -130,11 +141,22 @@ const char *kFS =
     "uniform vec3  uCameraPosF;\n"
     "uniform int   uFogMode;\n"
     "uniform vec3  uFogColor;\n"
+    "uniform int   uGammaOn;\n"
+    "uniform sampler2D uGammaLut;\n"
     "uniform float uFogStart;\n"
     "uniform float uFogEnd;\n"
     "uniform float uFogDensity;\n"
     "uniform sampler2D uTex;\n"
     "uniform int   uUseTexture;\n"
+    //  Declared in this stage too: the same uniform is shared across the
+    //  program, and the fragment stage needs it to tell interface draws from
+    //  world ones.
+    //  highp explicitly: the vertex stage defaults an int to highp and the
+    //  fragment stage to mediump, and a uniform shared by both stages has to
+    //  agree or the program will not link.
+    "uniform highp int uPreTransformed;\n"
+    "uniform vec2  uTexSize;\n"     // texels of the bound texture, 0 if unknown
+    "uniform float uUiSharpen;\n"   // magnification the interface is drawn at
     "uniform int   uAlphaTest;\n"
     "uniform float uAlphaRef;\n"
     "out vec4 oColor;\n"
@@ -159,8 +181,28 @@ const char *kFS =
     "    return v;\n"
     "}\n"
     "\n"
+    "vec2 sharpUV(vec2 uv) {\n"
+    "    //  Bilinear across a whole texel is what makes magnified interface art\n"
+    "    //  look mushy: every pixel between two texel centres is a blend. The\n"
+    "    //  icons and panels are authored for a 1024x768 screen and are drawn\n"
+    "    //  around twice that here, so almost every pixel is such a blend.\n"
+    "    //\n"
+    "    //  Squeezing the interpolation into roughly one output pixel instead\n"
+    "    //  keeps the smooth ramp where a texel boundary genuinely falls between\n"
+    "    //  output pixels, and makes everything else flat. Nearest sampling would\n"
+    "    //  also be crisp, but it would put the jagged stair-steps back.\n"
+    "    vec2 t = uv * uTexSize;\n"
+    "    vec2 i = floor(t) + 0.5;\n"
+    "    vec2 f = clamp((t - i) * uUiSharpen, -0.5, 0.5);\n"
+    "    return (i + f) / uTexSize;\n"
+    "}\n"
+    "\n"
     "void main() {\n"
-    "    vec4 tex = (uUseTexture == 1) ? texture(uTex, vUV) : vec4(1.0);\n"
+    "    //  Interface only. World geometry is as often minified as magnified,\n"
+    "    //  and this is a magnification filter.\n"
+    "    vec2 uvS = (uPreTransformed == 1 && uUseTexture == 1 &&\n"
+    "                uTexSize.x > 1.0 && uUiSharpen > 1.0) ? sharpUV(vUV) : vUV;\n"
+    "    vec4 tex = (uUseTexture == 1) ? texture(uTex, uvS) : vec4(1.0);\n"
     "    //  With lighting on, the pipeline's diffuse alpha is the material's;\n"
     "    //  the vertex colour only carries it for unlit geometry.\n"
     "    vec4 diffuse = vec4(vColor.rgb, uLighting == 1 ? uMatAlpha : vColor.a);\n"
@@ -181,6 +223,13 @@ const char *kFS =
     "    if (uStage1 == 1) {\n"
     "        vec3 cn = normalize(mat3(uView) * normalize(vNormal));\n"
     "        rgb *= texture(uTexCube, cn).rgb;\n"
+    "    } else if (uStage1 == 3) {\n"
+    "        //  D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR: the cube is addressed\n"
+    "        //  by the view vector reflected about the normal, both in camera\n"
+    "        //  space. This is the environment reflection on shiny pieces.\n"
+    "        vec3 vn = normalize(mat3(uView) * normalize(vNormal));\n"
+    "        vec3 vp = (uView * vec4(vWorldPos, 1.0)).xyz;\n"
+    "        rgb *= texture(uTexCube, reflect(normalize(vp), vn)).rgb;\n"
     "    } else if (uStage1 == 2) {\n"
     "        //  MODULATE(TFACTOR, CURRENT): a flat tint over the stage 0 result,\n"
     "        //  with no texture on the stage at all. This is how the ambient\n"
@@ -197,11 +246,21 @@ const char *kFS =
     "    else if (uAlphaOp == 1)  alpha = diffuse.a;\n"   // DISABLE: pipeline alpha
     "    else                     alpha = b1.a * b2.a;\n"
     "\n"
+    "    //  Stage 1 taking its alpha from the same texture, addressed by the\n"
+    "    //  second coordinate set. The moon is drawn this way: the sheet holds\n"
+    "    //  four phases in a 2x2 grid, stage 0 samples it for colour with set 0\n"
+    "    //  and stage 1 picks the current phase's quadrant with set 1 and uses\n"
+    "    //  only its alpha as the mask. Reading set 0 for both meant the mask\n"
+    "    //  was the whole sheet, and all four moons showed at once.\n"
+    "    if (uStage1 == 4) alpha = texture(uTex, vUV2).a * diffuse.a;\n"
+    "\n"
     "    vec4 c = vec4(rgb, alpha);\n"
     "\n"
     "    if (uLighting == 1) {\n"
     "        vec3 n = normalize(vNormal);\n"
     "        vec3 lit = uMatEmissive + uMatAmbient * uGlobalAmbient;\n"
+    "        vec3 spec = vec3(0.0);\n"
+    "        vec3 V = normalize(uCameraPosF - vWorldPos);\n"
     "        for (int i = 0; i < 8; ++i) {\n"
     "            if (i >= uLightCount) break;\n"
     "            vec3 L;\n"
@@ -225,8 +284,14 @@ const char *kFS =
     "            //  as well would count it twice and darken the whole scene.\n"
     "            vec3 md = (uHasVertexColor == 1) ? vec3(1.0) : uMatDiffuse;\n"
     "            lit += atten * (uLightDiffuse[i] * md * ndotl + uLightAmbient[i]);\n"
+    "            if (uSpecularOn == 1 && ndotl > 0.0) {\n"
+    "                vec3 H = normalize(L + V);\n"                  // Blinn half-vector
+    "                float s = pow(max(dot(n, H), 0.0), max(uMatPower, 1.0));\n"
+    "                spec += atten * uLightSpecular[i] * s;\n"
+    "            }\n"
     "        }\n"
     "        c.rgb *= clamp(lit, 0.0, 1.0);\n"
+    "        if (uSpecularOn == 1) c.rgb += uMatSpecular * spec;\n"   // added, not modulated
     "    }\n"
     "\n"
     "    if (uAlphaTest == 1 && c.a < uAlphaRef) discard;\n"
@@ -238,6 +303,14 @@ const char *kFS =
     "        else if (uFogMode == 1) f = exp(-uFogDensity * d);\n"                        // EXP
     "        else f = exp(-uFogDensity * uFogDensity * d * d);\n"                         // EXP2
     "        c.rgb = mix(uFogColor, c.rgb, clamp(f, 0.0, 1.0));\n"
+    "    }\n"
+    "    //  The display gamma ramp the client asked for. Applied here because\n"
+    "    //  everything the client draws passes through this shader, which makes\n"
+    "    //  it equivalent to programming the display LUT.\n"
+    "    if (uGammaOn == 1) {\n"
+    "        c.r = texture(uGammaLut, vec2(c.r, 0.5)).r;\n"
+    "        c.g = texture(uGammaLut, vec2(c.g, 0.5)).g;\n"
+    "        c.b = texture(uGammaLut, vec2(c.b, 0.5)).b;\n"
     "    }\n"
     "    oColor = c;\n"
     "}\n";
@@ -274,6 +347,11 @@ bool uniformChanged(GLint loc, const float *values, int count) {
 void setUniform1i(GLint loc, GLint v) {
     const float f = (float)v;
     if (uniformChanged(loc, &f, 1)) { glUniform1i(loc, v); ++g_callsUniform; }
+}
+
+void setUniform2f(GLint loc, GLfloat x, GLfloat y) {
+    const float v[2] = { x, y };
+    if (uniformChanged(loc, v, 2)) { glUniform2f(loc, x, y); ++g_callsUniform; }
 }
 
 void setUniform1f(GLint loc, GLfloat v) {
@@ -318,6 +396,7 @@ GLuint g_prog = 0;
 GLint  uWorld = -1, uCameraPos = -1, uCameraPosF = -1,
        uLighting = -1, uLightCount = -1, uGlobalAmbient = -1,
        uMatDiffuse = -1, uHasVertexColor = -1, uMatAmbient = -1, uMatEmissive = -1,
+       uSpecularOn = -1, uMatSpecular = -1, uMatPower = -1, uLightSpecular = -1,
        uLightType = -1, uLightDiffuse = -1, uLightAmbient = -1,
        uLightPos = -1, uLightDir = -1, uLightAtten = -1,
        uFogMode = -1, uFogColor = -1, uFogStart = -1, uFogEnd = -1, uFogDensity = -1;
@@ -328,6 +407,11 @@ GLint  uMatAlpha = -1;
 float  g_texFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 //  Stage 1: 0 off, 1 cube map addressed by the camera-space normal. That is the
 //  only configuration the engine asks for; anything else is reported, not guessed.
+//  Every texture's base-level size, so a draw can tell the shader how many
+//  texels it is magnifying.
+std::map<unsigned, std::pair<int, int> > g_texDims;
+
+bool   g_noUiSharp = false;
 int    g_stage1Mode = 0;
 unsigned g_stage1Cube = 0;
 float  g_viewMatrix[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
@@ -336,7 +420,9 @@ GLint  uMVP = -1, uViewport = -1, uPreTransformed = -1, uTex = -1,
        uUseTexture = -1, uAlphaTest = -1, uAlphaRef = -1,
        uColorOp = -1, uColorArg1 = -1, uColorArg2 = -1,
        uAlphaOp = -1, uAlphaArg1 = -1, uAlphaArg2 = -1, uTexFactor = -1,
-       uTexCube = -1, uStage1 = -1, uView = -1;
+       uTexCube = -1, uStage1 = -1, uView = -1,
+       uTexSize = -1, uUiSharpen = -1,
+       uGammaOn = -1, uGammaLut = -1;
 GLuint g_vbo = 0, g_ibo = 0, g_vao = 0;
 // Stage-0 combiner, mirroring the device's texture stage state.
 DWORD g_colorOp = 4 /*MODULATE*/, g_colorArg1 = 2 /*TEXTURE*/, g_colorArg2 = 0 /*DIFFUSE*/;
@@ -354,6 +440,14 @@ float g_worldM[64] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
 float g_viewProj[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 float g_world[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 float g_cameraPos[3] = { 0, 0, 0 };
+int   g_specularOn = 0;
+//  The ramp the client last set, as a 256x1 RGB texture on its own unit.
+unsigned g_gammaLut = 0;
+int      g_gammaOn = 0;
+unsigned char g_gammaBytes[256 * 3] = { 0 };
+bool     g_gammaDirty = false;
+float g_matSpecular[3] = { 0, 0, 0 }, g_matPower = 1.0f;
+float g_lightSpecular[8 * 3] = { 0 };
 float g_globalAmbient[3] = { 0, 0, 0 };
 float g_matDiffuse[3] = { 1, 1, 1 }, g_matAmbient[3] = { 1, 1, 1 }, g_matEmissive[3] = { 0, 0, 0 };
 float g_matAlpha = 1.0f;
@@ -366,6 +460,25 @@ float g_fogColor[3] = { 0, 0, 0 }, g_fogStart = 0.0f, g_fogEnd = 1.0f, g_fogDens
 
 DWORD g_dsBlend=0,g_dsSrc=0,g_dsDst=0,g_dsZ=0,g_dsZW=0,g_dsCull=0,g_dsATest=0,g_dsARef=0;
 int g_diagDraws = 0, g_diagUI = 0, g_diagUpload = 0;
+
+//  Stop the frame after N draws, so a screenshot at successive N says which
+//  draw put a given thing on the screen. The number is read out of the file
+//  rather than the file merely existing, so it can be bisected without a
+//  relaunch - which matters when getting back into the world costs a login.
+//  -1 leaves every draw alone.
+int g_drawLimit = -1;
+int g_frameDraw = 0;
+
+//  How much of the frame is drawn into an off-screen target rather than
+//  straight at the panel, and how big the largest such target is.
+//
+//  It matters for sharpness: a render target is created at whatever size the
+//  client asks for, which is its own logical size. Now that the frame itself is
+//  the full panel, anything that goes through a target is drawn at half and
+//  magnified back up - so if the scene renders into one, drawing the frame at
+//  panel resolution buys nothing for it.
+unsigned long g_rtDraws = 0;
+int g_rtBiggestW = 0, g_rtBiggestH = 0;
 bool g_drawDump = false;      // /sdcard/ran/drawdump, one burst per touch
 const void *g_diagVerts = NULL;   // CPU copy of a buffer-sourced draw, dump only
 const void *g_diagIndices = NULL; // and its indices, so a subset walk is possible
@@ -566,6 +679,8 @@ GLenum cmpFunc(DWORD d3d) {
 //  The diagnostic switches are re-read while the game runs, so a measurement
 //  can be taken without restarting and logging in again - which matters when
 //  the server drops a session on every reconnect.
+extern "C" void RanD3D_ProbeTextures(void);
+
 extern "C" void RanGLR_RefreshDiagnostics(void) {
     struct { const char *path; bool *flag; const char *what; } diag[] = {
         { "/sdcard/ran/nulldraw",  &g_nullDraw,    "every GL call a draw makes" },
@@ -576,7 +691,33 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "/sdcard/ran/noblend",   &g_skipBlend,   "vertex blending (each group rides its first bone)" },
         { "/sdcard/ran/cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
         { "/sdcard/ran/noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
+        { "/sdcard/ran/nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
     };
+
+    //  A one-shot readback of every loaded texture. Same re-arm as the draw
+    //  dump: delete the file and touch it again.
+    {
+        static bool s_probe = false;
+        const bool on = (access("/sdcard/ran/texprobe", F_OK) == 0);
+        if (on != s_probe) {
+            s_probe = on;
+            if (on) RanD3D_ProbeTextures();
+        }
+    }
+
+    {
+        int limit = -1;
+        FILE *f = fopen("/sdcard/ran/drawlimit", "rb");
+        if (f) {
+            char buf[32] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0) limit = atoi(buf);
+            fclose(f);
+        }
+        if (limit != g_drawLimit) {
+            g_drawLimit = limit;
+            LOGI("diagnostic: draw limit %d", g_drawLimit);
+        }
+    }
 
     //  Not a skip: a one-shot burst of per-draw detail, re-armed by deleting
     //  the file and touching it again.
@@ -671,6 +812,14 @@ extern "C" int RanGLR_Init(void) {
     uTexFactor      = glGetUniformLocation(g_prog, "uTexFactor");
     uTexCube        = glGetUniformLocation(g_prog, "uTexCube");
     uStage1         = glGetUniformLocation(g_prog, "uStage1");
+    uTexSize        = glGetUniformLocation(g_prog, "uTexSize");
+    uUiSharpen      = glGetUniformLocation(g_prog, "uUiSharpen");
+    uGammaOn        = glGetUniformLocation(g_prog, "uGammaOn");
+    uGammaLut       = glGetUniformLocation(g_prog, "uGammaLut");
+    uSpecularOn     = glGetUniformLocation(g_prog, "uSpecularOn");
+    uMatSpecular    = glGetUniformLocation(g_prog, "uMatSpecular");
+    uMatPower       = glGetUniformLocation(g_prog, "uMatPower");
+    uLightSpecular  = glGetUniformLocation(g_prog, "uLightSpecular");
     uView           = glGetUniformLocation(g_prog, "uView");
     //  Stage 0 stays on unit 0; the cube map lives on unit 1 for its whole life.
     glUseProgram(g_prog);
@@ -792,6 +941,33 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, glTex, 0);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rt.depth);
 
+        //  Freshly allocated storage is undefined, and undefined is not black.
+        //
+        //  glTexImage2D with a NULL pointer reserves the memory and leaves
+        //  whatever was in it. That is fine for a pass that clears before it
+        //  draws - the post-process chain does - but not for one that expects
+        //  the target to start empty, or for a target that is composited before
+        //  anything has rendered into it. Composited additively, undefined
+        //  memory is a full-screen wash of an arbitrary colour.
+        //
+        //  D3D leaves a new render target's contents undefined too, so this is
+        //  not emulating a documented behaviour; it is choosing the one value
+        //  that makes an unwritten target harmless under every blend the engine
+        //  uses. It costs one clear per target, once.
+        {
+            GLenum stTmp = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (stTmp == GL_FRAMEBUFFER_COMPLETE) {
+                GLboolean scis = glIsEnabled(GL_SCISSOR_TEST);
+                if (scis) glDisable(GL_SCISSOR_TEST);
+                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                glDepthMask(GL_TRUE);
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                glClearDepthf(1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                if (scis) glEnable(GL_SCISSOR_TEST);
+            }
+        }
+
         GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (st != GL_FRAMEBUFFER_COMPLETE) {
             LOGE("render target %ux%u incomplete: 0x%04X", w, h, st);
@@ -859,6 +1035,9 @@ extern "C" void RanGLR_ClearRectOff(void) {
 
 extern "C" void RanGLR_Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
     if (!g_inited) return;
+    //  The client clears the frame once at the top of the scene, which is the
+    //  only frame boundary visible from this layer.
+    if (!g_rtActive && (flags & D3DCLEAR_TARGET)) g_frameDraw = 0;
     GLbitfield mask = 0;
     if (flags & D3DCLEAR_TARGET) {
         // D3DCOLOR is ARGB, packed 0xAARRGGBB.
@@ -897,6 +1076,46 @@ extern "C" void RanGLR_SetViewport(int x, int y, int w, int h) {
 // per-draw rather than per-state-set keeps this correct with state blocks, which
 // replay dozens of states at once.
 extern "C" void RanGLR_SetMaterialAlpha(float a) { g_matAlpha = a; }
+
+//  ramp is 3 * 256 WORDs: red, then green, then blue, each 0..65535 as GDI
+//  expects. Passing NULL turns the ramp off.
+//  Anything that issues GL behind the renderer's back - the touch overlay does,
+//  once a frame - has to say so, or the cached state describes a context that no
+//  longer exists and the next draw silently skips the binds it still needs.
+extern "C" void RanGLR_InvalidateStateCache(void) {
+    g_gl.reset();
+    glActiveTexture(GL_TEXTURE0);
+}
+
+extern "C" void RanGLR_SetGammaRamp(const unsigned short *ramp) {
+    if (!ramp) { g_gammaOn = 0; return; }
+    bool identity = true;
+    for (int i = 0; i < 256; ++i) {
+        const unsigned char r = (unsigned char)(ramp[i] >> 8);
+        const unsigned char g = (unsigned char)(ramp[256 + i] >> 8);
+        const unsigned char b = (unsigned char)(ramp[512 + i] >> 8);
+        g_gammaBytes[i * 3 + 0] = r;
+        g_gammaBytes[i * 3 + 1] = g;
+        g_gammaBytes[i * 3 + 2] = b;
+        //  A ramp that maps every level to itself is what the client sets to
+        //  turn correction off; skipping it avoids three texture reads a pixel.
+        if (r != i || g != i || b != i) identity = false;
+    }
+    g_gammaOn = identity ? 0 : 1;
+    g_gammaDirty = true;
+}
+
+extern "C" void RanGLR_SetSpecular(int enabled, const float *matSpecular, float power,
+                                   const float *lightSpecular, int lightCount) {
+    g_specularOn = enabled ? 1 : 0;
+    if (matSpecular) memcpy(g_matSpecular, matSpecular, sizeof(g_matSpecular));
+    g_matPower = power;
+    if (lightCount > 8) lightCount = 8;
+    if (lightCount < 0) lightCount = 0;
+    memset(g_lightSpecular, 0, sizeof(g_lightSpecular));
+    if (lightSpecular && lightCount)
+        memcpy(g_lightSpecular, lightSpecular, sizeof(float) * 3 * (size_t)lightCount);
+}
 
 extern "C" void RanGLR_SetLighting(int enabled, const float *worldMatrix, const float *cameraPos,
                                    const float *globalAmbient, const float *matDiffuse,
@@ -946,9 +1165,19 @@ extern "C" void RanGLR_SetVertexBlend(int weightCount, const float *worldMatrice
 //  Stage 1, bound once per draw. mode 1 means "cube map by camera-space normal";
 //  0 turns the stage off. The cube texture stays on texture unit 1.
 extern "C" void RanGLR_SetStage1(int mode, unsigned glCubeTex, const float *viewMatrix) {
-    g_stage1Mode = (mode == 1 && glCubeTex) ? 1 : (mode == 2 ? 2 : 0);
+    //  1 and 3 are the two cube-map addressings and need a cube bound; 2 is a
+    //  flat tint and 4 takes alpha from the stage 0 texture at the second
+    //  coordinate set, neither of which needs one.
+    //
+    //  Mode 3 used to fall through to 0 here, so the reflection addressing the
+    //  caller asks for never reached the shader even though the shader has a
+    //  branch for it.
+    if ((mode == 1 || mode == 3) && glCubeTex)  g_stage1Mode = mode;
+    else if (mode == 2 || mode == 4)            g_stage1Mode = mode;
+    else                                        g_stage1Mode = 0;
+
     if (viewMatrix) memcpy(g_viewMatrix, viewMatrix, sizeof(g_viewMatrix));
-    if (g_stage1Mode && glCubeTex != g_stage1Cube) {
+    if (glCubeTex && glCubeTex != g_stage1Cube) {
         g_stage1Cube = glCubeTex;
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, glCubeTex);
@@ -1038,6 +1267,36 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
     setUniformMatrix(uWorld, g_world, 1);
     setUniform3fv(uCameraPos, g_cameraPos);
     setUniform3fv(uCameraPosF, g_cameraPos);
+    setUniform1i(uSpecularOn, g_specularOn);
+
+    //  Unit 3: unit 0 is the stage-0 texture, 1 the stage-1 texture and 2 the
+    //  cube, so the ramp goes above them and stays bound.
+    if (g_gammaDirty && g_gammaOn) {
+        g_gammaDirty = false;
+        if (!g_gammaLut) glGenTextures(1, &g_gammaLut);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, g_gammaLut);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 256, 1, 0, GL_RGB,
+                     GL_UNSIGNED_BYTE, g_gammaBytes);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    setUniform1i(uGammaOn, (g_gammaOn && g_gammaLut) ? 1 : 0);
+    if (g_gammaOn && g_gammaLut) {
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, g_gammaLut);
+        glActiveTexture(GL_TEXTURE0);
+        if (uGammaLut >= 0) glUniform1i(uGammaLut, 3);
+    }
+    if (g_specularOn) {
+        setUniform3fv(uMatSpecular, g_matSpecular);
+        setUniform1f(uMatPower, g_matPower);
+        if (uLightSpecular >= 0) glUniform3fv(uLightSpecular, 8, g_lightSpecular);
+    }
     setUniform3fv(uGlobalAmbient, g_globalAmbient);
     setUniform3fv(uMatDiffuse, g_matDiffuse);
     setUniform3fv(uMatAmbient, g_matAmbient);
@@ -1344,6 +1603,41 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     }
     if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) ++g_uiDraws;
     if (glTexture) ++g_texturedDraws;
+
+    //  Counted before the cut, so the numbering does not shift as the limit
+    //  moves; a draw past the limit simply is not issued.
+    ++g_frameDraw;
+    if (g_drawLimit >= 0 && g_frameDraw > g_drawLimit) return;
+    if (g_rtActive) {
+        ++g_rtDraws;
+        if (g_rtW * g_rtH > g_rtBiggestW * g_rtBiggestH) { g_rtBiggestW = g_rtW; g_rtBiggestH = g_rtH; }
+    }
+
+    if (g_drawLimit > 0 && g_frameDraw == g_drawLimit) {
+        static int s_saidFor = -1;
+        if (s_saidFor != g_drawLimit) {
+            s_saidFor = g_drawLimit;
+            const void *vp = verts ? verts : g_diagVerts;
+            float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+            for (UINT q = 0; vp && q < vcount && q < 4096; ++q) {
+                const float *sp = (const float *)((const BYTE *)vp + (size_t)q * stride);
+                if (sp[0] < bx0) bx0 = sp[0];
+                if (sp[0] > bx1) bx1 = sp[0];
+                if (sp[1] < by0) by0 = sp[1];
+                if (sp[1] > by1) by1 = sp[1];
+            }
+            LOGI("draw #%d: fvf=%08lX stride=%u tex=%u prim=%lu vc=%u "
+                 "box=(%.0f,%.0f)-(%.0f,%.0f) rhw=%d blend=%lu(%lu,%lu) "
+                 "cop=%lu,%lu,%lu aop=%lu,%lu,%lu tfactor=%.2f,%.2f,%.2f,%.2f",
+                 g_frameDraw, (unsigned long)fvf, stride, glTexture,
+                 (unsigned long)primCount, vcount, bx0, by0, bx1, by1,
+                 (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW ? 1 : 0,
+                 (unsigned long)g_dsBlend, (unsigned long)g_dsSrc, (unsigned long)g_dsDst,
+                 (unsigned long)g_colorOp, (unsigned long)g_colorArg1, (unsigned long)g_colorArg2,
+                 (unsigned long)g_alphaOp, (unsigned long)g_alphaArg1, (unsigned long)g_alphaArg2,
+                 g_texFactor[0], g_texFactor[1], g_texFactor[2], g_texFactor[3]);
+        }
+    }
 
     //  Per-draw dump of a world (non pre-transformed) draw: what the pixel
     //  pipeline was asked to do, and where vertex 0 actually lands in NDC.
@@ -1654,7 +1948,12 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     if (fvf & D3DFVF_PSIZE)    off += 4;
     if (fvf & D3DFVF_DIFFUSE)  { colorOff = off; off += 4; }
     if (fvf & D3DFVF_SPECULAR) off += 4;
-    if ((fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT) uvOff = off;
+    const UINT texSets = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    if (texSets) uvOff = off;
+    //  The second set, when there is one. Both are plain float2 in every vertex
+    //  this engine declares (D3DFVF_TEXCOORDSIZE2 is the default), so the second
+    //  starts one float2 after the first.
+    int uv2Off = (texSets >= 2) ? (int)(off + 8) : -1;
 
     //  Re-specifying the attribute pointers is ~10 GL calls, and consecutive
     //  draws nearly always share a layout: same FVF, same stride, same buffer,
@@ -1713,6 +2012,15 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             } else {
                 glDisableVertexAttribArray(2);
                 glVertexAttrib2f(2, 0.0f, 0.0f);
+            }
+
+            if (uv2Off >= 0) {
+                p_glVertexAttribFormat(5, 2, GL_FLOAT, GL_FALSE, (GLuint)uv2Off);
+                p_glVertexAttribBinding(5, 0);
+                glEnableVertexAttribArray(5);
+            } else {
+                glDisableVertexAttribArray(5);
+                glVertexAttrib2f(5, 0.0f, 0.0f);
             }
         }
 
@@ -1773,6 +2081,15 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         glVertexAttrib2f(2, 0.0f, 0.0f);
     }
 
+    if (uv2Off >= 0) {
+        glEnableVertexAttribArray(5);
+        glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, stride,
+                              (const void *)(intptr_t)(uv2Off + vbBase));
+    } else {
+        glDisableVertexAttribArray(5);
+        glVertexAttrib2f(5, 0.0f, 0.0f);
+    }
+
     // Both paths end up with the same apparent winding: the UI flip and the
     // world path's lack of one cancel against GL's bottom-left window origin.
     // Measured, not derived - inverting the world path culled the entire scene
@@ -1803,6 +2120,19 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  diffuse material comes from, so it is per draw, not per state block.
     setUniform1i(uHasVertexColor, colorOff >= 0 ? 1 : 0);
     setUniform1i(uPreTransformed, preTransformed ? 1 : 0);
+
+    //  Pre-transformed vertices are never lit.
+    //
+    //  D3D9 skips the lighting pipeline entirely for D3DFVF_XYZRHW and uses the
+    //  vertex diffuse as it is - which is why the interface never disables
+    //  D3DRS_LIGHTING for itself: on the real device it does not have to. Here
+    //  the world lighting state was applied to those draws as well, so the whole
+    //  GUI dimmed and brightened with the in-game time of day, and went dark at
+    //  night along with the scene behind it.
+    //
+    //  Set per draw, after the state block, because it depends on the vertex
+    //  format rather than on any render state.
+    setUniform1i(uLighting, preTransformed ? 0 : g_lightingOn);
     {
         const float viewport[2] = { (float)curWidth(), (float)curHeight() };
         if (uniformChanged(uViewport, viewport, 2)) glUniform2f(uViewport, viewport[0], viewport[1]);
@@ -1834,6 +2164,24 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     if (!g_skipUniform) {
     setUniform1i(uTex, 0);
     setUniform1i(uUseTexture, glTexture ? 1 : 0);
+    //  How many texels the interface is magnifying, for the sharper filter.
+    //  Memoised on the texture name: consecutive draws share one far more often
+    //  than not, so the map is barely touched.
+    {
+        static unsigned s_lastTex = 0xFFFFFFFFu;
+        static float    s_lastW = 0.0f, s_lastH = 0.0f;
+        if (glTexture != s_lastTex) {
+            s_lastTex = glTexture;
+            s_lastW = s_lastH = 0.0f;
+            std::map<unsigned, std::pair<int, int> >::const_iterator d = g_texDims.find(glTexture);
+            if (d != g_texDims.end()) {
+                s_lastW = (float)d->second.first;
+                s_lastH = (float)d->second.second;
+            }
+        }
+        setUniform2f(uTexSize, s_lastW, s_lastH);
+        setUniform1f(uUiSharpen, g_noUiSharp ? 1.0f : (float)RanGL_UIScale());
+    }
     }
 
     if (glIB && indexBits) {
@@ -1972,6 +2320,15 @@ bool haveS3TC() {
     if (!g_s3tcChecked) {
         g_s3tcChecked = true;
         const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+        //  An escape hatch, checked once: with /sdcard/ran/nos3tc present at
+        //  launch every DXT texture is decoded here instead of handed to the
+        //  driver. It exists to tell "the file is wrong" apart from "the driver
+        //  mishandles this format", which no amount of reading the file can.
+        if (access("/sdcard/ran/nos3tc", F_OK) == 0) {
+            g_haveS3TC = false;
+            LOGI("S3TC (DXT) textures: decoded on CPU (nos3tc)");
+            return g_haveS3TC;
+        }
         g_haveS3TC = ext && (strstr(ext, "GL_EXT_texture_compression_s3tc") != NULL ||
                              strstr(ext, "GL_NV_texture_compression_s3tc") != NULL ||
                              strstr(ext, "GL_ANGLE_texture_compression_dxt5") != NULL);
@@ -2235,6 +2592,8 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
         glBindTexture(GL_TEXTURE_2D, tex);
     }
 
+    if (level == 0) g_texDims[tex] = std::make_pair(width, height);
+
     // DXT first: it is what nearly every shipped texture is.
     if (isDXT(d3dFormat)) {
         if (haveS3TC()) {
@@ -2333,6 +2692,24 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
             glTexImage2D(GL_TEXTURE_2D, level, GL_R8, width, height, 0, GL_RED,
                          GL_UNSIGNED_BYTE, bits);
             break;
+        case D3DFMT_A1R5G5B5:
+        case D3DFMT_X1R5G5B5: {
+            //  ARGB1555 -> RGBA5551: the colour rotates left one bit and the
+            //  alpha bit moves from the top to the bottom. X1 carries no alpha,
+            //  so force it opaque rather than inheriting the unused bit.
+            const bool hasAlpha = (d3dFormat == D3DFMT_A1R5G5B5);
+            GLushort *dst = new GLushort[n];
+            const GLushort *src = (const GLushort *)bits;
+            for (int i = 0; i < n; ++i) {
+                const GLushort v = src[i];
+                const GLushort a = hasAlpha ? (GLushort)((v >> 15) & 1) : (GLushort)1;
+                dst[i] = (GLushort)(((v & 0x7FFF) << 1) | a);
+            }
+            glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
+                         GL_UNSIGNED_SHORT_5_5_5_1, dst);
+            delete[] dst;
+            break;
+        }
         default: {
             //  Leaving the texture empty is not neutral: GLES samples an
             //  incomplete texture as opaque black, which looks like content
@@ -2534,6 +2911,9 @@ extern "C" void RanGLR_LogStats(void) {
          g_drawCalls, g_uiDraws, g_texturedDraws, g_vertsDrawn,
          g_texFullUploads, g_texUpdates, g_texUpdateBytes / 1024,
          g_vaoCreated, g_vaoHits, (unsigned)g_vaoCache.size(), glGetError());
+    LOGI("into render targets: %lu draws, largest %dx%d (frame is %dx%d)",
+         g_rtDraws, g_rtBiggestW, g_rtBiggestH, RanGL_Width(), RanGL_Height());
+    g_rtDraws = 0; g_rtBiggestW = g_rtBiggestH = 0;
     g_drawCalls = g_uiDraws = g_texturedDraws = g_vertsDrawn = 0;
     g_texUpdates = g_texUpdateBytes = g_texFullUploads = 0;
     g_vaoCreated = g_vaoHits = 0;
@@ -2550,4 +2930,73 @@ extern "C" void RanGLR_LogTextureStats(void) {
 extern "C" void RanGLR_DeleteTexture(unsigned tex) {
     g_texSampler.erase((GLuint)tex);
     if (tex) { GLuint t = tex; glDeleteTextures(1, &t); }
+}
+
+//  --- texture readback probe -------------------------------------------
+//
+//  Names every texture as it is uploaded, and on request reads a few texels of
+//  each one back off the GPU. The file on disk and the pixels the sampler sees
+//  are different things, and a bug in between - a wrong internal format, a
+//  short upload, a driver that lies about a compressed format - shows up here
+//  and nowhere else.
+namespace {
+struct NotedTex { unsigned gl; std::string name; };
+std::vector<NotedTex> g_notedTex;
+}
+
+extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name) {
+    if (!glTex || !name) return;
+    for (size_t i = 0; i < g_notedTex.size(); ++i)
+        if (g_notedTex[i].gl == glTex) { g_notedTex[i].name = name; return; }
+    NotedTex t; t.gl = glTex; t.name = name;
+    g_notedTex.push_back(t);
+}
+
+extern "C" void RanD3D_ProbeTextures(void) {
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    LOGI("texture probe: %u textures", (unsigned)g_notedTex.size());
+    for (size_t i = 0; i < g_notedTex.size(); ++i) {
+        const NotedTex &t = g_notedTex[i];
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, t.gl, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            LOGI("  tex %u %s: not readable", t.gl, t.name.c_str());
+            continue;
+        }
+        //  Four texels rather than one: a uniform colour and a decode that
+        //  happens to be right in one corner look the same from a single sample.
+        unsigned char px[4][4];
+        const int at[4][2] = { { 0, 0 }, { 1, 1 }, { 3, 5 }, { 7, 3 } };
+        for (int k = 0; k < 4; ++k) {
+            px[k][0] = px[k][1] = px[k][2] = px[k][3] = 0;
+            glReadPixels(at[k][0], at[k][1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px[k]);
+        }
+        LOGI("  tex %u %s: %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X",
+             t.gl, t.name.c_str(),
+             px[0][0], px[0][1], px[0][2], px[0][3],
+             px[1][0], px[1][1], px[1][2], px[1][3],
+             px[2][0], px[2][1], px[2][2], px[2][3],
+             px[3][0], px[3][1], px[3][2], px[3][3]);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+    glDeleteFramebuffers(1, &fbo);
+}
+
+//  The base-level size of a texture the renderer has uploaded.
+//
+//  The touch overlay draws the skill icons itself, with its own shader, so it
+//  cannot ask D3D how big they are - but it needs the texel count to know how
+//  far it is magnifying them.
+extern "C" int RanGLR_TextureSize(unsigned glTex, int *w, int *h) {
+    std::map<unsigned, std::pair<int, int> >::const_iterator d = g_texDims.find(glTex);
+    if (d == g_texDims.end()) return 0;
+    if (w) *w = d->second.first;
+    if (h) *h = d->second.second;
+    return 1;
 }

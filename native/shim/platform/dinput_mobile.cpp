@@ -39,6 +39,38 @@ std::deque<DIDEVICEOBJECTDATA> g_mouseQueue;
 std::deque<DIDEVICEOBJECTDATA> g_keyQueue;
 
 DIMOUSESTATE2 g_mouseState;
+
+//  Button transitions are queued and applied one per poll.
+//
+//  The UI turns a press into a click only when it sees the button down on one
+//  poll and up on a later one, so both halves have to be visible to a poll. Two
+//  ways that fails with touch:
+//
+//    * A fast tap delivers down and up between two polls and the click is lost
+//      entirely. This is what made the skill slots look broken - an
+//      `adb shell input tap` on one did nothing, until a held press proved the
+//      hit test had been right all along.
+//
+//    * A double click delivers down/up/down/up in a hurry. Anything that just
+//      holds the latest state collapses that into one long press, and the
+//      double click never happens - which broke picking a server from the list.
+//
+//  Applying exactly one transition per poll fixes both: every down and every up
+//  is seen by at least one poll, in the order it happened. A double click then
+//  takes four polls, about 130ms at 30fps, which is well inside the client's
+//  double-click window.
+struct BtnEvent { int button; int down; };
+BtnEvent g_btnQueue[16];
+int      g_btnQueueCount = 0;
+
+void queueButton(int button, int down) {          // caller holds the lock
+    if (g_btnQueueCount >= (int)(sizeof(g_btnQueue) / sizeof(g_btnQueue[0]))) return;
+    g_btnQueue[g_btnQueueCount].button = button;
+    g_btnQueue[g_btnQueueCount].down   = down;
+    ++g_btnQueueCount;
+}
+
+
 BYTE          g_keyState[256];
 
 int  g_pointerX = 0, g_pointerY = 0;
@@ -92,6 +124,8 @@ public:
             memcpy(lpvData, &g_mouseState, sizeof(DIMOUSESTATE2));
             // Relative axes are consumed by reading them.
             g_mouseState.lX = g_mouseState.lY = g_mouseState.lZ = 0;
+
+
         } else {
             if (cbData > sizeof(g_keyState)) cbData = sizeof(g_keyState);
             memcpy(lpvData, g_keyState, cbData);
@@ -176,26 +210,101 @@ public:
 extern "C" void RanInput_PointerMove(int x, int y) {
     Lock lk;
     // The engine tracks both an absolute position and a relative delta.
-    g_mouseState.lX += x - g_pointerX;
-    g_mouseState.lY += y - g_pointerY;
+    //
+    // The delta has to be taken BEFORE the origin moves. Computing it after
+    // made every queued DIMOFS_X/Y event zero, so anything reading buffered
+    // motion through GetDeviceData  camera drag-rotate  saw the mouse as
+    // perfectly still even while it moved. The accumulated lX/lY below was
+    // right, which is why it went unnoticed.
+    const int dx = x - g_pointerX;
+    const int dy = y - g_pointerY;
+    g_mouseState.lX += dx;
+    g_mouseState.lY += dy;
     g_pointerX = x;
     g_pointerY = y;
-    pushMouse(DIMOFS_X, (DWORD)(x - g_pointerX));
-    pushMouse(DIMOFS_Y, (DWORD)(y - g_pointerY));
+    if (dx) pushMouse(DIMOFS_X, (DWORD)dx);
+    if (dy) pushMouse(DIMOFS_Y, (DWORD)dy);
+}
+
+//  The wheel. DxViewPort::FrameMoveMAX reads it as dz from GetMouseMove and
+//  feeds it straight to CameraZoom, so a pinch gesture becomes a zoom by
+//  arriving here. There was no wheel path at all before.
+extern "C" void RanInput_PointerWheel(int dz) {
+    if (!dz) return;
+    Lock lk;
+    g_mouseState.lZ += dz;
+    pushMouse(DIMOFS_Z, (DWORD)dz);
 }
 
 extern "C" void RanInput_PointerButton(int button, int down) {
     Lock lk;
     if (button < 0 || button > 2) return;
-    g_mouseState.rgbButtons[button] = down ? 0x80 : 0x00;
-    pushMouse(DIMOFS_BUTTON0 + button, down ? 0x80 : 0x00);
+    queueButton(button, down != 0);
+}
+
+//  Called once per frame, before the client runs.
+//
+//  Draining inside GetDeviceState looked natural - that is the poll, after all -
+//  but it ties input delivery to the client happening to call that particular
+//  API. The outer stages read the mouse a different way, so the queue never
+//  drained there and the server list stopped responding to clicks entirely.
+//  Pumping from the frame loop makes it independent of how any given stage reads
+//  its input.
+extern "C" void RanInput_PumpButtons(void) {
+    Lock lk;
+    if (g_btnQueueCount <= 0) return;
+
+    const BtnEvent ev = g_btnQueue[0];
+    for (int i = 1; i < g_btnQueueCount; ++i) g_btnQueue[i - 1] = g_btnQueue[i];
+    --g_btnQueueCount;
+
+    g_mouseState.rgbButtons[ev.button] = ev.down ? 0x80 : 0x00;
+    pushMouse(DIMOFS_BUTTON0 + ev.button, ev.down ? 0x80 : 0x00);
+}
+
+//  Return, latched from the moment it goes down until something asks.
+//
+//  CIMEEdit::CheckEnterKeyDown is what the client uses to tell "the user pressed
+//  Return in this edit box" apart from "Return is down somewhere". On Windows the
+//  IME sets it; here nothing did, so the shim's stub returned false forever and
+//  chat could never be sent - BasicChatRightBody requires BOTH DIK_RETURN down
+//  and CheckEnterKeyDown before it calls SEND_CHAT_MESSAGE.
+//
+//  Latched rather than sampled, because the down edge and the client's query do
+//  not necessarily land in the same frame.
+static bool g_enterLatched = false;
+
+extern "C" int RanInput_TakeEnter(void) {
+    Lock lk;
+    const bool was = g_enterLatched;
+    g_enterLatched = false;
+    return was ? 1 : 0;
 }
 
 extern "C" void RanInput_Key(int scanCode, int down) {
     Lock lk;
     if (scanCode < 0 || scanCode > 255) return;
     g_keyState[scanCode] = down ? 0x80 : 0x00;
+    //  0x1C DIK_RETURN, 0x9C DIK_NUMPADENTER - both send.
+    if (down && (scanCode == 0x1C || scanCode == 0x9C)) g_enterLatched = true;
     pushKey((BYTE)scanCode, down != 0);
+}
+
+//  Move the pointer without it counting as movement.
+//
+//  DxInputDevice::HoldCursor pins the cursor while the camera is being dragged,
+//  so each frame delta is measured from the pin rather than from wherever the
+//  drag started. That only works if SetCursorPos actually moves what
+//  GetCursorPos reads - and it did not: GetCursorPos returned the live touch
+//  position while SetCursorPos wrote a separate variable nothing read. The pin
+//  was a no-op, so every frame reported the same non-zero delta and the camera
+//  kept turning while a finger rested still on the screen.
+//
+//  No DIMOFS events and no lX/lY accumulation: this is a teleport, not a move.
+extern "C" void RanInput_WarpPointer(int x, int y) {
+    Lock lk;
+    g_pointerX = x;
+    g_pointerY = y;
 }
 
 extern "C" void RanInput_PointerAbsolute(int *x, int *y) {

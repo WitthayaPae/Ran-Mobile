@@ -13,6 +13,7 @@
 // The COM boilerplate (238 methods that just return D3D_OK) comes from
 // d3d9_gen.h, generated from the SDK header — see gen-d3d9-impl.js.
 
+extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include "windows.h"
 #include <unwind.h>
 #include <dlfcn.h>
@@ -313,10 +314,16 @@ public:
                                                     (unsigned)s->m_bits.size());
             }
             RanGLR_FinishTexture(m_glTex, (int)m_surfaces.size(), (int)m_format);
-            if (!m_srcPath.empty())
+            if (!m_srcPath.empty()) {
                 LOGI("texture %u = %s (%ux%u, %u levels)", m_glTex, m_srcPath.c_str(),
                      m_surfaces[0]->m_width, m_surfaces[0]->m_height,
                      (unsigned)m_surfaces.size());
+                //  Remembered so a probe can read back what actually reached the
+                //  GPU. A texture that is grey in the file and magenta on screen
+                //  is either decoded wrong or uploaded wrong, and only a readback
+                //  tells the two apart.
+                RanD3D_NoteTexture(m_glTex, m_srcPath.c_str());
+            }
             for (size_t i = 0; i < m_surfaces.size(); ++i) m_surfaces[i]->clearDirty();
 
             //  The GPU has them now, and holding the decoded copy as well is
@@ -879,26 +886,18 @@ public:
     }
     bool m_noDepthSurface = false;
 
+    //  User clip planes. Measured across the login scene and character select:
+    //  the engine never sets one, so there is nothing to translate to a GLES
+    //  clip distance. Kept as a real override rather than the generated stub so
+    //  that if a map ever does use one it can be implemented here.
+    HRESULT SetClipPlane(DWORD, CONST float *) override { return D3D_OK; }
+
     //  D3D StretchRect. The engine builds its off-screen chain out of these -
     //  refraction, glow, reflection - and it asks the caps whether they work
     //  before it keeps any of those surfaces at all, so a copy that quietly
     //  does nothing is worse than none: it costs the whole feature.
     //  DxSurfaceTex reads this off the stack, so an untouched struct is a bug
     //  waiting to be blamed on something else.
-    //  TEMPORARY probe: does anything set a user clip plane? Water reflection
-    //  clipping is the suspected user, but the generated stub has always
-    //  swallowed these silently.
-    HRESULT SetClipPlane(DWORD Index, CONST float *pPlane) override {
-        static DWORD seen = 0;
-        if (Index < 32 && !(seen & (1u << Index))) {
-            seen |= (1u << Index);
-            LOGI("FFPROBE: SetClipPlane %lu = [%.3f %.3f %.3f %.3f]",
-                 (unsigned long)Index,
-                 pPlane ? pPlane[0] : 0.0f, pPlane ? pPlane[1] : 0.0f,
-                 pPlane ? pPlane[2] : 0.0f, pPlane ? pPlane[3] : 0.0f);
-        }
-        return D3D_OK;
-    }
 
     HRESULT GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS *pParameters) override {
         if (!pParameters) return D3DERR_INVALIDCALL;
@@ -1039,11 +1038,6 @@ public:
     //  MODULATE back - and a batch flushed after that restore drew the subset
     //  modulating a texture that was never bound, as a sheet of white.
     HRESULT SetRenderState(D3DRENDERSTATETYPE State, DWORD Value) override {
-        //  TEMPORARY probe: is vertex specular ever turned on?
-        if (State == D3DRS_SPECULARENABLE && Value) {
-            static bool said = false;
-            if (!said) { said = true; LOGI("FFPROBE: D3DRS_SPECULARENABLE turned ON"); }
-        }
         //  Recording captures without touching the device — see the note on
         //  BeginStateBlock. Nothing is flushed and no epoch moves, because no
         //  state actually changes.
@@ -1065,26 +1059,6 @@ public:
         if (m_recording) {
             if (Stage < 8 && Type < 33) m_recording->m_tss.push_back({Stage, Type, Value});
             return D3D_OK;
-        }
-        //  TEMPORARY probe: which texture-coordinate generation and transform
-        //  flags the engine actually asks for. Only CAMERASPACENORMAL is
-        //  implemented; the question is whether anything else is ever used.
-        if (Type == D3DTSS_TEXCOORDINDEX && (Value & 0xFFFF0000)) {
-            static DWORD seen = 0;
-            if (!(seen & (1u << ((Value >> 16) & 31)))) {
-                seen |= (1u << ((Value >> 16) & 31));
-                LOGI("FFPROBE: stage %lu TEXCOORDINDEX gen 0x%lX",
-                     (unsigned long)Stage, (unsigned long)(Value & 0xFFFF0000));
-            }
-        }
-        if (Type == D3DTSS_TEXTURETRANSFORMFLAGS && Value) {
-            static DWORD seenT = 0;
-            if (!(seenT & (1u << (Value & 31)))) {
-                seenT |= (1u << (Value & 31));
-                LOGI("FFPROBE: stage %lu TEXTURETRANSFORMFLAGS 0x%lX%s",
-                     (unsigned long)Stage, (unsigned long)Value,
-                     (Value & D3DTTFF_PROJECTED) ? "  (PROJECTED)" : "");
-            }
         }
         if (m_uiBatch.active && Stage < 8 && Type < 33 &&
             m_textureStageState[Stage][Type] != Value) flushUIBatch();
@@ -1314,6 +1288,7 @@ public:
         float matEmissive[3] = { m_material.Emissive.r, m_material.Emissive.g, m_material.Emissive.b };
 
         RanGlLight lights[8];
+        float lightSpecular[8 * 3] = { 0 };
         int n = 0;
         for (int i = 0; i < 16 && n < 8; ++i) {
             if (!m_lightEnabled[i]) continue;
@@ -1326,6 +1301,12 @@ public:
             g.range = L.Range;
             g.direction[0] = L.Direction.x; g.direction[1] = L.Direction.y; g.direction[2] = L.Direction.z;
             g.atten[0] = L.Attenuation0; g.atten[1] = L.Attenuation1; g.atten[2] = L.Attenuation2;
+            //  Specular rides alongside rather than inside RanGlLight, so the
+            //  existing lighting call keeps its shape.
+            const int sIdx = (n - 1) * 3;
+            lightSpecular[sIdx + 0] = L.Specular.r;
+            lightSpecular[sIdx + 1] = L.Specular.g;
+            lightSpecular[sIdx + 2] = L.Specular.b;
         }
 
         { static int diag = 0; static int lastOn = -1;
@@ -1335,6 +1316,12 @@ public:
             __android_log_print(ANDROID_LOG_INFO, "RanLight", "lighting=%d lights=%d ambient=%.2f,%.2f,%.2f matDiff=%.2f,%.2f,%.2f matAmb=%.2f,%.2f,%.2f",
               on, n, globalAmbient[0], globalAmbient[1], globalAmbient[2],
               matDiffuse[0], matDiffuse[1], matDiffuse[2], matAmbient[0], matAmbient[1], matAmbient[2]); } }
+        //  D3D adds specular after texturing; the renderer does the same.
+        const float matSpecular[3] = { m_material.Specular.r, m_material.Specular.g,
+                                      m_material.Specular.b };
+        RanGLR_SetSpecular(m_renderState[D3DRS_SPECULARENABLE] ? 1 : 0, matSpecular,
+                           m_material.Power, lightSpecular, n);
+
         RanGLR_SetLighting(m_renderState[D3DRS_LIGHTING] ? 1 : 0, world, cam,
                            globalAmbient, matDiffuse, matAmbient, matEmissive, lights, n);
 
@@ -1551,6 +1538,12 @@ public:
                     if (op == D3DTOP_MODULATE && tci == D3DTSS_TCI_CAMERASPACENORMAL) {
                         cube = RanD3D_CubeGlTexture((IDirect3DCubeTexture9 *)m_texture[1]);
                         mode = cube ? 1 : 0;
+                    } else if (op == D3DTOP_MODULATE &&
+                               tci == D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR) {
+                        //  Same cube, addressed by the reflection vector instead
+                        //  of the raw normal.
+                        cube = RanD3D_CubeGlTexture((IDirect3DCubeTexture9 *)m_texture[1]);
+                        mode = cube ? 3 : 0;
                     } else {
                         static bool said = false;
                         if (!said) {
@@ -1566,6 +1559,22 @@ public:
                     //  A flat tint with no texture: the ambient character effect
                     //  colours a whole piece this way.
                     mode = 2;
+                } else if (m_texture[1] && m_texture[1] == m_texture[0] &&
+                           op == D3DTOP_SELECTARG2 && arg2 == D3DTA_CURRENT &&
+                           m_textureStageState[1][D3DTSS_ALPHAOP] == D3DTOP_MODULATE &&
+                           m_textureStageState[1][D3DTSS_ALPHAARG1] == D3DTA_TEXTURE &&
+                           m_textureStageState[1][D3DTSS_ALPHAARG2] == D3DTA_DIFFUSE) {
+                    //  The moon.
+                    //
+                    //  One texture bound to both stages: stage 0 samples it for
+                    //  colour with coordinate set 0, stage 1 passes that colour
+                    //  through untouched (SELECTARG2/CURRENT) and contributes
+                    //  only alpha, sampled with coordinate set 1. moon.dds holds
+                    //  four phases in a 2x2 grid and set 1 selects the quadrant,
+                    //  so that alpha is what masks the sheet down to tonight's
+                    //  phase. Without it the mask is the whole sheet and all
+                    //  four moons show at once.
+                    mode = 4;
                 } else if (!m_texture[1]) {
                     static bool said = false;
                     if (!said) {
@@ -1904,4 +1913,17 @@ extern "C" void RanD3D_LogStats(void) {
          g_stats.texturesCreated, g_stats.textureBytes / 1048576.0,
          g_stats.vbCreated, g_stats.vbBytes / 1048576.0,
          g_stats.ibCreated, g_stats.ibBytes / 1048576.0);
+}
+
+
+//  The GL texture behind a client texture.
+//
+//  The touch overlay draws the skill icons itself so it can crop them to a
+//  circle - a square icon inscribed in a round button always leaves a ring of
+//  dead space, and a fan with radial UVs cuts the corners off cleanly. It needs
+//  the GL name, and only this translation unit knows it.
+extern "C" unsigned RanD3D_TextureGL(void *pTex) {
+    if (!pTex) return 0;
+    RanTexture *t = static_cast<RanTexture *>(static_cast<IDirect3DTexture9 *>(pTex));
+    return t->GlTexture();
 }

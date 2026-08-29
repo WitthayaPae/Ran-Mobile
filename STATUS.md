@@ -1659,3 +1659,1051 @@ no batch flush, no epoch bump, because nothing actually changes.
 flat olive ground is gone and the grass texture reaches the bottom of the frame;
 the whole scene is markedly brighter and the GUI panel legible.
 (`scratchpad/ldgnd.png` before, `scratchpad/sbgnd.png` after.)
+
+---
+
+## Touch controls: the skill arc, and two movement bugs
+
+### Reusing the client's slots instead of drawing new ones
+
+The first cut of the touch pad drew its own skill buttons — ten circles and a
+pair of page arrows — and pressed the matching keys. That was wrong twice over:
+the drawn circles were blank, so nothing showed which skill was where or whether
+it was on cooldown, and the client's own quick-skill tray was still on screen
+down the left edge, so there were two sets of slots.
+
+`CSkillTrayTab::MobileArrangeArc` (guarded, `RAN_MOBILE`) moves the real tray
+instead. Its ten slots go onto two quarter arcs around the attack button, five
+inner and five outer; the overlay keeps only the attack button and reports its
+position as fractions of the surface so the client can lay the arcs out in its
+own coordinate space.
+
+Because they are still the client's controls they keep their icons, cooldown
+sweeps, tooltips and drag-to-assign, and `CBasicSkillTray::TranslateUIMessage`
+already runs `ReqSkillRunSet` on `UIMSG_LB_UP` — the same call the number keys
+make. Nothing new had to understand skills.
+
+Paging came free as well. Only the current page's tab button is visible at a
+time and clicking it advances to the next, so all four stack in one spot beside
+the arc and act as both indicator and switch. The page arrows were deleted.
+
+### The stick was dropping a click marker per step
+
+`GLCharacter::ActionMoveTo` fires `NewClickEff` whenever `RANPARAM::bClickEffect`
+is set. The stick reaches its destination by issuing a GOTO several times a
+second, so walking laid a trail of "you clicked here" markers across the ground —
+which is what it looked like: the screen being tapped over and over.
+
+`GLCharacter::SuppressClickEff` is set around the stick's own calls only. Real
+clicks still show the marker.
+
+### The stick stopped short of edges and slopes
+
+Two causes, both in how the destination was probed.
+
+`ActionMoveTo` casts a vertical ray from `vFromPt` down to `vTargetPt` to find
+the ground under the destination, and returns FALSE — no movement at all — if it
+misses. The stick was passing a **±5 unit** window around the character's own
+height. Any ground ahead that rose or fell more than that (a ramp, a stair, a
+kerb) fell outside the ray and the character stopped for no visible reason. Now
+±600.
+
+The second cause is why it showed up worst near edges: aiming a fixed 260 units
+ahead means walking toward a wall or the rim of the walkmesh eventually puts the
+destination past the edge, where there is no ground at any ray height. The stick
+now retries at 55%, 25% and 10% of the reach, so the character slides along the
+edge instead of halting a stride short of it.
+
+**Verified on the emulator.** Holding the stick forward walked the character
+across a bridge and up a flight of steps in one unbroken move, with no click
+marker anywhere on the ground; releasing it returned the idle pose within a
+frame. (`out/mv_hold.png`, `out/mv_hold2.png`, `out/mv_rel.png`.)
+
+### Naming the corner controls, and two wasted cycles
+
+Two passes at the corner layout listed the controls by GUID and both silently
+missed some. The cause is worth recording: the control census prints the XML
+**keyword**, the code needs the **enum** name, they differ, and the
+keyword-shaped spelling usually exists too as a neighbouring control:
+
+    census keyword          id    enum name          keyword-as-enum
+    PARTY_FINDER_BUTTON     206   FINDER_BUTTON      PARTYFINDER_BUTTON = 208
+    AUCTION_ALERT           239   AUCTION_BUTTON     AUCTION_ALERT      = 240
+
+So the wrong name compiles, FindControl returns a real control, and an invisible
+one gets moved while the button you meant stays in the corner. Nothing errors.
+
+The fix was to resolve the ids rather than guess: parse `InnerInterfaceGuid.h`
+positionally (entries run from `NO_ID + 1`) and cross-reference every name
+against the census id before using it. The arrangement now carries those ids in
+its comments.
+
+A recursive census dumped *after* the arrangement settled the last one: the
+envelope still sitting in the corner belongs to `CItemShopIconMan`, which anchors
+an icon over the head of any player with a personal shop open. It was never HUD
+furniture, just another player standing there.
+
+Both diagnostics have been removed now the layout is settled.
+
+### Deflection picks the gait
+
+How far the stick is pushed now chooses walk or run, the way a console stick
+does: ease it over and the character walks, push it out to the ring and it runs.
+The overlay already clamped the stick's magnitude to exactly 1.0 once the knob
+reaches the ring, so "at the ring" is a real reachable value rather than
+something the player has to feel for.
+
+Two thresholds, not one: run above 0.98, walk below 0.90, and hold whatever the
+current state is in between. A single threshold at 1.0 would flip the gait every
+frame while a thumb rests on the edge, and every flip is a `SNETPC_MOVESTATE`
+the server is told about.
+
+The switch goes through `GLCharacter::ReqToggleRun` rather than setting
+`EM_ACT_RUN` directly - that call also flips the game menu's run button, retimes
+the pet's movement, and sends the state message. Setting the flag by hand would
+desync all three.
+
+**Verified:** at half deflection the character walks upright with a short stride;
+pushed to the ring it leans forward, swings wider, and covers several times the
+distance in the same five seconds. (`out/gait_walk.png`, `out/gait_run.png`.)
+
+### The rows sit against the compass rose
+
+Right-aligning the two rows to the minimap group's left edge left them stranded
+in the middle of the screen. The group is 340 wide but the rose is only the
+square at its right-hand end; the rest is empty space that the date and clock are
+drawn over.
+
+The rose is square and flush to the group's right edge, so its left edge is one
+group-height in from that: `rcMap.left + rcMap.sizeX - rcMap.sizeY`. At 1280x720
+the group is 940,0 340x120 and that gives 1160, which is where the rose measures.
+Both rows now end hard against it. (`out/arcEtr.png`.)
+
+### The attack button was drinking a potion
+
+Verifying the touch controls turned up a real bug rather than confirming one.
+The attack button sent `DIK_Q`, on the assumption that Q was a basic attack. It
+is not: `RANPARAM::QuickSlot[0]` is `DIK_Q`, the first **item** slot on the
+top-left bar. Every press was using a consumable.
+
+RAN has no attack key at all, because attacking is clicking a target - so there
+was nothing to synthesise a keypress for and the whole approach was wrong.
+
+`GLCharacter::MobileAttackNearest` (guarded) does what a click does instead:
+picks the target with `FindNearTarget(..., EMFIND_TAR_ENEMY, false)` - the same
+call the bot path uses - then runs `MobReaction` or `PvPReaction` with the
+`DXKEY_DOWNED|DXKEY_UP` a completed click leaves behind. When the reaction
+reports the target is out of reach it hands back a destination, so the same tall
+ground probe and click-marker suppression the stick uses apply here too.
+
+`bcontinue` is passed true. On a mouse that is ctrl-click, "keep attacking this
+target"; a finger cannot hold a button down while doing anything else, so one tap
+engaging until the target dies is the only thing that works on a touch screen.
+
+**Verified:** pressing it puts the character into the attack animation, and two
+seconds later it is in a different frame of the swing - it engages and keeps
+swinging. (`out/atk1c.png`, `out/atk2c.png`.)
+
+### What the touch controls have actually been tested for
+
+| control | verified | how |
+|---|---|---|
+| stick, movement | yes | crossed a bridge and steps unbroken |
+| stick, stop on release | yes | idle pose returns within a frame |
+| stick, walk vs run | yes | stride and distance differ by deflection |
+| no click marker | yes | ground clean through every move frame |
+| skill slot hit test | yes | slot highlights, tooltip appears |
+| skill tray click path | yes | page button cycles F1-F4 and the icons change |
+| attack button | yes | attack animation, continuing across frames |
+| pinch zoom | **no** | needs two real fingers; `adb input` cannot synthesise it |
+
+Firing an individual skill from a slot was inconclusive rather than verified -
+slot 1 is an SP refill at full SP and slot 2 did not fire for game reasons. The
+click path through the moved tray is proven by the page button, which is the same
+path through the same group.
+
+### Back used to quit the game
+
+`AKEYCODE_BACK` was not in `scanCodeFor`, so the handler returned 0, the system
+took the key, and `NativeActivity` finished the activity. Back dropped the
+player out of the game instantly, mid-session, with no confirmation - and on a
+tablet it is a gesture you hit by accident.
+
+It now maps to Escape, which opens the client's own menu. Quitting is still there
+as "ออกจากเกม", but it is a choice rather than a slip. **Verified:** the menu
+opens and the process survives. (`out/back1c.png`.)
+
+### One finger, two mouse buttons
+
+Right-click does real work in RAN - it uses or equips an item from the inventory,
+clears a quick slot, drives context actions - and a touch screen has no second
+button. A long press now stands in for it.
+
+The press cannot be sent on touch-down, because by the time a hold is long enough
+to count, a left click has already happened. So it is deferred: a finger that
+moves is a drag and presses left as soon as it passes the slop threshold, a
+finger that lifts early presses left then releases, and a finger that stays put
+presses right at 450ms. The pointer still moves on touch-down, so hover and
+tooltips are unaffected.
+
+**Verified:** a long press on quick slot 2 cleared it, which is
+`ReqSkillQuickReSet` on `UIMSG_RB_UP`. (`out/rc0c.png`, `out/rc1c.png`.)
+
+### Clicks had to become frame-safe first, and that took three attempts
+
+The UI only turns a press into a click when it sees the button down on one poll
+and up on a later one, so both halves have to be visible to a poll. Deferring the
+press made that fragile, and the first two attempts each broke the login.
+
+1. **A latch that held the release until the press had been read.** Correct for
+   one click, wrong for two: a second press cleared the first's pending release,
+   so a double click collapsed into a single long press and picking a server from
+   the list stopped working.
+
+2. **An ordered queue, drained inside `GetDeviceState`.** That ties input
+   delivery to the client happening to call one particular API. The outer stages
+   read the mouse a different way, so the queue never drained there and the
+   server list stopped responding to clicks at all.
+
+3. **The same queue, pumped once per frame from the main loop** -
+   `RanInput_PumpButtons`. Independent of how any stage reads its input, and
+   every down and every up is visible to at least one frame, in order. A double
+   click takes four frames, about 130ms at 30fps, well inside the client's
+   double-click window.
+
+This also fixes a pre-existing problem rather than just enabling the new one: a
+fast tap could always deliver both halves between two polls and be lost. That is
+why `adb shell input tap` on a skill slot did nothing and the slots looked
+broken, when the hit test had been right the whole time.
+
+**Still missing: camera rotation.** Long-press-drag delivers a right drag, but
+that does not rotate the view - the camera was unchanged across the gesture
+(`out/rot0c.png`, `out/rot1c.png`), so whatever rotates the RAN camera is not
+right-drag and has not been found yet.
+
+## Round controls, a repeating sweep, and auto-target
+
+### The corner sweep had to stop being one-shot
+
+The quest icon kept sitting under the attack button however many names were added
+to the move list, because it does not exist when the list is applied. Half the
+corner furniture is like that - the quest alarm, the pet and vehicle status
+boxes, the booster bar are all created or shown once you are in the world.
+
+`MobileArrangeInterface` now runs on a one-second timer instead of once, and a
+bounded rect sweep adopts anything small still sitting in the bottom-right
+corner. Bounded matters: an earlier unbounded version swallowed the 231-wide
+booster bar and shoved the whole icon row into the middle of the screen, so the
+sweep now ignores anything wider than 64. Adopted ids are remembered, because
+after the move the control is no longer in the corner for the next sweep to find.
+
+Two related fixes fell out of the same pass:
+
+* **The row is bottom-aligned, not centred.** The two notification buttons are 59
+  tall against 35 for the rest, and they draw their icon at the *bottom* of the
+  box with the space above reserved for a banner. Centring the boxes left those
+  two icons visibly low; aligning the boxes by their bottom edge lines the
+  artwork up.
+* **Hidden controls no longer reserve space.** Laying one out anyway left a hole
+  in the row - which is what put the gap between the quest icon and the rest.
+
+### Round skill slots
+
+The slots are still the client's own square controls; the overlay draws an opaque
+rim over each one, thick enough to cover the corners of the square underneath,
+which leaves a circular window onto the icon. It has to be an overdraw rather
+than a mask because the overlay renders after the client - there is no way to get
+anything behind the icon.
+
+Two things went wrong on the way:
+
+* `SetTexture(NULL)` looked like the way to drop the square frame. A control with
+  no texture does not draw nothing, it draws an *untextured quad*, so every slot
+  became a flat white disc. The frames are back and the rim covers them.
+* The rim is wider than the slot, so the arc had to open up to match - sized off
+  the slot alone, the rims overlapped. The spacing that matters is the rim's.
+
+The rim also starts slightly inside the slot's half-width. Starting it exactly at
+the edge left the square's four sides tangent to the circle and still visible.
+
+Page arrows now sit outboard of the attack button and the tray's own page button
+is hidden - a thumb already resting on attack can reach them, which a label off
+the far end of the arc could not.
+
+### Auto-target and PK
+
+Two toggles up the right edge, mutually exclusive, lit in their own colour when
+on - PK red, because it is the one you do not want left on by accident. Each
+re-engages on a half-second timer rather than every frame.
+
+**`FindNearTarget`'s plain overload cannot be used for this, and the attack
+button had been getting away with it by luck.** That overload searches around
+`m_vBotPos` and measures distance from `m_vBotPos` - the anchor the bot parks
+itself on. For a player who is not botting that is a stale point, so the search
+happens somewhere the player is not. The skill overload gets it right and uses
+`m_vPos`; `MobileFindNearestMob` is that branch without the running-skill
+machinery, and `MobileFindNearestPvP` is the same for players, keeping the
+`IsPK_TAR` check that decides who may legally be attacked.
+
+**Verified:** auto-target closed on a mob, attacked it, produced damage numbers
+and left loot on the ground (`out/auto5c.png`, `out/tsel0c.png`); PK lights red
+and switches auto-target off (`out/pk2c.png`); the quest icon is in the row and
+all eight icons share a baseline (`out/c2tr.png`); the slots are round and no
+longer overlap (`out/c3br.png`).
+
+**Not working: the target name and health panel.** The six `TARGETINFO_*` and
+`CROW_TARGET_INFO*` controls are moved to the top centre, but no panel has yet
+been seen there after selecting a target - so either those are not the controls
+that display it, or something else gates them. Unresolved.
+
+---
+
+# Current state — 2026-08-27, end of the touch-UI session
+
+Written after a long session on the Galaxy Tab S9. Everything below is either
+measured on a device or explicitly marked as unverified. Where I got something
+wrong, that is recorded too, because the wrong turns cost more than the fixes.
+
+## Verified working
+
+Confirmed by watching the screen or reading a log, not by reasoning:
+
+| thing | how it was confirmed |
+|---|---|
+| Stick movement, stop on release | crossed a bridge and steps unbroken; idle pose returns within a frame |
+| Walk vs run by stick deflection | stride and distance differ; measured over 5s |
+| No click marker while steering | ground clean across every movement frame |
+| Attack button | attack animation, continuing across frames |
+| Target selection sticks | three presses, same mob, killed it; two others untouched |
+| Auto-target selects without fighting | mobs adjacent, character idle |
+| PK toggle | lights red, switches auto-target off |
+| Skill fires once per press | `PRESS` then one `CAST` in the log, 8s with no repeat |
+| Pick-up button | box vanished from the ground; later found in the bag |
+| Round skill slots, page arrows | on screen, no overlap |
+| Corner icons in one bottom-aligned row | eight icons, quest icon included |
+| Rows sit against the compass rose | measured `rcMap.left + sizeX - sizeY` = 1160 |
+| Back opens the ESC menu | menu appears, process survives |
+| Long press = right click | cleared a quick slot (`ReqSkillQuickReSet`) |
+| Windows draw over the touch controls | inventory covers the skill ring |
+| Close buttons close | tapped the X on อุปกรณ์สวมใส่ |
+| Money amount prints | "เก็บเงินได้ '8' เหรียญ" — was "Id" |
+| Fullscreen | status bar gone, game's own bar at the top edge |
+| Device keyboard rises and stays up | `mInputShown=true` on both ID and Pass |
+| Typing reaches the edit box | sent `x x 2 2`, field read `xx22` |
+
+## Broken, with the evidence
+
+### Item and money drops render as blank white quads
+
+Seen on the tablet, in the world, two drops in frame — "ขนม…" and
+"น้ำยาเพิ่ม MP (เล็ก)" — both drawn as **white untextured boxes**, with a black
+blob above the character. White-untextured is the same signature as a control
+drawing with no texture bound, so the suspicion is that the drop object's texture
+never reaches the draw. Not yet traced.
+
+### The loading screen never starts
+
+`RanLoad` logged **nothing** while genuinely in the world.
+`DxGlobalStage::ChangeStage` calls `StartThreadLOAD` unconditionally, and the
+shim's `_beginthreadex` is a real `pthread_create`. The instrumentation added
+this session sits *inside* `LoadingThread()`, which is too late to tell apart:
+
+* `ChangeStage` is not on the path that entered the world, or
+* `pthread_create` fails and the `E_FAIL` return is ignored.
+
+**Next step:** log in `StartThreadLOAD` itself and on the `pthread_create`
+result. One run answers it.
+
+### Camera rotate / zoom "overlap"
+
+Reported, not yet reproduced by me. One real cause was found and fixed - the
+overlay left blending enabled while `RanGLR_InvalidateStateCache` memsets the
+cache to "blend off", so the next `setBlend(false)` compared 0 with 0 and never
+issued the `glDisable`, leaving opaque geometry blending. Whether that was the
+whole of it is **unconfirmed**.
+
+### Tapping outside an edit box does not close the keyboard
+
+Cause found, not fixed. `EndEdit` is only called when switching between edit
+boxes (`CUIEditBoxMan::StartEDIT`) or on OK/Cancel. Nothing ends editing when a
+tap lands outside every box. Invisible on PC; on mobile the keyboard stays up.
+Needs a mobile-only "tap outside the active box ends editing" rule.
+
+### ANIPROBE instrumentation is still in the shipping build
+
+Roughly 20 log lines a second from `DxSkinAniControl`, `SAnimation` and
+`DxSkinAniManThread` - nine `#ifdef RAN_MOBILE` blocks left over from the
+animation work. Each is rate-limited to one line a second, but there are several
+per skeleton. Should come out.
+
+## Fixed this session, with the mechanism
+
+These are worth keeping because the mechanism was the surprising part:
+
+* **`ShowCursor` returning a constant hung the game.** `CCursor::SetShowCursor`
+  loops `while (nShow > -1) nShow = ShowCursor(FALSE);` against Win32's cursor
+  *counter*. The shim returned 0 always, so it spun at 100% until Android killed
+  the app. It only bit on camera rotation, because the middle-drag branch is the
+  one place that asks for the cursor to be **hidden**.
+* **The overlay corrupted the client's VAOs.** `glVertexAttribPointer` records
+  into whichever VAO is bound; the overlay had none of its own, so it pointed the
+  client's VAO at its two-float buffer. Harmless while the overlay drew last -
+  moving it under the interface armed it. Then, with a VAO but no
+  `glBindBuffer`, `glBufferSubData` wrote into the client's bound buffer,
+  because **the `GL_ARRAY_BUFFER` binding point is not VAO state**.
+* **`%Id` is an MSVC format too.** The rewriter only handled `%I64`, and its
+  guard tested `strstr(fmt, "I64")`, so `PICKUP_MONEY` was never rewritten.
+  See [[msvc-format-specifiers]].
+* **`m_sRunSkill` is never cleared after a cast**, so a level-triggered check
+  re-fired the skill every frame. It is edge-triggered off `ReqSkillRunSet` now.
+* **`FindNearTarget`'s plain overload searches around `m_vBotPos`**, the bot's
+  parking anchor - useless for a player who is not botting. Replaced with
+  `MobileFindNearestMob` / `MobileFindNearestPvP`, anchored on `m_vPos`.
+* **`STARGETID` carries a position** that goes stale; both `MobReaction` and
+  `SkillReaction` measure range from it, so every press aimed at where the target
+  had been. Refreshed each tick.
+* **The shim's `CIMEEdit` had no input path at all** - `g_imeText` was only ever
+  written by the client seeding a field. The on-screen keyboard was the only way
+  text ever got in, so removing it made login impossible until
+  `RanIME_InsertUtf8` / `RanIME_Backspace` were added.
+* **`ANativeActivity_showSoftInput` does nothing under NativeActivity** - there
+  is no View to focus. Goes through `InputMethodManager` by JNI now. The first
+  working version used `toggleSoftInputFromWindow`, which *toggles*: moving from
+  ID to Pass dismissed it.
+
+## Still not started
+
+* Thai text input. The keycode table covers ASCII only; Thai needs the composing
+  IME, which is the real remainder of that job.
+* Camera lock button (follow the character's facing). Free look works.
+* Item tooltips do not render.
+* Projected shadow texcoords.
+* Gameplay sweep past the inventory: NPC dialogue, shops, trade, quest turn-in,
+  death, zone change.
+* The `68 นาที` number.
+* Nothing committed since the GitHub push.
+
+## Process notes — where the time actually went
+
+Most of this session went into the test harness rather than the game, and much of
+that was self-inflicted. Recording it so it is not repeated:
+
+* **I broke `login-tab.sh` myself.** It tapped the coordinates of the client's
+  on-screen keyboard; removing that keyboard meant those taps hit the *Android*
+  keyboard and typed "gguu" into the ID field. It types with key events now, and
+  dismisses the IME with Back before pressing OK.
+* **`logcat -c` does not reliably clear every buffer**, so waits matched stale
+  lines from the previous run and the script tapped character-select before it
+  existed. `--pid` looked like the fix and is rejected on this device
+  ("pid out of range"); what actually works is confirming the process is dead
+  before clearing.
+* **`am force-stop` does not always take**, so the log was cleared *after* boot
+  and the boot marker never reappeared.
+* **I misread my own logs.** I grepped with `-avE "FRAME "` and then counted
+  `FRAME sections`, concluded the client had never reached the world, and spent
+  several cycles on the login flow while the game was sitting in the world the
+  whole time.
+* **A patch script corrupted `android_main.cpp`.** `'$'` in a replacement string
+  is `$'` - a JavaScript `String.replace` special pattern meaning "everything
+  after the match" - which spliced the whole file tail into the middle. Caught in
+  the build errors and repaired. Escape `$` or use a function replacement.
+
+The pattern behind all of these: I acted on a plausible theory before measuring.
+The fixes that landed cleanly are the ones where I read the mechanism first -
+`SetShowCursor`, the VAO binding, `m_sRunSkill`, `m_vBotPos`. See
+[[no-guessing-verify-facts]] and [[port-methodology-master-pc-source-first]].
+
+---
+
+# 2026-08-29 — camera separation, and the white drops
+
+Everything here was measured on the LDPlayer emulator (x86_64, 2560x1440) with
+the shipping APK, not reasoned about.
+
+## Item and money drops render as blank white quads — FIXED
+
+**Cause: a use-after-free in the shim's `.x` loader.**
+
+`D3DXMATERIAL::pTextureFilename` pointed into the parsed `XFile`'s string
+storage, and `loadFromBytes` did `delete file` before returning — so every
+texture name was dangling the moment the caller got it:
+
+```cpp
+HRESULT hr = meshFromNode ( mesh, ... , ppMaterials, ... );
+delete file;                 // "the mesh copied what it needs" — it had not
+return hr;
+```
+
+Whether it mattered came down to the allocator. Read the freed block soon
+enough and the old bytes were still there and the texture loaded; read it once
+the block had been reused and `strlen` found a `0`. `DxSimMesh::Create` then
+copied that **empty, non-null** string, `LoadTexture` failed, and
+`DxSimMesh::RenderItem` — which unlike `Render` has no no-texture guard — drew
+the subset with no texture bound. The shader's `tex = vec4(1.0)` fallback
+modulated against a white material: a flat white box.
+
+That intermittency is why it looked like a data problem. It is not: the data
+is fine. `money_1.x` carries `coin_tex_a.dds`, and `coin_tex_a.dds` is a clean
+128x128 DXT1 with 8 mips.
+
+**Fix:** the names now live *inside* the returned material buffer, laid out
+after the `D3DXMATERIAL` array — which is what real D3DX does, and why callers
+may hold those pointers for as long as they hold the buffer.
+
+**How it was found.** Three steps, each ruling something out:
+
+1. Built the shim's own `xfile_parse.cpp` into a standalone Android binary and
+   ran it against the real `money_1.x`. It printed `coin_tex_a.dds`. The parser
+   was not the problem.
+2. Swept the whole corpus on the device with the same binary — 941 files in
+   `data/object` (1598 materials) and 191 in `data/skinobject` (7242). Result:
+   `empty=0`, `shortData=0`. 514 and 6249 materials respectively have no
+   `TextureFilename` node at all, which is legitimate for effect meshes. **No
+   file anywhere produces an empty name.** So an empty name at runtime had to be
+   created at runtime.
+3. Made the runtime probe name the mesh instead of deduping by texture name —
+   the old probe collapsed every failure into one useless `[]` line. One run
+   then said it outright:
+   `untextured draw: mesh=[Money_1.X] subset=0 of 1 tex=[]`
+   The same file that scanned clean offline. That gap is only explicable by
+   lifetime, and `delete file` was two calls up.
+
+**Verified:** killed mobs until money and items dropped. Coin pile and treasure
+chest render with their real textures; `RanTex` silent across the whole run.
+Pick-up then cleared them, and the chat read `เก็บ ขนมปัง ได้`,
+`เก็บเงินได้ '6' เหรียญ`, `เก็บ น้ำยาเพิ่ม MP (เล็ก) ได้`.
+
+## Zooming also rotated the camera — FIXED
+
+A pinch is two fingers moving. The gesture layer read that movement as a drag,
+and a drag with no control under it presses the **middle** button, which is the
+client's camera-rotate binding (`DxViewPort::FrameMoveMAX`, `dwMOUSEKEY_M &
+DXKEY_DRAG`). So every zoom turned the view at the same time.
+
+`RanTouch_IsPinching()` now reports the pinch, and the gesture layer refuses to
+start a drag during one — and releases a drag already in flight when the second
+finger lands, or the rotation continues through the whole gesture.
+
+**Verified with numbers, not pixels.** A temporary probe logged the camera's
+own inputs and yaw per frame. Across a full pinch:
+
+```
+dx=7 dy=0 dz=120  M=0x1  vRot=(0.0000,0.0000) zoom=3.4560  yaw 1.571 -> 1.571  (d=0.0000)
+...
+dx=7 dy=0 dz=240  M=0x1  vRot=(0.0000,0.0000) zoom=14.7718 yaw 1.571 -> 1.571  (d=0.0000)
+```
+
+Zoom ran 3.4 to 14.8; yaw did not move at all. And the converse, a one-finger
+drag:
+
+```
+dx=49  dy=0 dz=0  M=0x8  vRot=(0.0000,0.1539) zoom=0.0000  yaw  1.571 -> 1.417
+dx=195 dy=0 dz=0  M=0x8  vRot=(0.0000,1.0668) zoom=0.0000  yaw  0.310 -> -0.756
+```
+
+Rotates (`M=0x8` is `DXKEY_DRAG`), and `zoom` stays exactly `0.0000`. The two
+gestures are now cleanly separated in both directions. The probe has been
+removed.
+
+Note for anyone re-testing this: **the compass rose is not a yaw indicator.**
+It is perfectly static frame to frame (measured: 0.00 difference over 3s with
+no input), which makes it look like a good one, but it also changes on zoom.
+Reading it as yaw says "the zoom still rotates" when the yaw number says it
+does not. Measure the yaw.
+
+## The loading screen — it was always working
+
+Captured it this session: full art, the map name `< สถาบัน SG >`, the HINT
+badge, the spinner and the copyright line, between character select and the
+world. `RanLoad` traces the whole path — `ChangeStage entered, to=2`,
+`StartThreadLOAD called tex=[loading_054.dds]`, `thread handle = 0x...`,
+`context acquired, rendering`. Nothing to fix.
+
+## Test harness
+
+`login-emu.sh` was still tapping the coordinates of the client's own on-screen
+keyboard, which no longer exists — the same breakage `login-tab.sh` had. It
+types with key events now. Its start-button coordinate was also wrong
+(`2473,500`; the button is at `2413,707`), and it waited on a log marker
+(`FRAME sections`) that no longer exists, so it "timed out" while sitting
+happily at character select.
+
+Two throwaway tools proved useful enough to keep in mind: an Android binary
+built straight from `shim/d3d/xfile_parse.cpp` for reading real `.x` files
+offline, and `rectdiff`, which compares a rectangle between two raw
+`screencap` dumps. Both live in the scratchpad.
+
+## Camera lock button — ADDED
+
+There is nothing to port here: RAN’s camera is free-look only, turned by
+dragging the middle button, and it never follows the character. So the lock is a
+mobile addition — but expressed in the client’s own terms rather than beside
+them. It feeds `CameraRotation` exactly the way a drag does, so zoom, the
+collision pull-in and the pitch limits all keep working untouched.
+
+A seventh touch button joins the toggle stack up the right edge, blue so it
+reads apart from green auto-target and red PK. While it is on, each frame takes
+the signed angle from the camera’s heading to the character’s — through a cross
+product, so it lands in (-pi,pi] with no wrap-around case to get wrong — and
+eases the camera along it. The easing is frame-rate independent
+(`1 - exp(-6*dt)`), because this runs anywhere from 8 to 60 fps on the devices
+in hand.
+
+**Verified.** With the lock off the follow code never runs at all (no trace
+lines). With it on:
+
+```
+camlock: camYaw=1.571 charYaw=0.844 delta=-0.727 step=0.4593
+camlock: camYaw=0.844 charYaw=0.844 delta=-0.000 step=0.0001
+camlock: camYaw=-0.050 charYaw=-0.052 delta=-0.003 step=0.0014
+camlock: camYaw=-0.052 charYaw=-0.052 delta=-0.000 step=0.0000
+```
+
+It converges onto the character’s heading, holds there, and re-acquires when the
+character turns again. The probe has been removed.
+
+## Full sweep on the shipping APK
+
+One pass with everything on: camera lock, auto-target, 40 attacks, five
+pick-ups, a pinch each way and a drag rotate. Result: 0 untextured draws, 0
+`FATAL`/`signal 11`, `glErr=0x0000`, 31 fps, process alive. Chat read
+`เก็บเงินได้ '8' เหรียญ` and `เก็บ ขนมปัง ได้`.
+
+## Item tooltips — they were never broken
+
+The standing note said item tooltips do not render. They do. Hovering a bread
+stack in the inventory brings up the full panel in correct Thai — `ข้อมูลสำคัญ`,
+`ชื่อ:ขนมปัง`, `จำนวน:4/999`, `ต้องมีเลเวล:1`, `HP Recovery:60`, the
+can-sell / can-drop / can-store list, and the CTRL+Mouse-R chat-link hint.
+
+It persists correctly too: `UIMSG_MOUSEIN` is purely positional
+(`CUIControl::MouseUpdate` is a rect test), and the shim leaves the pointer
+where the finger left it, so after a tap the tooltip stays up on its own. It was
+still on screen after six seconds with nothing touching the display.
+
+What made it look broken was the measurement, twice over. A press held long
+enough to take a screenshot crosses the 450 ms long-press threshold, and the
+right-click that follows replaces the tooltip — so every attempt to photograph
+it destroyed it. And the diagnostic left in `SHOW_ITEM_INFO` was capped at
+eight lines, which the press alone exhausted; its silence afterwards read as
+"not called" when it was only "not logged". Uncapping it showed the call running
+every frame while idle. Both probes are now removed.
+
+## Backspace did nothing in a text box that already had text — FIXED
+
+Reported from the tablet: characters could not be deleted in an edit box.
+
+`CIMEEdit` kept the caret in a file-static `g_imeCaret` in the shim. But
+`IMEEdit.h` defines the getter **inline** — `int GetInsertPos() { return
+m_xCaretPos; }` — so the client read a member the shim never wrote. It was
+always 0.
+
+That 0 did not stay harmless. `CUIEditBox::FrameMove` reads `GetInsertPos()`
+into `m_xInsertPos`, and `BeginEdit` pushes it straight back:
+
+```cpp
+SET_STRING_BUFFER ( m_strText );   // shim: text set, caret = end
+DXInputString::GetInstance().OnInput ();
+SetInsertPos();                    // pushes m_xInsertPos (0) back -> caret = 0
+```
+
+So focusing a field that already held text pinned the caret to the front, where
+backspace correctly has nothing before it to delete and typed characters go in
+at the start. An **empty** field worked perfectly, which is exactly why every
+earlier test passed — the login boxes were always typed into from empty.
+
+Two changes, both needed:
+
+* The caret now lives in `m_xCaretPos`, the member the inline getter exposes,
+  so reads and writes agree. The `RanIME_*` free functions reach it through the
+  public accessors on the `CIMEEdit` that last touched the buffer.
+* `BeginEdit` puts the caret at the end of the existing text under
+  `RAN_MOBILE`. On a desktop the caret starting at 0 is harmless because
+  clicking into the text positions it; with a finger and a soft keyboard there is
+  no such gesture, so it has to start where a keyboard user expects.
+
+**Verified on the emulator against the exact failing case:** typed `abcd` into
+the ID field, moved focus to Pass, tapped back into the now-filled ID field, and
+pressed backspace twice. Field read `ab`. Before the fix that deleted nothing.
+
+## Touch UI pass — five items from the tablet
+
+**The item tray collapse arrow is gone.** It was the small arrow alone against
+the left edge. Finding it took a control census logged from
+`MobileArrangeInterface`: at logical 1280x720 it sits inside id=3
+`LEFTTOP_CONTROL_GROUP` (rect `(0,41) 41x415`), whose children are the potion
+tray, the level display and `QUICK_POTION_TRAY_OPEN_BUTTON` — the arrow.
+`CUILeftTopGroup::Update` now keeps it hidden and the tray open under
+`RAN_MOBILE`. Collapsing a tray buys screen back for a mouse user; on a touch
+screen it is one more thing to mis-tap, hiding something that has to stay
+reachable.
+
+The same census also showed `QUICK_SKILL_TRAY_OPEN_BUTTON` still listed as
+visible after `SetVisibleSingle(FALSE)` — `MobileCollectIn` skips anything
+invisible, so that flag is plainly not what `IsVisible()` reads. It goes
+through `HideGroup` now, which is what the client uses for that button itself.
+
+**The stick is smaller.** `g_stick.radius` is `g_unit * 0.72f` instead of
+`g_unit`. The ring is only a hint of where the thumb rests — it re-centres
+under the finger anyway — so a big one just covered the world without steering
+any better. Its centre did not move, so it stays level with the attack button.
+
+**Both thumb clusters and the chat are off the bottom edge.** The last strip of
+the screen belongs to the system: the gesture handle sits there even in
+immersive mode, and the band above it is a system gesture inset, so touches are
+taken for back/home before the app ever sees them. The chat tabs are the bottom
+row of that window, which is exactly what could not be tapped. `layout()` now
+subtracts a `g_height * 0.04f` bottom-safe margin, and the chat is placed
+`fH * 0.05f` clear of the edge.
+
+**The controls are drawn in the game's own idiom.** RAN's windows and buttons
+are a dark, slightly blue charcoal panel behind a thin bright rim, with a darker
+line outside it. Every control is built from exactly that now, at whatever
+radius it happens to be — one `frame()` helper — so the stick, its knob, the
+attack button, the mode toggles, the page arrows and the skill slot rims read as
+one set, and as the same set as the MENU button and the window frames beside
+them. The glyphs moved into a `glyph()` helper so the lit and unlit paths
+cannot drift into drawing different marks, and a lit toggle keeps its frame and
+only changes what fills it.
+
+**Verified together on the emulator in one run:** arrow gone from the left edge,
+stick visibly smaller, chat clear of the bottom, every control wearing the new
+frame.
+
+### Startup loading screen — wired, not yet confirmed
+
+There is no way to draw one from inside the game. `m_pd3dDevice` is still NULL
+right through `DxGlobalStage::OneTimeSceneInit`, and the lobby stage is entered
+by assigning `m_emThisStage = EM_STAGE_LOBY` directly rather than going through
+`ChangeStage`, so `StartThreadLOAD` never runs at startup — confirmed by
+`RanLoad` logging nothing at all across a whole boot. The black period is
+before any device exists.
+
+So it is an Android window background instead. `loading_002.dds` — the image
+`DxGlobalStage` already names for the lobby stage — was decoded to PNG with a
+small DXT1 decoder written for the job, and is now
+`res/drawable-nodpi/splash.png` behind a `RanSplash` theme; `build-apk.sh`
+gained an `aapt2 compile` step for it. The resource is in the APK and the
+manifest resolves the theme, but I could not see it on the emulator: the window
+is covered there within half a second. It should show on the tablet, where
+startup is slower. **Unconfirmed — needs a look on the device.**
+
+## Touch controls restyled to the Claude palette
+
+The engine-matched grey-metal look was rejected. The controls now use Claude's
+design language: warm neutrals with a single terracotta accent, spent only where
+it carries meaning rather than as decoration.
+
+| control | treatment |
+|---|---|
+| Attack | solid terracotta `#D97757` — the primary action, the only control wearing the accent by default |
+| Stick | warm-black well, cream knob; the knob takes the accent while it is actually being moved |
+| Skill slots | warm-black rim with a cream ring |
+| Page arrows, pick-up | warm-black discs, cream glyphs |
+| Auto-target lit | terracotta |
+| PK lit | deep clay `#AA5135`, the one colour that reads as "careful" |
+| Camera lock lit | muted slate `#5C7A99` — a view setting, not a combat one |
+
+### The light palette did not survive contact with the game
+
+The first pass used Claude's *light* surfaces: cream fills, warm-grey rims, dark
+ink glyphs. Correct on a page, wrong over game footage. On the pale market
+pavement the buttons washed out almost entirely — the mode toggles were barely
+findable in the screenshot, and a control you cannot see is worse than an ugly
+one.
+
+The fix was to take the dark half of the same palette rather than abandon it:
+warm-black `#262624` surfaces at 0.66 alpha, with cream promoted from fill to
+rim and ink. Same identity, same accent, same hierarchy — but it holds against a
+bright street and a dark interior alike, which is the only test that matters
+when the background is arbitrary.
+
+Both states were confirmed in one frame: bright pavement and dark brick in the
+same screenshot, with auto-target and camera lock switched on so a lit toggle
+and an unlit one could be compared side by side.
+
+## Gameplay sweep — first results
+
+Taken on the emulator in one session, with the restyled controls in place.
+
+| thing | result |
+|---|---|
+| Zone change through a portal | works — market to the SG institute interior, geometry and lighting correct |
+| NPC dialogue | renders and responds; the OK button drove the zone change |
+| NPC hover tooltip | renders (`รถจิ๋ว [Npc Type]`) |
+| Area messages on entry | arrive in chat (tax rate lines) |
+| Untextured draws across the whole sweep | 0 |
+| Crashes | 0 |
+
+**One thing to look at next:** on zone entry a second, largely empty dark panel
+appears across the top centre carrying the area message
+(`อัตราภาษีของพื้นที่นี้คือ 5.00`). It is not obviously wrong — it may be the
+region notice banner behaving normally — but it is big, mostly empty, and sits
+where nothing else does. It was not present before the zone change. Worth
+identifying before deciding whether it needs moving like the rest of the corner
+furniture.
+
+Still unswept: shops, trade, quest turn-in, death.
+
+## Tablet session — everything below was verified on the Tab S9 itself
+
+The lesson of this round: the emulator is 2560x1440 and the tablet 2560x1600,
+and they are **not** the same layout. A fix confirmed on the emulator and
+reported as done was still visibly broken on the device. Nothing here is claimed
+without a capture or a log line from the tablet.
+
+### Tapping chat killed the game — FIXED
+
+`SIGABRT` in `onAppCmd`, an ART abort, i.e. a JNI error:
+
+```
+F com.ran.native: runtime.cc:761] "Signal Catcher" ...
+  native: #13 ... ((anonymous namespace)::onAppCmd+432)
+F libc: Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE)
+```
+
+`goFullscreen` calls `setSystemUiVisibility`, which throws on this device - a
+View method off the UI thread. The newly added `WindowInsetsController` block
+then called `GetObjectClass` **with that exception still pending**, and ART
+aborts the process the moment any JNI function is entered in that state. It
+fired on every focus change, which is exactly what raising the soft keyboard
+does - so tapping chat killed the game.
+
+Clearing the pending exception between the two blocks fixes it. Verified: open
+the chat input, type, send, tap the box - process alive throughout, zero
+`Fatal signal`.
+
+### The bars are gone — FIXED
+
+The legacy `setSystemUiVisibility` path never worked here (see above: it
+throws). `Window.setDecorFitsSystemWindows(false)` plus
+`WindowInsetsController.hide(systemBars())` and
+`setSystemBarsBehavior(BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE)` does. The gesture
+pill is absent from every capture after the fix. Exceptions are logged now
+instead of silently swallowed - swallowing them is why this failed invisibly for
+so long.
+
+### The left-edge arrow — FIXED, and it was never a tray collapse
+
+It is `MINIPARTY_OPEN` (id 10), at logical `(0,440) 41x16`. Every earlier
+attempt hid the skill tray and potion tray arrows, which is why it survived them
+all: it was neither.
+
+Finding it needed a census that could see **child** controls.
+`CInnerInterface::MobileCollectIn` walks only the top-level container, and the
+arrow is a group child, so it was invisible to every sweep built on it.
+`CUIControl::MobileCollectTree` (virtual, overridden in `CUIGroup`) walks the
+whole tree; one run on the tablet named the id outright.
+
+Also worth keeping: `SetVisibleSingle(FALSE)` does **not** change what
+`IsVisible()` returns - a census taken immediately after that call still listed
+the control as visible. Guarding a hide on `IsVisible()` therefore makes it a
+no-op. Both hides are unconditional now, every sweep.
+
+### The boot screen — ADDED, then made to match, then made to animate
+
+Three separate problems, in order:
+
+1. **Nothing was drawn at all.** No loading screen exists at startup by design:
+   `m_pd3dDevice` is NULL right through `DxGlobalStage::OneTimeSceneInit`, and
+   the lobby stage is entered by assigning `m_emThisStage` directly rather than
+   through `ChangeStage`, so `StartThreadLOAD` never runs - `RanLoad` logs
+   nothing across a whole boot. An Android window background does not work
+   either: with a NativeActivity the surface is created and painted black
+   immediately, and a capture 0.7s after launch was black with the theme
+   correctly linked and the drawable packaged. It is drawn directly on the GL
+   surface now, before `RanApp_Boot`.
+2. **It looked like a different screen.** It draws the same pieces in the same
+   1024x768 virtual layout as `NLOADINGTHREAD`: `ld_top`, the lobby art,
+   `ld_under`, the HINT badge and the `ld_back` ring.
+3. **The spinner did not move.** `loading_st.dds` is four 105x105 frames along a
+   512x128 sheet, indexed exactly as the client does it
+   (`left = (step %% 4) * 105`). The first attempt drew all four at once because
+   a shader edit had silently failed to apply - `String.replace` does not error
+   when the pattern does not match, so the `uUV` uniform never existed and the
+   quad sampled the whole sheet.
+
+   It advances on real progress rather than a timer, which is what
+   `LOADINGSTEP::SETSTEP` does for the in-game screen. The first attempt ticked
+   only between the coarse steps in `RanApp_Boot`, which all finish in the first
+   second - measured: the spinner region was pixel-identical between 2s and 5s.
+   Ticks inside `DxGlobalStage::OneTimeSceneInit`, where the time actually goes,
+   took it from 5 frames to 9 across a 12s boot, with the spinner region
+   measurably changing (13.3%% of pixels between 4s and 6s).
+
+### Chat follows the keyboard — ADDED
+
+`windowSoftInputMode=adjustNothing`, deliberately: letting Android resize the
+window churns the surface, and the client is not built to be resized mid-frame.
+So the chat asks how tall the keyboard is and moves itself, every frame rather
+than on the one-second sweep, or it would lurch up a second late.
+
+The height comes back as a **fraction of the window**, not pixels. The first
+attempt returned device pixels and scaled by `RanGL_Height()` - which reports
+the client's *logical* size, not the panel's - so the two disagreed by the UI
+scale factor and the chat flew off the top of the screen. A ratio has no units
+to get wrong.
+
+Verified both ways on the tablet: keyboard up, the chat sits directly above it
+with its tabs and input line visible; keyboard down, it returns to the bottom.
+
+## Particle effects: RAND_MAX is not 32767 everywhere
+
+`RANDOM_01` in `DxVertexFVF.h` was `((FLOAT)rand())*0.000031f`. That literal is
+`1/32767` — MSVC's `RAND_MAX` — and the author's own derivation is still sitting
+one line above it, commented out. bionic's `RAND_MAX` is `2^31-1`, so on Android
+the expression returned up to ~66000 rather than 0..1.
+
+Every particle built from it came out thousands of times too large: sizes of
+20000-85000 units instead of ~2, so a single billboard spanned the whole view.
+Drawn additively with a near-black colour, that is the full-screen magenta wash.
+Lifetimes were scaled the same way, so `m_fRate = m_fTime/m_fLife` stayed at 0 —
+the alpha ramp never rose and particles never expired.
+
+Found by bisecting the frame with `/sdcard/ran/drawlimit` down to draw #118, then
+logging quad spans at the point each of the five effect classes writes its
+vertices, which named `DxEffCharParticle`. The fog colour, the sky dome, DXT1
+decoding and the buffer-upload path were each eliminated by measurement first,
+and every one of them was a wrong guess.
+
+Fixed under `RAN_MOBILE` by dividing by the `RAND_MAX` actually in force. The
+Tab S9 went from 15-19 fps to ~55: those quads were overdrawing the whole screen
+every frame.
+
+## Drawing at panel resolution
+
+How large to lay the GUI out, and how many pixels to draw it with, are two
+questions that used to share one answer: the frame buffer was shrunk to 1280x800
+and stretched by the display, making everything on screen a 2x nearest-neighbour
+blow-up. That was the blur.
+
+Now the buffer is the full panel and `RanGL_UIScale` carries the ratio — the
+viewport and scissor paths already multiplied by it, and touch already divides by
+`InputScale`, the same number. The client still lays out at 1280x800, so the GUI
+stays finger-sized. Measured after the particle fix: 16-19 ms a frame at
+2560x1600, so it costs nothing that was not already being wasted.
+
+## Skill press during an attack
+
+`MobileCastRunSkill` cleared the press flag before testing `IsACTION(GLAT_ATTACK)`,
+so a skill pressed mid-swing was eaten with nothing to retry it. Tapping attack
+repeatedly holds `GLAT_ATTACK` almost continuously, so skills stopped coming out
+at all with nothing on cooldown. The press now opens a 0.75 s window, mid-swing
+counts as busy rather than refused, and the attack button stands aside while a
+skill is queued. Not yet confirmed on device — the test character has no skills
+in its quick slots.
+
+## Data on the tablet
+
+`push-data.sh minimal` had left `data/map` at 12 of 450 files and `sounds` at
+zero, which is why most maps did not load. Both are now pushed in full (3.06 GB
+and 266 MB).
+
+`adb push` needs `MSYS2_ARG_CONV_EXCL='*'` set, or the destination `/sdcard/...`
+is rewritten to a Windows path and the push reports success while moving nothing.
+That is the opposite of `build-apk.sh`, which breaks when the variable *is* set.
+
+The `.enm` skin misses in the log are harmless: those files are not in the PC
+client either.
+
+## Four moons: the second texture coordinate set was never read
+
+`moon.dds` holds four phases in a 2x2 grid. `DxSkyManDayNight` binds the same
+texture to stages 0 and 1, and picks tonight's phase by writing quadrant UVs into
+`vTex02` — coordinate **set 1**. Stage 0 samples set 0 for colour and stage 1
+passes that colour straight through (`SELECTARG2`/`CURRENT`), contributing only
+alpha: `MODULATE(TEXTURE, DIFFUSE)` sampled with set 1. That alpha is the mask
+that cuts the sheet down to one phase.
+
+The shim only ever read the first coordinate set off a vertex — there was no
+second UV attribute at all — so the mask was the whole sheet and all four moons
+showed at once.
+
+Added `aUV2`/`vUV2` (attribute 5, fed from the second set when the FVF declares
+one, in both the attribute-format and classic layout paths) and a stage-1 mode 4:
+alpha comes from the stage 0 texture sampled at set 1. Matched narrowly in
+`d3d9_impl` on one texture bound to both stages with exactly that op pair, so it
+cannot catch anything else.
+
+Also fixed while in there: `RanGLR_SetStage1` mapped only modes 1 and 2, so mode
+3 — the camera-space reflection addressing — silently became 0 and never reached
+the shader branch that implements it.
+
+Not yet confirmed on device: the moon only draws at night (`m_fAlpha_Night`), and
+in-game time was 07:20.
+
+## Sharpness is a setting
+
+Full-panel rendering makes geometry and text sharper but magnifies art authored
+at 1024x768 further, which can read as softer. Rather than pick for the player,
+`/sdcard/ran/renderscale` chooses: 1 draws at the full panel (default), 2 draws
+at half and lets the display stretch it, which is what the build did before. The
+GUI is laid out at the same size either way, so only sharpness changes.
+
+Verified by launching and reading the boot line, which needs no login:
+
+    renderscale 1 -> drawing 2560x1600, laid out 1280x800 (UI scale 2)
+    renderscale 2 -> drawing 1280x800, laid out 1280x800 (UI scale 1)
+
+Measured against the worry that the scene might be rendering into an off-screen
+target and being magnified back up regardless: about a quarter of the frame's
+draws go into render targets, but the largest is 512x512 (character composition),
+not the scene. So drawing at panel resolution does reach the 3D.
+
+## Text: glyphs were rasterised at the size they are laid out, not drawn
+
+The client asks for text in its own logical pixels. With the frame at the full
+panel every glyph quad is magnified by `RanGL_UIScale` on the way to the screen,
+so rasterising at the logical size and magnifying is what made all text soft.
+
+`d3dx_font.cpp` now rasterises each glyph at `scale * RanGL_UIScale()` and draws
+it into a quad of the same logical size as before, which puts the bitmap at
+roughly 1:1 with panel pixels. Only the bitmap changed: `advance` still comes
+from `TtfFace::Advance` at the logical scale rather than from the oversized
+bitmap, because that number is what every label in the interface is measured
+with and moving it would move the whole GUI. `w/h/bearing` became floats so the
+division does not quantise glyph boxes to whole logical pixels.
+
+The atlas grows with the factor (1024 -> 2048 at 2x) or it fills and later
+glyphs draw blank; the client only creates one font object, so that is cheap.
+
+Measured on the server-select title, same text both ways: edge energy 2.48 with
+the old pipeline against 3.84 with the new one, and the difference is obvious at
+3x zoom. Verified at the login screen, which needs no login.
+
+## Icons: bilinear magnification is what made them mushy
+
+Icons are authored small — an item icon is around 32 texels — and are drawn two
+to three times that size on the panel. With plain bilinear sampling almost every
+output pixel of them is a blend between two texels, which is exactly what "the
+icons look blurry" means. Nothing was being downscaled: every GUI texture was
+checked against its file and all upload at full resolution.
+
+The fix is a sharper reconstruction rather than a different resolution. The
+interpolation ramp is squeezed into roughly one output pixel, so a texel edge
+still ramps where it genuinely falls between output pixels and is flat
+everywhere else. Nearest sampling would also be crisp, but it puts hard
+stair-steps back — which is the complaint this started from.
+
+Applied in two places, because icons reach the screen by two different routes:
+
+* the client's interface path, in the main fragment shader, gated on
+  `uPreTransformed` so world geometry (as often minified as magnified) is left
+  alone. Texture sizes are recorded at upload in `g_texDims` and fed to the
+  shader per draw, memoised on the texture name.
+* the touch overlay's own icon shader, which draws the arc's skill icons and
+  never went through the renderer's shader at all. It derives the magnification
+  from the actual disc radius and UV span rather than assuming a factor.
+
+`/sdcard/ran/nouisharp` turns the client-path filter off live for comparison.
+
+Two shader traps on the way in, both caught by reading the log rather than the
+screen: `uPreTransformed` had to be declared in the fragment stage too, and then
+qualified `highp` — the vertex stage defaults an int to highp and the fragment
+stage to mediump, and a uniform shared by both stages must agree or the program
+will not link.
+
+Measuring this needs care. Total variation across an edge is invariant to how
+wide the blur is, so mean edge energy showed nothing; the difference is obvious
+at 4x zoom on the item tray, where the slot borders go from soft grey ramps to
+clean lines.

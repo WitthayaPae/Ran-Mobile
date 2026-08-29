@@ -10,6 +10,7 @@
 // without touching the D3D translation.
 
 #include "gl_context.h"
+#include "../platform/touch_ui.h"
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -39,6 +40,10 @@ bool g_ready = false;
 //  Touch events arrive in panel pixels; everything else works in frame pixels.
 int  g_panelWidth = 0, g_panelHeight = 0;
 int  g_renderScale = 1;
+//  Panel pixels per drawn pixel. 1 is the full panel; 2 halves the buffer and
+//  lets the display stretch it. Separate from g_renderScale, which is only ever
+//  about how large the GUI is laid out.
+int  g_bufferDiv = 1;
 bool g_swapPreserved = false;
 
 const char *eglErrStr(EGLint e) {
@@ -119,18 +124,78 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     //  GUI on a 2560x1440 panel is unusable with a finger, so the client is run
     //  at roughly 1280 across either way; drawing it at panel resolution only
     //  costs fragments, it adds no detail.
+    //  Two different questions that used to share one answer.
+    //
+    //  How large the GUI should be laid out, and how many pixels to draw it
+    //  with. A PC-sized GUI on a 2560x1600 panel is unusable with a finger, so
+    //  running the client at roughly 1280 across is right. But that was done by
+    //  shrinking the frame buffer to 1280x800 and letting the display stretch
+    //  it, which throws away half the panel in each direction: everything on
+    //  screen is a 2x nearest-neighbour blow-up. That is the pixellation.
+    //
+    //  The reasoning was that the client's art is authored at 1024x768 and gains
+    //  nothing from being drawn larger. True of the art, false of everything
+    //  else - the 3D scene, the text and the overlay's buttons are geometry, and
+    //  resolve as finely as the buffer allows.
+    //
+    //  So: buffer at the full panel, client coordinates stay logical, and
+    //  RanGL_UIScale carries the ratio between them. The viewport and scissor
+    //  paths already multiply by it, which is what it was built for, and touch
+    //  already divides by InputScale, which is the same number.
     g_panelWidth  = ANativeWindow_getWidth(win);
     g_panelHeight = ANativeWindow_getHeight(win);
 
+    //  Panel pixels per logical pixel, chosen so the client lays out at >= 1100
+    //  across - the width a PC GUI needs to stay tappable.
     g_renderScale = 1;
     while (g_panelWidth / (g_renderScale + 1) >= 1100) ++g_renderScale;
     if (g_renderScale > 4) g_renderScale = 4;
 
-    const int bufferW = g_panelWidth  / g_renderScale;
-    const int bufferH = g_panelHeight / g_renderScale;
+    //  How large to lay the GUI out, and how many pixels to draw it with, are
+    //  two questions. They used to share one answer.
+    //
+    //  A PC-sized GUI on a 2560x1600 panel is unusable with a finger, so running
+    //  the client at roughly 1280 across is right. But that was done by shrinking
+    //  the frame buffer to 1280x800 and letting the display stretch it, which
+    //  throws away half the panel in each direction - everything on screen is a
+    //  2x nearest-neighbour blow-up, and that is the blur.
+    //
+    //  The old reasoning was that the client's art is authored at 1024x768 and
+    //  gains nothing from a larger buffer. True of the art, false of everything
+    //  else: the 3D scene, the text and the overlay's buttons are geometry and
+    //  resolve as finely as the buffer allows.
+    //
+    //  So: buffer at the full panel, client coordinates stay logical, and
+    //  RanGL_UIScale carries the ratio. The viewport and scissor paths already
+    //  multiply by it - that is what it was built for - and touch already
+    //  divides by InputScale, the same number.
+    //  Sharpness is a judgement call, so it is a setting rather than my opinion.
+    //
+    //  Put a number in /sdcard/ran/renderscale: 1 draws at the full panel (sharp
+    //  geometry and text, but the art is authored at 1024x768 and is magnified
+    //  further, which some people read as soft); 2 draws at half and lets the
+    //  display stretch it, which is what the build did before. The GUI is laid
+    //  out at the same size either way, so only sharpness changes.
+    g_bufferDiv = 1;
+    {
+        FILE *f = fopen("/sdcard/ran/renderscale", "rb");
+        if (f) {
+            char buf[16] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
+                const int v = atoi(buf);
+                if (v >= 1 && v <= g_renderScale) g_bufferDiv = v;
+            }
+            fclose(f);
+        }
+    }
+
+    const int bufferW = g_panelWidth  / g_bufferDiv;
+    const int bufferH = g_panelHeight / g_bufferDiv;
     ANativeWindow_setBuffersGeometry(win, bufferW, bufferH, nativeVisual);
-    LOGI("panel %dx%d, rendering %dx%d (1/%d)", g_panelWidth, g_panelHeight,
-         bufferW, bufferH, g_renderScale);
+    LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, renderscale %d)",
+         g_panelWidth, g_panelHeight, bufferW, bufferH,
+         g_panelWidth / g_renderScale, g_panelHeight / g_renderScale,
+         g_renderScale / g_bufferDiv, g_bufferDiv);
 
     g_surface = eglCreateWindowSurface(g_display, config, win, NULL);
     if (g_surface == EGL_NO_SURFACE) {
@@ -228,9 +293,19 @@ extern "C" int  RanGL_Height(void) { return g_height; }
 //  The frame is already the size the client should think it is — the display
 //  does the upscale — so these are all the same number now. RanGL_UIScale stays
 //  1 and exists so the viewport/clear paths need no special case.
-extern "C" int RanGL_UIScale(void)       { return 1; }
-extern "C" int RanGL_LogicalWidth(void)  { return g_width; }
-extern "C" int RanGL_LogicalHeight(void) { return g_height; }
+//  g_width/g_height are the frame: panel pixels. The client thinks in logical
+//  ones, UIScale times larger, so a PC-sized GUI stays tappable. Anything that
+//  touches real pixels (viewport, scissor) multiplies by UIScale; anything that
+//  lays out uses the Logical pair.
+//  The frame is g_width/g_height. The client lays out at panel/g_renderScale
+//  whatever the buffer size is, so the ratio between the two - which is what
+//  the viewport and scissor paths multiply by - is what UIScale reports.
+extern "C" int RanGL_UIScale(void) {
+    const int d = (g_renderScale > 0 ? g_renderScale : 1) / (g_bufferDiv > 0 ? g_bufferDiv : 1);
+    return d > 0 ? d : 1;
+}
+extern "C" int RanGL_LogicalWidth(void)  { return g_width  / RanGL_UIScale(); }
+extern "C" int RanGL_LogicalHeight(void) { return g_height / RanGL_UIScale(); }
 
 //  Panel pixels per frame pixel, for turning a touch into a client coordinate.
 extern "C" int RanGL_InputScale(void)    { return g_renderScale > 0 ? g_renderScale : 1; }
@@ -248,6 +323,11 @@ extern "C" double RanGL_TakeSwapSeconds(void) {
 
 extern "C" void RanGL_Present(void) {
     if (!g_ready) return;
+    //  The touch controls go on last, over the finished frame.
+    //  The touch controls used to be drawn here, at the end of the frame, which
+    //  put them on top of everything including the game's own windows - so an
+    //  open inventory appeared underneath the joystick. They are drawn from
+    //  DxGameStage now, just before the interface, so every window covers them.
     struct timespec ts0;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
     if (!eglSwapBuffers(g_display, g_surface)) {

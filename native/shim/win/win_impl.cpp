@@ -635,8 +635,33 @@ BOOL  GetCursorPos(LPPOINT p)  {
     p->x = x; p->y = y;
     return TRUE;
 }
-BOOL  SetCursorPos(int x, int y) { g_cursor.x = x; g_cursor.y = y; return TRUE; }
-int   ShowCursor(BOOL)         { return 0; }
+extern "C" void RanInput_WarpPointer(int x, int y);
+//  Has to move the same pointer GetCursorPos reads, or pinning does nothing.
+BOOL  SetCursorPos(int x, int y) {
+    g_cursor.x = x; g_cursor.y = y;
+    RanInput_WarpPointer(x, y);
+    return TRUE;
+}
+//  Win32 keeps a display counter, and callers converge on a value by looping.
+//
+//  CCursor::SetShowCursor does exactly that:
+//
+//      int nShow = ShowCursor(FALSE);
+//      while ( nShow > -1 ) { nShow = ShowCursor(FALSE); }
+//
+//  Returning a constant 0 made that an infinite loop - the render thread span
+//  at 100% until Android killed the app for not reading input. It only bit on
+//  camera rotation, because the middle-drag branch of DxViewPort::FrameMoveMAX
+//  is the one place that asks for the cursor to be HIDDEN; asking for it to be
+//  shown happens to satisfy its loops on the first call.
+//
+//  There is no cursor to show on a touch screen, so nothing is drawn either
+//  way - but the counter has to behave, or the caller never comes back.
+int   ShowCursor(BOOL show) {
+    static int s_count = 0;     //  Win32 starts at 0 when a mouse is present
+    s_count += show ? 1 : -1;
+    return s_count;
+}
 BOOL  ClientToScreen(HWND, LPPOINT) { return TRUE; }
 BOOL  ScreenToClient(HWND, LPPOINT) { return TRUE; }
 BOOL  GetClientRect(HWND, LPRECT r) { *r = g_clientRect; return TRUE; }

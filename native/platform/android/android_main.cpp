@@ -20,6 +20,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <jni.h>
+#include <android/native_activity.h>
+#include <android/window.h>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanMain", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanMain", __VA_ARGS__)
@@ -32,6 +36,8 @@ extern "C" void RanSound_LogStats(void);
 // GL backend (shim/gl). The context is created on this thread — the only thread
 // that ever touches GL.
 extern "C" int  RanGL_Init(void *nativeWindow);
+extern "C" void RanSplash_Begin(const char *dataRoot);
+extern "C" void RanSplash_End(void);
 extern "C" void RanGL_Shutdown(void);
 extern "C" int  RanGL_Width(void);
 extern "C" int  RanGL_Height(void);
@@ -44,7 +50,14 @@ extern "C" int  RanGLR_Init(void);
 // Input, fed into the DirectInput device the engine actually reads (shim/platform).
 extern "C" void RanInput_PointerMove(int x, int y);
 extern "C" void RanInput_PointerButton(int button, int down);
+extern "C" void RanInput_PumpButtons(void);
+extern "C" int  RanUI_MouseInControl(void);
+extern "C" void RanUI_EndEditIfOutside(int x, int y);
+extern "C" int  RanTouch_IsPinching(void);
 extern "C" void RanInput_Key(int scanCode, int down);
+
+//  The on-screen controls. They see every pointer before the client does.
+#include "../../shim/platform/touch_ui.h"
 
 namespace {
 
@@ -95,6 +108,12 @@ int scanCodeFor(int32_t keyCode) {
     switch (keyCode) {
         case AKEYCODE_ENTER:     return 0x1C;   // DIK_RETURN
         case AKEYCODE_ESCAPE:    return 0x01;   // DIK_ESCAPE
+        //  Back becomes Escape, which opens the client's own menu - and, more to
+        //  the point, is handled here so it is not handled by the system. An
+        //  unmapped key returns 0 and NativeActivity finishes the activity, so
+        //  Back used to drop the player out of the game instantly, mid-session,
+        //  with no confirmation. On a tablet it is a gesture you hit by accident.
+        case AKEYCODE_BACK:      return 0x01;   // DIK_ESCAPE
         case AKEYCODE_DEL:       return 0x0E;   // DIK_BACK
         case AKEYCODE_TAB:       return 0x0F;   // DIK_TAB
         case AKEYCODE_SPACE:     return 0x39;   // DIK_SPACE
@@ -116,9 +135,357 @@ int scanCodeFor(int32_t keyCode) {
     return 0;
 }
 
-// Touch becomes the left mouse button. The pointer is moved before the press
-// because the UI hit-tests using the current position and a touch delivers both
-// at the same instant.
+//  One finger has to cover both mouse buttons.
+//
+//  Right-click does real work in RAN - it uses or equips an item from the
+//  inventory, clears a quick slot, and drives various context actions - and a
+//  touch screen has no second button, so a long press stands in for it.
+//
+//  The press cannot be sent on touch-down, because by the time the hold is long
+//  enough to count a left click would already have happened. So it is deferred:
+//  a finger that moves is a drag and presses left as soon as it moves, a finger
+//  that lifts early presses left then releases, and a finger that stays put
+//  presses right when the timer expires. The pointer still moves on touch-down,
+//  so hover and tooltips behave exactly as before.
+struct TouchGesture {
+    bool  active   = false;
+    bool  pressed  = false;     // a button is down for this touch
+    int   button   = 0;         // which one
+    int   x = 0, y = 0;         // where it started
+    int64_t downMs = 0;
+} g_gesture;
+
+//  Long enough not to fire on a normal tap, short enough not to feel stuck.
+const int64_t kLongPressMs = 450;
+
+//  Past this the touch is a drag, not a hold or a tap, however long it lasts.
+//
+//  16 was far too tight. A finger resting on glass wanders further than that
+//  just from the contact patch shifting, so ordinary taps were being promoted to
+//  drags - which is why tapping a window's close button dragged the window
+//  instead of closing it.
+const int     kDragSlop    = 30;
+
+int64_t nowMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+//  Press at the point the finger went DOWN, not wherever it is now.
+//
+//  The client records a window's grab offset on the button-down, so pressing at
+//  the current position after the finger had already travelled made the window
+//  jump by however far that was. Putting the pointer back first reproduces a
+//  real press-then-drag: down where you touched, then movement.
+void gesturePress(int button) {
+    g_gesture.pressed = true;
+    g_gesture.button  = button;
+    RanInput_PointerMove(g_gesture.x, g_gesture.y);
+    RanInput_PointerButton(button, 1);
+}
+
+//  Called once a frame: the only place a hold can be noticed, since a finger
+//  that is not moving generates no events at all.
+void gestureTick() {
+    if (!g_gesture.active || g_gesture.pressed) return;
+    if (nowMs() - g_gesture.downMs < kLongPressMs) return;
+    gesturePress(1);                // right
+}
+
+//  Take the whole screen: no status bar, no navigation bar.
+//
+//  Two halves, because neither covers both. The theme and the window flag deal
+//  with the status bar; the navigation bar only goes away through the View, and
+//  there is no native entry point for it - hence the JNI.
+//
+//  IMMERSIVE_STICKY rather than plain IMMERSIVE: a swipe brings the bars back
+//  briefly and they retreat on their own, instead of staying up and shifting the
+//  layout under a player who was reaching for something else.
+//  The device's own keyboard, raised and lowered with the edit boxes.
+//
+//  Its keys arrive as ordinary key events and go through scanCodeFor, so the
+//  client sees them exactly as it would a physical keyboard - which is why this
+//  is enough for a login without any of the IME work: an account name and
+//  password are ASCII, and A-Z and 0-9 are already mapped.
+//
+//  Thai still needs a real IME. Characters that no scan code can express do not
+//  arrive at all, so this does not replace that job, it just makes typing
+//  possible without the client drawing a keyboard of its own.
+android_app *g_app = NULL;
+
+//  Raise and lower the keyboard through InputMethodManager.
+//
+//  ANativeActivity_showSoftInput is the obvious call and it does nothing here -
+//  verified, not assumed: the request was logged three times with a live
+//  activity and no keyboard appeared. It only works when the window has a
+//  focused editable view, which a NativeActivity never has; there is no View to
+//  focus, only a surface.
+//
+//  Going at the manager directly and forcing it is what NDK apps have to do.
+void imeCall(bool show) {
+    if (!g_app) return;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+
+    jobject act = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+
+    //  getSystemService(Context.INPUT_METHOD_SERVICE)
+    jmethodID mGetSvc = env->GetMethodID(cAct, "getSystemService",
+                                         "(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring   sName = env->NewStringUTF("input_method");
+    jobject   imm = (mGetSvc && sName) ? env->CallObjectMethod(act, mGetSvc, sName) : NULL;
+
+    //  ...and the window token to aim it at.
+    jmethodID mGetWindow = env->GetMethodID(cAct, "getWindow", "()Landroid/view/Window;");
+    jobject   window = mGetWindow ? env->CallObjectMethod(act, mGetWindow) : NULL;
+    jobject   decor = NULL;
+    if (window) {
+        jclass    cWin = env->GetObjectClass(window);
+        jmethodID mDecor = env->GetMethodID(cWin, "getDecorView", "()Landroid/view/View;");
+        if (mDecor) decor = env->CallObjectMethod(window, mDecor);
+    }
+
+    if (imm && decor) {
+        jclass cImm = env->GetObjectClass(imm);
+        jclass cView = env->GetObjectClass(decor);
+
+        if (show) {
+            //  showSoftInput, not toggleSoftInputFromWindow.
+            //
+            //  Toggle was the first thing that worked, and it is wrong: moving
+            //  from the ID field to the password field calls this twice, so the
+            //  keyboard appeared and then immediately went away again. Measured -
+            //  mInputShown went true on the first tap and false on the second.
+            //
+            //  SHOW_FORCED (2) because the served view is the NativeActivity's
+            //  decor view rather than a real text field, and the polite request
+            //  is ignored for it.
+            jmethodID mShow = env->GetMethodID(cImm, "showSoftInput",
+                                               "(Landroid/view/View;I)Z");
+            if (mShow) env->CallBooleanMethod(imm, mShow, decor, 2);
+        } else {
+            jmethodID mHide = env->GetMethodID(cImm, "hideSoftInputFromWindow",
+                                               "(Landroid/os/IBinder;I)Z");
+            jmethodID mToken = env->GetMethodID(cView, "getWindowToken",
+                                                "()Landroid/os/IBinder;");
+            jobject token = mToken ? env->CallObjectMethod(decor, mToken) : NULL;
+            if (mHide && token) env->CallBooleanMethod(imm, mHide, token, 0);
+        }
+    }
+
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    g_app->activity->vm->DetachCurrentThread();
+}
+
+//  Whether an edit box is taking input. Keys only become text while one is -
+//  otherwise every movement key would type itself into the last field touched.
+bool g_imeActive = false;
+
+extern "C" void RanIME_InsertUtf8(const char *sz);
+extern "C" void RanIME_Backspace(void);
+
+extern "C" void RanIME_Show(void) { g_imeActive = true;  imeCall(true); }
+extern "C" void RanIME_Hide(void) { g_imeActive = false; imeCall(false); }
+
+//  How much of the bottom of the window the soft keyboard covers, in
+//  thousandths of the window height.
+//
+//  The window itself does not shrink - windowSoftInputMode is adjustNothing,
+//  deliberately, because letting Android resize it churns the surface and the
+//  client is not built to be resized mid-frame. So the keyboard height has to be
+//  asked for, and whatever wants to stay visible moves itself.
+//
+//  Throttled: this is a JNI round trip and the caller is a per-frame layout pass.
+extern "C" int RanAndroid_ImeInsetPerMille(void) {
+    static int  s_cached = 0;
+    static long s_lastMs = -1000;
+
+    if (!g_imeActive) { s_cached = 0; return 0; }
+    if (!g_app || !g_app->activity) return s_cached;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const long nowMs = (long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    if (nowMs - s_lastMs < 100) return s_cached;
+    s_lastMs = nowMs;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return s_cached;
+
+    do {
+        jclass    cAct = env->GetObjectClass(g_app->activity->clazz);
+        jmethodID mWin = env->GetMethodID(cAct, "getWindow", "()Landroid/view/Window;");
+        jobject   win  = mWin ? env->CallObjectMethod(g_app->activity->clazz, mWin) : NULL;
+        if (!win) break;
+
+        jclass    cWin   = env->GetObjectClass(win);
+        jmethodID mDecor = env->GetMethodID(cWin, "getDecorView", "()Landroid/view/View;");
+        jobject   decor  = mDecor ? env->CallObjectMethod(win, mDecor) : NULL;
+        if (!decor) break;
+
+        jclass    cView = env->GetObjectClass(decor);
+        jmethodID mRoot = env->GetMethodID(cView, "getRootWindowInsets", "()Landroid/view/WindowInsets;");
+        jobject   ins   = mRoot ? env->CallObjectMethod(decor, mRoot) : NULL;
+        if (!ins) break;
+
+        //  WindowInsets.Type.ime() is a static int; ask for it rather than
+        //  hard-coding, because it is not part of the documented ABI.
+        jclass    cType = env->FindClass("android/view/WindowInsets$Type");
+        jmethodID mIme  = cType ? env->GetStaticMethodID(cType, "ime", "()I") : NULL;
+        if (!mIme) break;
+        const jint imeType = env->CallStaticIntMethod(cType, mIme);
+
+        jclass    cIns    = env->GetObjectClass(ins);
+        jmethodID mGetIns = env->GetMethodID(cIns, "getInsets", "(I)Landroid/graphics/Insets;");
+        jobject   got     = mGetIns ? env->CallObjectMethod(ins, mGetIns, imeType) : NULL;
+        if (!got) break;
+
+        jclass  cI  = env->GetObjectClass(got);
+        jfieldID fB = env->GetFieldID(cI, "bottom", "I");
+        if (!fB) break;
+        const int insetPx = (int)env->GetIntField(got, fB);
+
+        //  As a fraction of the window, not raw pixels.
+        //
+        //  The caller works in the client's logical size, and RanGL_Height()
+        //  reports that logical size too - not the panel's. Handing back device
+        //  pixels made the two disagree by the UI scale factor and the chat flew
+        //  to the top of the screen. A ratio has no units to get wrong.
+        jmethodID mH = env->GetMethodID(cView, "getHeight", "()I");
+        const int viewH = mH ? (int)env->CallIntMethod(decor, mH) : 0;
+        if (viewH > 0) s_cached = (insetPx * 1000) / viewH;
+    } while (0);
+
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    g_app->activity->vm->DetachCurrentThread();
+    return s_cached;
+}
+
+//  A key to the character it types.
+//
+//  A table rather than JNI KeyCharacterMap: this covers the ASCII an account
+//  name and password are made of, with no call into Java on the input path.
+//  Thai cannot be done this way - it needs the composing IME - so this is the
+//  smaller half of that job, not a replacement for it.
+char asciiFor(int32_t keyCode, int32_t meta) {
+    const bool shift = (meta & AMETA_SHIFT_ON) != 0;
+
+    if (keyCode >= AKEYCODE_A && keyCode <= AKEYCODE_Z) {
+        const char base = (char)('a' + (keyCode - AKEYCODE_A));
+        return shift ? (char)(base - 'a' + 'A') : base;
+    }
+    if (keyCode >= AKEYCODE_0 && keyCode <= AKEYCODE_9) {
+        static const char kShifted[10] = { ')', '!', '@', '#', '$', '%', '^', '&', '*', '(' };
+        const int d = keyCode - AKEYCODE_0;
+        return shift ? kShifted[d] : (char)('0' + d);
+    }
+    switch (keyCode) {
+        case AKEYCODE_SPACE:         return ' ';
+        case AKEYCODE_PERIOD:        return shift ? '>' : '.';
+        case AKEYCODE_COMMA:         return shift ? '<' : ',';
+        case AKEYCODE_MINUS:         return shift ? '_' : '-';
+        case AKEYCODE_EQUALS:        return shift ? '+' : '=';
+        case AKEYCODE_AT:            return '@';
+        case AKEYCODE_SLASH:         return shift ? '?' : '/';
+        case AKEYCODE_SEMICOLON:     return shift ? ':' : ';';
+        case AKEYCODE_LEFT_BRACKET:  return shift ? '{' : '[';
+        case AKEYCODE_RIGHT_BRACKET: return shift ? '}' : ']';
+        case AKEYCODE_STAR:          return '*';
+        case AKEYCODE_POUND:         return '#';
+        case AKEYCODE_PLUS:          return '+';
+        default: break;
+    }
+    return 0;
+}
+
+void goFullscreen(android_app *app) {
+    ANativeActivity_setWindowFlags(app->activity,
+        AWINDOW_FLAG_FULLSCREEN | AWINDOW_FLAG_KEEP_SCREEN_ON, 0);
+
+    JNIEnv *env = NULL;
+    if (app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+
+    //  activity.getWindow().getDecorView().setSystemUiVisibility(flags)
+    jclass    cActivity = env->GetObjectClass(app->activity->clazz);
+    jmethodID mGetWindow = env->GetMethodID(cActivity, "getWindow", "()Landroid/view/Window;");
+    jobject   window = mGetWindow ? env->CallObjectMethod(app->activity->clazz, mGetWindow) : NULL;
+
+    if (window) {
+        jclass    cWindow = env->GetObjectClass(window);
+        jmethodID mGetDecor = env->GetMethodID(cWindow, "getDecorView", "()Landroid/view/View;");
+        jobject   decor = mGetDecor ? env->CallObjectMethod(window, mGetDecor) : NULL;
+
+        if (decor) {
+            jclass    cView = env->GetObjectClass(decor);
+            jmethodID mSetUi = env->GetMethodID(cView, "setSystemUiVisibility", "(I)V");
+            if (mSetUi) {
+                const jint kFlags =
+                    0x00000002 |    // HIDE_NAVIGATION
+                    0x00000004 |    // FULLSCREEN
+                    0x00000100 |    // LAYOUT_STABLE
+                    0x00000200 |    // LAYOUT_HIDE_NAVIGATION
+                    0x00000400 |    // LAYOUT_FULLSCREEN
+                    0x00001000;     // IMMERSIVE_STICKY
+                env->CallVoidMethod(decor, mSetUi, kFlags);
+            }
+        }
+    }
+
+    //  Clear before going on. setSystemUiVisibility above throws on this
+    //  device - a View method off the UI thread - and ART aborts the whole
+    //  process the moment any JNI function is called with an exception still
+    //  pending. That was a SIGABRT in onAppCmd on every focus change, which is
+    //  what happens when the soft keyboard opens: tapping chat killed the game.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+
+    //  WindowInsetsController is the supported route from Android 11 on, and
+    //  setSystemUiVisibility is deprecated there. Ask for it as well: on this
+    //  tablet the legacy call alone left the gesture pill on screen.
+    if (window) {
+        jclass    cWindow = env->GetObjectClass(window);
+        jmethodID mDecorFits = env->GetMethodID(cWindow, "setDecorFitsSystemWindows", "(Z)V");
+        if (mDecorFits) env->CallVoidMethod(window, mDecorFits, JNI_FALSE);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+
+        jmethodID mGetCtl = env->GetMethodID(cWindow, "getInsetsController",
+                                             "()Landroid/view/WindowInsetsController;");
+        jobject ctl = mGetCtl ? env->CallObjectMethod(window, mGetCtl) : NULL;
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (ctl) {
+            jclass cCtl = env->GetObjectClass(ctl);
+
+            //  WindowInsets.Type.systemBars() is statusBars()|navigationBars() = 1|2.
+            jmethodID mHide = env->GetMethodID(cCtl, "hide", "(I)V");
+            if (mHide) env->CallVoidMethod(ctl, mHide, (jint)(1 | 2));
+            if (env->ExceptionCheck()) env->ExceptionClear();
+
+            //  BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE = 2: a swipe reveals them
+            //  briefly instead of pinning them back permanently.
+            jmethodID mBehav = env->GetMethodID(cCtl, "setSystemBarsBehavior", "(I)V");
+            if (mBehav) env->CallVoidMethod(ctl, mBehav, (jint)2);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+    }
+
+    //  Anything above can throw - a View method called off the UI thread is
+    //  refused on some versions. Say so rather than swallowing it: this was
+    //  failing silently, which is why the bars stayed and there was nothing to
+    //  read. Still cleared, because leaving a pending exception would take the
+    //  process down at the next JNI call.
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        LOGE("fullscreen: a JNI call threw - system bars may stay visible");
+    }
+    app->activity->vm->DetachCurrentThread();
+}
+
+// Touch becomes a mouse button. The pointer is moved before the press because
+// the UI hit-tests using the current position and a touch delivers both at the
+// same instant.
 int32_t onInputEvent(android_app *app, AInputEvent *event) {
     (void)app;
     const int32_t type = AInputEvent_getType(event);
@@ -130,19 +497,112 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
         const int scale = RanGL_InputScale();
         const int x = (int)AMotionEvent_getX(event, 0) / scale;
         const int y = (int)AMotionEvent_getY(event, 0) / scale;
+        //  Pointer ids keep fingers distinct, so the stick and a button can
+        //  be held at once - which is the entire point of the layout.
+        const int32_t idx = (AMotionEvent_getAction(event) &
+                             AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                            AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+        const int pid = (int)AMotionEvent_getPointerId(event, idx);
+        const int px = (int)AMotionEvent_getX(event, idx) / scale;
+        const int py = (int)AMotionEvent_getY(event, idx) / scale;
+
         switch (action) {
             case AMOTION_EVENT_ACTION_DOWN:
-                RanInput_PointerMove(x, y);
-                RanInput_PointerButton(0, 1);
+            case AMOTION_EVENT_ACTION_POINTER_DOWN:
+                if (RanTouch_PointerDown(pid, (float)px, (float)py)) return 1;
+
+                //  A second finger means a pinch is starting. Anything already
+                //  dragging has to let go now, before the pinch moves.
+                if (RanTouch_IsPinching() && g_gesture.pressed) {
+                    RanInput_PointerButton(g_gesture.button, 0);
+                    g_gesture.pressed = false;
+                    g_gesture.active = false;
+                }
+
+                RanInput_PointerMove(px, py);
+                //  A press outside the field being edited puts the keyboard
+                //  away. Nothing in the client does this: it only ends an edit
+                //  when you move to another box, so the keyboard would sit
+                //  there over half the screen.
+                if (g_imeActive) RanUI_EndEditIfOutside(px, py);
+
+                //  No button yet - see TouchGesture. The move alone is what
+                //  drives hover and tooltips.
+                g_gesture.active  = true;
+                g_gesture.pressed = false;
+                g_gesture.x = px;
+                g_gesture.y = py;
+                g_gesture.downMs = nowMs();
                 return 1;
-            case AMOTION_EVENT_ACTION_MOVE:
-                RanInput_PointerMove(x, y);
+
+            case AMOTION_EVENT_ACTION_MOVE: {
+                //  A move event carries every finger at once, so each is offered
+                //  in turn; only an unclaimed one drives the mouse.
+                const size_t count = AMotionEvent_getPointerCount(event);
+                bool claimedAny = false;
+                for (size_t i = 0; i < count; ++i) {
+                    const int mid = (int)AMotionEvent_getPointerId(event, i);
+                    const int mx = (int)AMotionEvent_getX(event, i) / scale;
+                    const int my = (int)AMotionEvent_getY(event, i) / scale;
+                    if (RanTouch_PointerMove(mid, (float)mx, (float)my)) { claimedAny = true; continue; }
+                    RanInput_PointerMove(mx, my);
+
+                    //  Moved far enough to be a drag. What that means depends
+                    //  on what is under the finger:
+                    //
+                    //    on a control - left, so items and scrollbars drag;
+                    //    on the world - middle, which is what DxViewPort reads
+                    //    for camera rotation. That is the free look.
+                    //
+                    //  The press lands back at the touch-down point, then this
+                    //  move carries it to where the finger actually is - the
+                    //  camera turns by the difference, as it would on a mouse.
+                    //  A pinch is two fingers moving, and that movement would
+                    //  otherwise cross the drag threshold and press the middle
+                    //  button - which is the camera-rotate binding. Zooming
+                    //  turned the view at the same time. A pinch is a zoom and
+                    //  nothing else.
+                    if (RanTouch_IsPinching()) {
+                        if (g_gesture.pressed) {
+                            //  Already dragging when the second finger landed:
+                            //  let go, or the rotation continues through the
+                            //  whole pinch.
+                            RanInput_PointerButton(g_gesture.button, 0);
+                            g_gesture.pressed = false;
+                        }
+                        g_gesture.active = false;
+                        continue;
+                    }
+
+                    if (g_gesture.active && !g_gesture.pressed) {
+                        const int dx = mx - g_gesture.x, dy = my - g_gesture.y;
+                        if (dx * dx + dy * dy > kDragSlop * kDragSlop) {
+                            gesturePress(RanUI_MouseInControl() ? 0 : 2);
+                            RanInput_PointerMove(mx, my);
+                        }
+                    }
+                }
+                (void)claimedAny;
                 return 1;
+            }
+
             case AMOTION_EVENT_ACTION_UP:
+            case AMOTION_EVENT_ACTION_POINTER_UP:
             case AMOTION_EVENT_ACTION_CANCEL:
-                RanInput_PointerMove(x, y);
-                RanInput_PointerButton(0, 0);
+                if (RanTouch_PointerUp(pid, (float)px, (float)py)) return 1;
+
+                //  Lifted before the hold expired and without moving: an
+                //  ordinary tap, so the left click happens now, at the point the
+                //  finger went down rather than the pixel it left from. The shim
+                //  holds the release back until the press has been polled, so a
+                //  quick tap cannot fall between two frames and vanish.
+                if (g_gesture.active && !g_gesture.pressed)	gesturePress(0);
+                else										RanInput_PointerMove(px, py);
+                if (g_gesture.pressed) RanInput_PointerButton(g_gesture.button, 0);
+                g_gesture.active  = false;
+                g_gesture.pressed = false;
                 return 1;
+
             default:
                 return 0;
         }
@@ -150,7 +610,21 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
 
     if (type == AINPUT_EVENT_TYPE_KEY) {
         const int32_t action = AKeyEvent_getAction(event);
-        const int scan = scanCodeFor(AKeyEvent_getKeyCode(event));
+        const int32_t keyCode = AKeyEvent_getKeyCode(event);
+
+        //  While a field is open, keys are text first.
+        if (g_imeActive && action == AKEY_EVENT_ACTION_DOWN) {
+            if (keyCode == AKEYCODE_DEL) { RanIME_Backspace(); return 1; }
+
+            const char c = asciiFor(keyCode, AKeyEvent_getMetaState(event));
+            if (c) {
+                const char sz[2] = { c, 0 };
+                RanIME_InsertUtf8(sz);
+                return 1;
+            }
+        }
+
+        const int scan = scanCodeFor(keyCode);
         if (!scan) return 0;
         if (action == AKEY_EVENT_ACTION_DOWN)     RanInput_Key(scan, 1);
         else if (action == AKEY_EVENT_ACTION_UP)  RanInput_Key(scan, 0);
@@ -163,6 +637,13 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
 void onAppCmd(android_app *app, int32_t cmd) {
     AppState *st = (AppState *)app->userData;
     switch (cmd) {
+        //  Re-applied on focus, not just once: sticky immersive lets the bars
+        //  back briefly on a swipe, and anything that takes focus away (a
+        //  notification, the recents switcher) restores them for good.
+        case APP_CMD_GAINED_FOCUS:
+            goFullscreen(app);
+            break;
+
         case APP_CMD_INIT_WINDOW:
             if (app->window) {
                 st->width  = ANativeWindow_getWidth(app->window);
@@ -175,6 +656,13 @@ void onAppCmd(android_app *app, int32_t cmd) {
                     st->quit = true;
                     break;
                 }
+                //  The overlay works in logical pixels, like the client and
+                //  like the touches it is fed, which are already divided by
+                //  InputScale. The frame itself is larger than that now; the
+                //  overlay normalises by these numbers in its own shader, so
+                //  its geometry still rasterises at the full panel resolution.
+                RanTouch_Init(RanGL_LogicalWidth(), RanGL_LogicalHeight());
+
                 if (RanGL_Width() > 0) {
                     //  The client is booted at the logical size — see
                     //  RanGL_UIScale: a PC-sized GUI on a 2560x1440 panel is
@@ -206,6 +694,7 @@ void onAppCmd(android_app *app, int32_t cmd) {
 } // namespace
 
 extern "C" void android_main(android_app *app) {
+    g_app = app;
     AppState state;
     app->userData = &state;
     app->onAppCmd = onAppCmd;
@@ -228,7 +717,15 @@ extern "C" void android_main(android_app *app) {
 
         if (state.ready && !state.booted) {
             const char *root = pickDataRoot(app);
-            if (RanApp_Boot(root, state.width, state.height)) {
+
+            //  Put something on screen before the client boots. RanApp_Boot
+            //  loads for many seconds with no device of its own yet, so without
+            //  this the window is black for the whole of it.
+            RanSplash_Begin(root);
+
+            const int bootOk = RanApp_Boot(root, state.width, state.height);
+            RanSplash_End();
+            if (bootOk) {
                 state.booted = true;
             } else {
                 LOGE("boot failed — stopping");
@@ -237,6 +734,10 @@ extern "C" void android_main(android_app *app) {
         }
 
         if (state.booted) {
+            gestureTick();
+            //  One button transition per frame, so every press and release is
+            //  visible to the client for at least one frame.
+            RanInput_PumpButtons();
             if (!RanApp_Frame()) { LOGE("frame failed — stopping"); break; }
             // A headless device returns instantly, so the loop spins millions of
             // times a second; log rarely enough that the boot lines survive.

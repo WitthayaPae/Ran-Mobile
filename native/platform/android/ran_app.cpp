@@ -226,6 +226,8 @@ RanMobileApp *g_app = NULL;
 // ---------------------------------------------------------------- public API
 
 // Mirrors CGameClient2App::InitInstance.
+extern "C" void RanSplash_Step(void);
+
 extern "C" int RanApp_Boot(const char *dataRoot, int width, int height) {
     LOGI("=== RAN mobile boot === root=%s %dx%d", dataRoot ? dataRoot : "(null)", width, height);
 
@@ -247,8 +249,10 @@ extern "C" int RanApp_Boot(const char *dataRoot, int width, int height) {
     LOGI("step: RANPARAM::LOAD");
     RANPARAM::LOAD(g_appPath);
     LOGI("step: RANPARAM::LOAD done");
+    RanSplash_Step();
     DXPARAMSET::INIT();
     LOGI("step: DXPARAMSET done");
+    RanSplash_Step();
     LOGI("RANPARAM loaded — service=%d screen=%ux%u lang=%u",
          (int)RANPARAM::emSERVICE_TYPE, (unsigned)RANPARAM::dwScrWidth,
          (unsigned)RANPARAM::dwScrHeight, (unsigned)RANPARAM::dwLangSet);
@@ -274,12 +278,14 @@ extern "C" int RanApp_Boot(const char *dataRoot, int width, int height) {
         LOGE("Gui.rcc not indexed at %s — GUI will be empty", GLOGIC::strGUI_ZIPFILE.c_str());
     else
         LOGI("Gui.rcc indexed");
+    RanSplash_Step();
 
     CGameTextMan::GetInstance().SetPath(guiRoot.c_str());
     CGameTextMan::GetInstance().LoadText(RANPARAM::strGameWord.GetString(),   CGameTextMan::EM_GAME_WORD,    RANPARAM::bXML_USE);
     CGameTextMan::GetInstance().LoadText(RANPARAM::strGameInText.GetString(), CGameTextMan::EM_GAME_IN_TEXT, RANPARAM::bXML_USE);
     CGameTextMan::GetInstance().LoadText(RANPARAM::strGameExText.GetString(), CGameTextMan::EM_GAME_EX_TEXT, RANPARAM::bXML_USE);
     LOGI("game text loaded");
+    RanSplash_Step();
 
     g_app = new RanMobileApp(width, height);
     // The device surface is the only real mode. RANPARAM asks for a desktop

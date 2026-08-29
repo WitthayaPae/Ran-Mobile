@@ -42,13 +42,41 @@ struct FontVertex {
 };
 const DWORD FONT_FVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 
-const int ATLAS_W = 1024;
-const int ATLAS_H = 1024;
+//  Glyphs are rasterised larger than they are drawn.
+//
+//  The client asks for text in its own logical pixels, and the frame is now the
+//  full panel, so every glyph quad is magnified by RanGL_UIScale on its way to
+//  the screen. Rasterising at the logical size and then magnifying is exactly
+//  what made all the text soft. Rasterising at the drawn size instead and
+//  keeping the quad the same logical size costs nothing at draw time and is the
+//  whole difference between blurry and sharp text.
+//
+//  Only the bitmap changes. Every metric the interface lays out with - advance,
+//  ascent, descent, line height - stays in logical units, because moving those
+//  would move every label in the game.
+extern "C" int RanGL_UIScale(void);
+
+int fontSuperSample() {
+    int ss = RanGL_UIScale();
+    if (ss < 1) ss = 1;
+    if (ss > 4) ss = 4;          // the atlas is square-law in this
+    return ss;
+}
+
+//  Sized on first use: a 2x atlas holds a quarter as many glyphs per side, so
+//  it has to grow with the factor or it fills up and later glyphs draw blank.
+int ATLAS_W = 1024;
+int ATLAS_H = 1024;
 
 struct Glyph {
     float u0, v0, u1, v1;
-    int   w, h;
-    int   bearingX, bearingY;
+    //  In logical pixels - the size the quad is drawn at, not the size the
+    //  glyph was rasterised at. Fractional because the two differ by the
+    //  supersample factor.
+    float w, h;
+    float bearingX, bearingY;
+    //  Whole logical pixels, and deliberately still an int: this is what the
+    //  interface measures text with.
     int   advance;
     //  Kept so a run can ask the font where this glyph attaches. A mark has to
     //  be positioned against what precedes it, and that lookup is by glyph id
@@ -396,6 +424,11 @@ RanD3DXFont::~RanD3DXFont() {
 
 void RanD3DXFont::ensureAtlas() {
     if (m_atlas || !m_device) return;
+    {
+        const int ss = fontSuperSample();
+        const int want = 1024 * ss;
+        if (want > ATLAS_W) { ATLAS_W = want; ATLAS_H = want; }
+    }
     // A8R8G8B8 rather than A8: the GLES backend already uploads ARGB, and the
     // atlas is written once per new glyph, so the extra bytes cost nothing.
     if (FAILED(m_device->CreateTexture(ATLAS_W, ATLAS_H, 1, 0, D3DFMT_A8R8G8B8,
@@ -479,13 +512,22 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
     //  emPixels(), not m_pixelSize: a positive D3DXFONT_DESC.Height is a cell
     //  height and has to be converted before it can scale an outline.
     const float scale = (float)emPixels() / (float)face->UnitsPerEm();
-    if (!face->Rasterise(gid, scale, m_italic ? 0.2f : 0.0f, m_bold ? 1 : 0, gb))
+    const int   ss    = fontSuperSample();
+    if (!face->Rasterise(gid, scale * (float)ss, m_italic ? 0.2f : 0.0f,
+                         m_bold ? ss : 0, gb))
         return NULL;
 
     Glyph g;
-    g.w = gb.width; g.h = gb.height;
-    g.bearingX = gb.bearingX; g.bearingY = gb.bearingY;
-    g.advance = gb.advance;
+    //  The bitmap is ss times oversized; the quad it fills is not. Kept as
+    //  floats so the division does not quantise the glyph box to whole logical
+    //  pixels, which would jitter letter shapes against each other.
+    const float inv = 1.0f / (float)ss;
+    g.w = (float)gb.width  * inv; g.h = (float)gb.height * inv;
+    g.bearingX = (float)gb.bearingX * inv; g.bearingY = (float)gb.bearingY * inv;
+    //  Straight from the face at the logical scale, not gb.advance/ss: this is
+    //  the number the interface measures every label with, and it has to stay
+    //  exactly what it was before the glyphs got bigger.
+    g.advance = face->Advance(gid, scale) + (m_bold ? 1 : 0);
     g.gid = gid;
     g.face = face;
     g.isMark = face->IsMark(gid);

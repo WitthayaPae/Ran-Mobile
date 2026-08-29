@@ -1,14 +1,15 @@
 #!/bin/bash
-# Log into the emulator, waiting on the client's own log rather than on pixels.
+# One scripted trip into the world on the LDPlayer emulator (2560x1440).
 #
-# Pixel sampling was fooled by the sky; these markers are exact: the renderer
-# announces itself at boot, character pieces announce their skin conversion at
-# character select, and the game stage's section timings only appear in world.
+# Typing goes through key events rather than taps: the client's own on-screen
+# keyboard is gone - the device raises its own - so the old coordinate taps
+# landed on the Android keyboard and typed nonsense into the ID field.
 ADB="/c/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe"
-D="${D:-emulator-5554}"
-HERE="$(cd "$(dirname "$0")" && pwd)"
-
-tap()  { "$ADB" -s "$D" shell input tap "$1" "$2"; sleep "${3:-1}"; }
+D="${D:-127.0.0.1:5555}"
+t() { "$ADB" -s "$D" shell input tap "$1" "$2"; sleep "${3:-0.5}"; }
+k() { "$ADB" -s "$D" shell input keyevent "$@"; sleep 1; }
+clear_field() { for i in 1 2 3 4 5 6 7 8; do "$ADB" -s "$D" shell input keyevent 67; done; sleep 1; }
+shot() { "$ADB" -s "$D" exec-out screencap -p > "out/$1"; }
 
 wait_log() {                       # $1 = pattern, $2 = seconds
   local t=0
@@ -21,32 +22,38 @@ wait_log() {                       # $1 = pattern, $2 = seconds
 }
 
 "$ADB" -s "$D" shell am force-stop com.ran.native
-"$ADB" -s "$D" logcat -c
+sleep 2
+"$ADB" -s "$D" logcat -c 2>/dev/null
 "$ADB" -s "$D" shell am start -n com.ran.native/android.app.NativeActivity > /dev/null
 
 echo "waiting for the client to boot..."
 wait_log "RanApp  : === RAN mobile boot" 180 || exit 1
 sleep 25                                   # the server list needs the outer GUI up
 
-tap 1229 708 4
-tap 1681 708 3
-tap 1792 919 8
+t 1229 708 4      # server
+t 1681 708 3      # channel
+t 1792 919 8      # connect
 
-tap 1331 596 2
-tap 1114 1108 1; tap 1114 1108 1; tap 1508 982 1; tap 1508 982 1
-tap 1331 653 2
-tap 1448 982 1; tap 1508 982 1; tap 1569 982 1; tap 1448 1024 1
-tap 1162 790 3
+t 1331 596 2      # ID field
+clear_field
+k 52 52 9 9       # x x 2 2
+t 1331 653 2      # Pass field
+clear_field
+k 8 9 10 11       # 1 2 3 4
+# Back dismisses the IME; while it is showing the system eats Back, so the
+# game never sees it as Escape.
+"$ADB" -s "$D" shell input keyevent 4; sleep 2
+t 1162 790 20     # OK - the one login the server sees
 
 echo "waiting for character select..."
 wait_log "blended: verts" 180 || exit 1
 
-tap 2278 288 6
-if [ "${WORLD:-0}" = 1 ]; then
-  tap 2473 500 5
+t 2278 288 6      # the character row
+if [ "${WORLD:-1}" = 1 ]; then
+  t 2413 707 5    # start
   echo "waiting for the world..."
-  wait_log "FRAME sections" 240 || exit 1
+  wait_log "RanApp  : FRAME " 240 || exit 1
+  sleep 20
 fi
-
-"$ADB" -s "$D" exec-out screencap -p > "$HERE/out/${1:-emu_state.png}"
-echo "ready: out/${1:-emu_state.png}"
+shot "${1:-emuworld.png}"
+echo "screenshot: out/${1:-emuworld.png}"

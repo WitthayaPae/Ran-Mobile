@@ -27,6 +27,19 @@ struct RanGlLight {
     float atten[3];             // constant, linear, quadratic
 };
 
+// Fixed-function specular, which D3D adds after texturing rather than
+// modulating into it. `lightSpecular` is lightCount * 3 floats.
+// The display gamma ramp, as GDI's SetDeviceGammaRamp delivers it: 3 * 256
+// WORDs (red, green, blue). NULL disables correction.
+// Tells the renderer its cached GL state is stale, after something else has
+// issued GL against the same context.
+void RanGLR_InvalidateStateCache(void);
+
+void RanGLR_SetGammaRamp(const unsigned short *ramp);
+
+void RanGLR_SetSpecular(int enabled, const float *matSpecular, float power,
+                        const float *lightSpecular, int lightCount);
+
 void RanGLR_SetLighting(int enabled, const float *worldMatrix, const float *cameraPos,
                         const float *globalAmbient, const float *matDiffuse,
                         const float *matAmbient, const float *matEmissive,

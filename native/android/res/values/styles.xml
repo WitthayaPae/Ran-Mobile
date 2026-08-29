@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What Android paints from the moment the app is launched until the first
+         GL frame. That gap is the client loading its data with no device yet:
+         m_pd3dDevice is still NULL throughout DxGlobalStage::OneTimeSceneInit,
+         so nothing can be drawn from inside the game during it, and the window
+         is otherwise plain black - which reads as a hang on a slow device.
+         This puts the client's own lobby loading art there instead, the image
+         DxGlobalStage already names for the lobby stage (loading_002.dds). -->
+    <style name="RanSplash" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+</resources>

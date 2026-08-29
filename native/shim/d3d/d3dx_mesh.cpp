@@ -418,15 +418,52 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
         }
 
         if (ppMaterials) {
-            RanBuffer *buf = new RanBuffer(sizeof(D3DXMATERIAL) * (numMaterials ? numMaterials : 1));
-            D3DXMATERIAL *mats = (D3DXMATERIAL *)buf->GetBufferPointer();
-            memset(mats, 0, buf->GetBufferSize());
-            DWORD written = 0;
-            for (size_t i = 0; i < matNode->children.size() && written < numMaterials; ++i) {
+            //  Collect the materials before allocating, because the texture
+            //  names have to live INSIDE the buffer we hand back.
+            //
+            //  They used to be pointers into the XFile's string storage, and
+            //  loadFromBytes deletes the XFile as soon as this returns - so
+            //  every pTextureFilename was dangling before the caller ever read
+            //  it. Whether that mattered came down to the allocator: read the
+            //  freed block soon enough and the old bytes were still there and
+            //  the texture loaded, read it once the block had been reused and
+            //  strlen found a 0 and the name came back empty. DxSimMesh then
+            //  copied that empty string, failed to load any texture, and drew
+            //  the subset untextured - the blank white money and item drops.
+            //
+            //  D3DX puts the strings after the D3DXMATERIAL array in the same
+            //  buffer, which is why callers may hold the pointers for as long
+            //  as they hold the buffer. Do the same.
+            std::vector<const XNode *> matNodes;
+            std::vector<std::string> matNames;
+            for (size_t i = 0; i < matNode->children.size() && matNodes.size() < numMaterials; ++i) {
                 const XNode *m = matNode->children[i];
                 if (m->typeName != "Material") continue;
+                matNodes.push_back(m);
+                std::string name;
+                const XNode *tex = findChild(m, "TextureFilename");
+                if (tex && tex->data.size() >= sizeof(char *)) {
+                    const char *p = NULL;
+                    memcpy(&p, &tex->data[0], sizeof(p));
+                    if (p) name = p;
+                }
+                matNames.push_back(name);
+            }
+
+            const DWORD slots = numMaterials ? numMaterials : 1;
+            size_t strBytes = 0;
+            for (size_t i = 0; i < matNames.size(); ++i)
+                if (!matNames[i].empty()) strBytes += matNames[i].size() + 1;
+
+            RanBuffer *buf = new RanBuffer(sizeof(D3DXMATERIAL) * slots + strBytes);
+            D3DXMATERIAL *mats = (D3DXMATERIAL *)buf->GetBufferPointer();
+            memset(mats, 0, buf->GetBufferSize());
+            char *strp = (char *)buf->GetBufferPointer() + sizeof(D3DXMATERIAL) * slots;
+
+            for (size_t i = 0; i < matNodes.size(); ++i) {
+                const XNode *m = matNodes[i];
                 Cursor mcur(m->data);
-                D3DXMATERIAL &dst = mats[written++];
+                D3DXMATERIAL &dst = mats[i];
                 float r, g, b, a, power, sr, sg, sb, er, eg, eb;
                 if (mcur.f32(r) && mcur.f32(g) && mcur.f32(b) && mcur.f32(a) &&
                     mcur.f32(power) && mcur.f32(sr) && mcur.f32(sg) && mcur.f32(sb) &&
@@ -438,13 +475,11 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
                     dst.MatD3D.Power = power;
                     dst.MatD3D.Emissive.r = er; dst.MatD3D.Emissive.g = eg; dst.MatD3D.Emissive.b = eb;
                 }
-                const XNode *tex = findChild(m, "TextureFilename");
-                if (tex && tex->data.size() >= sizeof(char *)) {
-                    const char *name = NULL;
-                    memcpy(&name, &tex->data[0], sizeof(name));
-                    dst.pTextureFilename = (LPSTR)name;
+                if (!matNames[i].empty()) {
+                    memcpy(strp, matNames[i].c_str(), matNames[i].size() + 1);
+                    dst.pTextureFilename = (LPSTR)strp;
+                    strp += matNames[i].size() + 1;
                 }
-
             }
             if (!numMaterials) numMaterials = 1;
             *ppMaterials = buf;

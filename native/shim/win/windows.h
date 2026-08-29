@@ -923,8 +923,16 @@ inline BOOL BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD) { return TRUE;
 BOOL RanGdi_GetTextExtentPoint32A(HDC, LPCSTR, int, LPSIZE);
 inline BOOL GetTextExtentPoint32A(HDC hdc, LPCSTR s, int n, LPSIZE z) { return RanGdi_GetTextExtentPoint32A(hdc, s, n, z); }
 inline BOOL TextOutA(HDC, int, int, LPCSTR, int) { return TRUE; }
+void RanGLR_SetGammaRamp(const unsigned short *ramp);
+//  The client sets brightness/contrast/overbright through the display ramp
+//  (GammaControl::Apply). There is no display LUT to program here, so the
+//  renderer applies it as the last step of its shader instead  see
+//  RanGLR_SetGammaRamp. Returning FALSE used to make every such setting a no-op.
 inline BOOL GetDeviceGammaRamp(HDC, LPVOID) { return FALSE; }
-inline BOOL SetDeviceGammaRamp(HDC, LPVOID) { return FALSE; }
+inline BOOL SetDeviceGammaRamp(HDC, LPVOID p) {
+    RanGLR_SetGammaRamp((const unsigned short *)p);
+    return TRUE;
+}
 inline HCURSOR LoadCursorFromFileA(LPCSTR) { return 0; }
 inline HCURSOR LoadCursorA(HINSTANCE, LPCSTR) { return 0; }
 inline HCURSOR SetCursor(HCURSOR) { return 0; }

@@ -13,11 +13,24 @@
 #include <string.h>
 
 inline bool RanFmt_NeedsRewrite(const char *fmt) {
-    return fmt && strstr(fmt, "I64") != NULL;
+    //  Any %I form, not just %I64.
+    //
+    //  This used to test for "I64" alone, which skipped the money pickup line -
+    //  its text is "%Id", the pointer-sized spelling - so bionic printed the
+    //  conversion literally and it read "collected Id coins".
+    //
+    //  Over-triggering costs one string copy and nothing else: the rewriter
+    //  passes anything it does not recognise through unchanged.
+    return fmt && strchr(fmt, '%') != NULL && strchr(fmt, 'I') != NULL;
 }
 
-//  %I64 -> %ll and %I32 -> % (a plain int), leaving flags, width and precision
-//  where they are. Everything else is copied untouched.
+//  %I64 -> %ll, %I32 -> % (a plain int), and a bare %I -> %ll, leaving flags,
+//  width and precision where they are. Everything else is copied untouched.
+//
+//  A bare %I is MSVC for "pointer-sized": 32 bits in the PC build, 64 here. That
+//  is not a like-for-like translation, but the one string that uses it is handed
+//  a LONGLONG, so 64 is what the argument actually is - reading it as 32 would
+//  print half a number and leave the rest of the arguments misaligned.
 inline std::string RanFmt_MsvcToPosix(const char *fmt) {
     std::string out;
     if (!fmt) return out;
@@ -31,6 +44,7 @@ inline std::string RanFmt_MsvcToPosix(const char *fmt) {
         if (*p == '.') { out += *p++; while (*p >= '0' && *p <= '9') out += *p++; }
         if (p[0] == 'I' && p[1] == '6' && p[2] == '4')      { out += "ll"; p += 3; }
         else if (p[0] == 'I' && p[1] == '3' && p[2] == '2') { p += 3; }
+        else if (p[0] == 'I')                               { out += "ll"; p += 1; }
         //  The conversion character itself is copied by the next iteration.
     }
     return out;
