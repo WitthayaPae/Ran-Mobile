@@ -2707,3 +2707,152 @@ Measuring this needs care. Total variation across an edge is invariant to how
 wide the blur is, so mean edge energy showed nothing; the difference is obvious
 at 4x zoom on the item tray, where the slot borders go from soft grey ramps to
 clean lines.
+
+## Frame rate in a crowd: characters were being drawn three times
+
+Measured on the emulator with the census the shim prints every 300 frames, in a
+populated town:
+
+    per frame: opaque 41 | alpha 22 | skinned 335 | ui 289
+      of which off-screen: 140 skinned a frame
+
+**Character drawing is the frame, and 40% of it was off-screen** — every
+character rendered again into 512x512 targets. Two passes were doing it:
+
+* **The water reflection.** `DxEnvironment::RenderRefelctChar` is the one place
+  every character, pet and summon reflects through. It is also wrong here: the
+  pass uses `SetClipPlane` to cut the reflection at the water surface and this
+  shim has no clip planes, so what it drew was never clipped to the water. Now
+  skipped; `/sdcard/ran/reflectchars` puts it back. Worth ~11 draws a frame -
+  the player and pets, since only those reflect.
+
+* **The shadow buffer**, which is the real cost. `DxShadowMap::
+  RenderShadowCharMob` is the chokepoint for the player, other players, mobs,
+  pets and summons alike, and each caster is a second full pass over the
+  character. Now only the first few casters of a frame get a shadow. The client
+  renders the player before the crowd, so the player keeps its shadow and the
+  crowd gives theirs up.
+
+The budget is read from `/sdcard/ran/shadowcount` (default 6, 0 disables), and
+it behaves proportionally — measured at about ten draws per caster:
+
+    cap=1 -> 11 off-screen skinned a frame
+    cap=2 -> 14
+    cap=4 -> 30
+    cap=6 -> 58
+    uncapped, same scene, no cap -> grows with every character on screen
+
+In a crowd of thirty that is roughly 300 draws against 58. With character
+shadows off entirely the emulator went from 74.0 ms to 60.6 ms a frame in a
+scene that was not even busy.
+
+Two caveats. The emulator's GPU is not the tablet's, so the *draw counts* here
+transfer and the millisecond figures do not — this needs confirming on the Tab
+S9. And `RAN_TIME_DRAWS` still has to be defined at build time before the
+"submitting draws" line in the budget means anything, so it is not yet known
+whether the remaining cost is submission or fill.
+
+## Text input follows the keyboard layout
+
+Key events were mapped through a hard-coded US-ASCII table, so only the
+characters an account name is made of could ever be typed. They now go through
+`KeyCharacterMap.get` for the device's actual layout first, and the codepoint is
+encoded as UTF-8 for `RanIME_InsertUtf8`, which the edit boxes already take. The
+table stays as the fallback for when the platform says nothing.
+
+That covers any layout that sends key events. It is **not** all of Thai input: a
+keyboard that composes — which most Thai IMEs do — commits through an
+`InputConnection`, and a plain `NativeActivity` has none to commit to. That
+needs a Java Activity of our own and a dex step in the build, which this port
+does not have (`android:hasCode="false"`, no .java anywhere).
+
+Regression-checked by logging in: the account name and password still type.
+
+## Security: what the APK was shipping
+
+* **`android:debuggable="true"` was in the shipped manifest.** Anyone with the
+  APK could `run-as` the package, read everything it stores and attach a
+  debugger. Removed; `DEBUGGABLE=1 ./build-apk.sh` puts it back on a temporary
+  copy when a debugger is actually wanted. Verified: `run-as` now answers
+  `package not debuggable`.
+* **`allowBackup` was unset**, so it defaulted to on and `adb backup` could pull
+  the app's private data off an unrooted device. Now `false`.
+* **Unbounded accumulation in the receive buffer.** `CRcvMsgBuffer::addRcvMsg`
+  bounded the single packet at `MAX_PACKET_SIZE` (2048) but never checked the
+  running total against `m_pRcvBuffer`, which is 16384. Eight arrivals that have
+  not been consumed fill it and the ninth `memcpy` writes past the allocation —
+  reachable whenever the client stalls while the server keeps sending. Now
+  bounded, dropping the packet the way the caller already handles.
+
+  This one is **not** `RAN_MOBILE`-guarded, unlike the rest of the SOURCE
+  changes. It changes MSVC behaviour only in the case that is currently a heap
+  overflow, and leaving that in the PC build to preserve byte-identical
+  behaviour seemed the wrong trade. Say if you want it guarded.
+
+Noted, not changed:
+
+* The whole data tree and the logs live under `/sdcard`, readable by any app
+  with storage access. That is inherent to shipping several GB outside the APK.
+* The `/sdcard/ran/*` diagnostic switches let any app with storage access change
+  how the client renders. Harmless in itself, but they should be compiled out of
+  a build meant for other people.
+* 43 raw `strcpy`/`sprintf` calls remain in the client logic against 711 safe
+  `StringCch*` ones. None were traced to a network-controlled source in this
+  pass; that trace is still to do.
+* The game protocol itself is unencrypted, which is how the original works.
+
+## Still open
+
+### 1. Confirm the frame-rate work on the tablet
+
+The draw-count reductions are measured and proportional, but on the emulator.
+Confirm on the Tab S9 with a real crowd, and tune `/sdcard/ran/shadowcount`
+against it. Build once with `RAN_TIME_DRAWS` defined to find out whether what is
+left is draw submission or fill, which decides whether batching character pieces
+(one draw per bone-combination attribute group today) is worth doing next.
+
+### 2. Security: the parts not yet looked at
+
+* Trace the 43 raw `strcpy`/`sprintf` in the client logic to see whether any
+  takes a server-supplied string.
+* The file parsers reached through `/sdcard` data: the DDS/TGA/BMP decoders, the
+  .x reader and the .rcc extractor. They parse files a user can replace.
+* Compile the `/sdcard/ran/*` switches out of a distribution build.
+
+### 3. Confirm every function in the game works
+
+Not started. Overlaps with the sweep below.
+
+### 4. Thai text input: the composing IME
+
+The layout half is done (above). What remains is a Java Activity with an
+`InputConnection` so a composing keyboard has somewhere to commit to, plus
+javac/d8 in `build-apk.sh` and `android:hasCode="true"`.
+
+### 5. Gameplay sweep past the inventory
+
+Deliberately not attempted this session: it needs many trips into the world and
+the server drops a session on every reconnect.
+
+Walk each on the tablet, in this order, logging what breaks rather than fixing
+as you go:
+
+* **NPC dialogue** — page through, take and decline a branch.
+* **Shops** — buy, sell, the quantity prompt.
+* **Trade** — offer, change it, both confirm, cancel midway.
+* **Quest turn-in** — accept, track, complete, hand in, reward pick.
+* **Death** — the prompt, resurrect in town and on the spot.
+* **Zone change** — a portal and a teleport card; watches the loading screen
+  hand the EGL context over and back.
+
+### 6. Smaller things
+
+* **Projected shadow texcoords** — `TCI_CAMERASPACEPOSITION` with
+  `D3DTTFF_PROJECTED` is not implemented in the fixed-function translation.
+* **`SetClipPlane` is not implemented** — which is why the character reflection
+  was never clipped to the water. Implementing it would let reflections come
+  back, if they are ever worth the draws.
+* **The `68 นาที` number** — a duration that does not match the PC client.
+* **Skill press during an attack is unverified** — the test character has no
+  skills slotted. Slot one, spam attack, then press it.
+* **The moon is unverified** — the four-phase fix only shows at night.

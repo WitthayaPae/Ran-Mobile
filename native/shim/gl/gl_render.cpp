@@ -412,6 +412,13 @@ float  g_texFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 std::map<unsigned, std::pair<int, int> > g_texDims;
 
 bool   g_noUiSharp = false;
+//  Whether characters are drawn into the water reflection. Off by default on
+//  this port; see RanGLR_ReflectChars below.
+bool   g_reflectChars = false;
+//  How many characters may cast a shadow in one frame, and how many slots are
+//  left in the frame being built. See RanGLR_TakeShadowSlot.
+int    g_shadowBudget = 6;
+int    g_shadowLeft = 0;
 int    g_stage1Mode = 0;
 unsigned g_stage1Cube = 0;
 float  g_viewMatrix[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
@@ -692,6 +699,7 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "/sdcard/ran/cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
         { "/sdcard/ran/noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
         { "/sdcard/ran/nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
+        { "/sdcard/ran/reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
     };
 
     //  A one-shot readback of every loaded texture. Same re-arm as the draw
@@ -2998,5 +3006,58 @@ extern "C" int RanGLR_TextureSize(unsigned glTex, int *w, int *h) {
     if (d == g_texDims.end()) return 0;
     if (w) *w = d->second.first;
     if (h) *h = d->second.second;
+    return 1;
+}
+
+//  Should characters be drawn into the water reflection?
+//
+//  No, by default, and it is the single biggest saving available on this port.
+//  The reflection is a second pass over every character into a 512x512 target:
+//  measured at 41% of all skinned draws in a busy scene (100 of 244 a frame),
+//  which is exactly the cost that grows with the number of players and mobs on
+//  screen.
+//
+//  It is also not correct here. The pass leans on SetClipPlane to cut the
+//  reflection at the water surface, and this shim does not implement clip
+//  planes, so what it draws is not clipped to the water anyway.
+//
+//  /sdcard/ran/reflectchars turns them back on, live, for comparison.
+extern "C" int RanGLR_ReflectChars(void) { return g_reflectChars ? 1 : 0; }
+
+//  --- character shadow budget ---------------------------------------------
+//
+//  Every character, mob, pet and summon is rendered a second time into the
+//  512x512 shadow buffer, through the one chokepoint
+//  DxShadowMap::RenderShadowCharMob. That is the cost that grows with the
+//  number of things on screen, and in a crowd it was measured at well over a
+//  hundred extra draws a frame.
+//
+//  Rather than turn shadows off, only the first few casters of each frame get
+//  one. The client renders the player before the crowd, so the player keeps a
+//  shadow and the crowd loses theirs, which is the right way round.
+//
+//  The number is read from /sdcard/ran/shadowcount, so it can be tuned against
+//  a real scene without a rebuild. 0 disables character shadows entirely.
+extern "C" void RanGLR_ResetShadowBudget(void) {
+    static int s_polled = 0;
+    if ((s_polled++ % 120) == 0) {
+        FILE *f = fopen("/sdcard/ran/shadowcount", "rb");
+        if (f) {
+            char buf[16] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
+                const int v = atoi(buf);
+                if (v >= 0 && v <= 256) g_shadowBudget = v;
+            }
+            fclose(f);
+        } else {
+            g_shadowBudget = 6;
+        }
+    }
+    g_shadowLeft = g_shadowBudget;
+}
+
+extern "C" int RanGLR_TakeShadowSlot(void) {
+    if (g_shadowLeft <= 0) return 0;
+    --g_shadowLeft;
     return 1;
 }

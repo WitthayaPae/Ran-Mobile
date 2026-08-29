@@ -20,6 +20,7 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3d9.h>
 #include <d3dx9.h>
 #include <android/log.h>
+extern "C" void RanGLR_ResetShadowBudget(void);
 #include <vector>
 #include <string.h>
 
@@ -44,6 +45,11 @@ struct Stats {
 //  What the frame's draws actually are, so optimisation aims at the big bucket.
 struct DrawBuckets {
     unsigned long skinned, uiQuads, alphaBlended, opaqueWorld;
+    //  The same again, but only for draws issued while an off-screen target is
+    //  bound. The water reflection re-renders the scene into a 512x512 target,
+    //  so a crowd can be paid for twice; this says how much of the frame that
+    //  second pass actually is.
+    unsigned long offSkinned, offOther;
     unsigned long vertsSkinned, vertsAlpha, vertsOpaque;
 } g_buckets = {0,0,0,0,0,0,0};
 
@@ -999,6 +1005,8 @@ public:
     HRESULT Present(const RECT *, const RECT *, HWND, const RGNDATA *) override {
         flushUIBatch();
         ++g_stats.frames;
+        //  A new frame gets a fresh allowance of character shadows.
+        RanGLR_ResetShadowBudget();
         {
             struct timespec ts;
             clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1015,6 +1023,8 @@ public:
                  g_buckets.alphaBlended / 300, g_buckets.vertsAlpha / 300,
                  g_buckets.skinned / 300, g_buckets.vertsSkinned / 300,
                  g_buckets.uiQuads / 300);
+            LOGI("  of which off-screen: %lu skinned + %lu other a frame",
+                 g_buckets.offSkinned / 300, g_buckets.offOther / 300);
             memset(&g_buckets, 0, sizeof(g_buckets));
             const double draws = RanGLR_TakeDrawSeconds();
             LOGI("frame budget: %.1f ms total, %.1f ms submitting draws (%.0f%%)"
@@ -1498,6 +1508,12 @@ public:
     //  Classify a draw for the census. Cheap: three state reads.
     void countDraw(DWORD fvf, UINT verts) {
         if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) { ++g_buckets.uiQuads; return; }
+        if (m_renderTarget && m_renderTarget != m_backBuffer) {
+            if (m_renderState[D3DRS_VERTEXBLEND] != 0) {
+                ++g_buckets.offSkinned;
+            }
+            else                                       ++g_buckets.offOther;
+        }
         if (m_renderState[D3DRS_VERTEXBLEND] != 0) { ++g_buckets.skinned; g_buckets.vertsSkinned += verts; return; }
         if (m_renderState[D3DRS_ALPHABLENDENABLE]) { ++g_buckets.alphaBlended; g_buckets.vertsAlpha += verts; return; }
         ++g_buckets.opaqueWorld; g_buckets.vertsOpaque += verts;

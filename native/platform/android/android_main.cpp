@@ -364,12 +364,83 @@ extern "C" int RanAndroid_ImeInsetPerMille(void) {
     return s_cached;
 }
 
-//  A key to the character it types.
+//  What the system says this key types, on the layout actually in use.
 //
-//  A table rather than JNI KeyCharacterMap: this covers the ASCII an account
-//  name and password are made of, with no call into Java on the input path.
-//  Thai cannot be done this way - it needs the composing IME - so this is the
-//  smaller half of that job, not a replacement for it.
+//  The table below only knows a US layout, so it can only ever produce the
+//  ASCII an account name is made of. KeyCharacterMap is what the platform uses
+//  itself, so it gives the right character for whatever layout is selected -
+//  Thai included - and returns 0 when the key types nothing.
+//
+//  Cached per device: loading the map is a Java call and this is the input
+//  path. A device id of -1 means the map could not be loaded, so the table is
+//  used instead and nothing is worse than it was.
+//
+//  This is not the whole of Thai input. A keyboard that *composes* - which most
+//  Thai IMEs do - commits its text through an InputConnection, and a plain
+//  NativeActivity has none to commit to; that needs a Java Activity of our own
+//  and a dex step in the build. This covers every layout that sends key events.
+int unicodeForKey(android_app *app, int32_t deviceId, int32_t keyCode, int32_t meta) {
+    if (!app || !app->activity || !app->activity->vm) return 0;
+
+    JNIEnv *env = NULL;
+    if (app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return 0;
+
+    static jobject  s_map = NULL;       // global ref to the KeyCharacterMap
+    static int32_t  s_mapDevice = -2;   // which device it was loaded for
+    static jmethodID s_get = NULL;
+
+    int result = 0;
+    do {
+        if (s_mapDevice != deviceId) {
+            if (s_map) { env->DeleteGlobalRef(s_map); s_map = NULL; }
+            s_get = NULL;
+            s_mapDevice = deviceId;
+
+            jclass cls = env->FindClass("android/view/KeyCharacterMap");
+            if (!cls) break;
+            jmethodID load = env->GetStaticMethodID(cls, "load",
+                                "(I)Landroid/view/KeyCharacterMap;");
+            if (!load) break;
+            jobject local = env->CallStaticObjectMethod(cls, load, (jint)deviceId);
+            if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
+            if (!local) break;
+            s_map = env->NewGlobalRef(local);
+            env->DeleteLocalRef(local);
+            s_get = env->GetMethodID(cls, "get", "(II)I");
+        }
+
+        if (!s_map || !s_get) break;
+        result = (int)env->CallIntMethod(s_map, s_get, (jint)keyCode, (jint)meta);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); result = 0; }
+    } while (0);
+
+    //  Any pending exception makes the next JNI call abort the process, so it
+    //  is cleared before leaving rather than at each early exit.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    app->activity->vm->DetachCurrentThread();
+    return result;
+}
+
+//  A codepoint as UTF-8. The client's edit boxes take UTF-8, so anything the
+//  layout produces can be handed straight over.
+int utf8Encode(int cp, char *out) {
+    if (cp <= 0)        return 0;
+    if (cp < 0x80)      { out[0] = (char)cp; return 1; }
+    if (cp < 0x800)     { out[0] = (char)(0xC0 | (cp >> 6));
+                          out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000)   { out[0] = (char)(0xE0 | (cp >> 12));
+                          out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                          out[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+//  A key to the character it types, when the system could not say.
+//
+//  A US-layout table, used only as the fallback for unicodeForKey above.
 char asciiFor(int32_t keyCode, int32_t meta) {
     const bool shift = (meta & AMETA_SHIFT_ON) != 0;
 
@@ -616,7 +687,21 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
         if (g_imeActive && action == AKEY_EVENT_ACTION_DOWN) {
             if (keyCode == AKEYCODE_DEL) { RanIME_Backspace(); return 1; }
 
-            const char c = asciiFor(keyCode, AKeyEvent_getMetaState(event));
+            const int32_t meta = AKeyEvent_getMetaState(event);
+
+            //  Ask the platform what this key types on the current layout
+            //  before falling back to the US table.
+            const int cp = unicodeForKey(g_app, AInputEvent_getDeviceId(event),
+                                         keyCode, meta);
+            if (cp > 0) {
+                char sz[5] = { 0, 0, 0, 0, 0 };
+                if (utf8Encode(cp, sz) > 0) {
+                    RanIME_InsertUtf8(sz);
+                    return 1;
+                }
+            }
+
+            const char c = asciiFor(keyCode, meta);
             if (c) {
                 const char sz[2] = { c, 0 };
                 RanIME_InsertUtf8(sz);

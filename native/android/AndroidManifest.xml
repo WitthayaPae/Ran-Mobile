@@ -15,11 +15,21 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
+    <!-- android:debuggable is deliberately absent.
+         A debuggable build lets any user run-as the package, read everything it
+         stores and attach a debugger to it, which is not something to hand out
+         with the APK. Nothing in the development loop needs it: logcat, install,
+         screencap, input and the /sdcard diagnostic switches all work without.
+         Build with DEBUGGABLE=1 ./build-apk.sh when a debugger is genuinely
+         needed - that adds the flag to a temporary copy of this file.
+
+         allowBackup=false: with it on, adb backup pulls the app's private
+         data off the device without root. -->
     <application
         android:label="RAN"
         android:hasCode="false"
-        android:requestLegacyExternalStorage="true"
-        android:debuggable="true">
+        android:allowBackup="false"
+        android:requestLegacyExternalStorage="true">
 
         <activity android:name="android.app.NativeActivity"
             android:label="RAN"

@@ -43,8 +43,18 @@ done
 "$BT/aapt2.exe" compile --dir "$(cygpath -w "$HERE/android/res")" -o "$(cygpath -w "$OUT/res.zip")"
 
 # manifest + resources -> base APK
+# The shipped manifest is not debuggable. DEBUGGABLE=1 puts the flag back, on a
+# copy, so a debugger can be attached without that ever being the default.
+MANIFEST="$HERE/android/AndroidManifest.xml"
+if [ "${DEBUGGABLE:-0}" = 1 ]; then
+  MANIFEST="$OUT/AndroidManifest.debuggable.xml"
+  sed 's|<application|<application android:debuggable="true"|' \
+      "$HERE/android/AndroidManifest.xml" > "$MANIFEST"
+  echo "  (debuggable build)"
+fi
+
 "$BT/aapt2.exe" link -o "$OUT/base.apk" -I "$PLATFORM" \
-  --manifest "$HERE/android/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34 "$(cygpath -w "$OUT/res.zip")"
+  --manifest "$MANIFEST" --min-sdk-version 24 --target-sdk-version 34 "$(cygpath -w "$OUT/res.zip")"
 
 # aapt2 link cannot add arbitrary files, so the lib/ tree goes in with a plain
 # zip update — STORED, because Android loads .so straight out of the APK.
