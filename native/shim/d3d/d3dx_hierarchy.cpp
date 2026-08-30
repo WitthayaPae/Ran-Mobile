@@ -404,6 +404,51 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
         groups[target].faces.push_back(f);
     }
 
+    //  ---- second pass: combine groups that still fit together
+    //
+    //  The pass above walks faces in mesh order and drops each into the group it
+    //  grows the least. That is greedy and never looks back, so it leaves a long
+    //  tail of groups holding one or two bones that would happily share a
+    //  palette with another. Every group is one draw call at run time.
+    //
+    //  Combining them changes nothing that is drawn - same faces, same bones,
+    //  same weights - only how many calls it takes. Measured on a monster mesh
+    //  this is the difference between about thirty draws and a handful, and it
+    //  is per character, so it multiplies by everything on screen.
+    //
+    //  Runs at load, once per mesh, so the quadratic sweep is not worth
+    //  refining; it stops as soon as a whole pass finds nothing to do.
+    {
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            for (size_t a = 0; a < groups.size(); ++a) {
+                for (size_t b = a + 1; b < groups.size(); ) {
+                    if (groups[a].attrib != groups[b].attrib) { ++b; continue; }
+
+                    //  Union of the two bone sets, rejected as soon as it cannot fit.
+                    std::vector<DWORD> u = groups[a].bones;
+                    bool fits = true;
+                    for (size_t i = 0; i < groups[b].bones.size(); ++i) {
+                        bool have = false;
+                        for (size_t j = 0; j < u.size(); ++j)
+                            if (u[j] == groups[b].bones[i]) { have = true; break; }
+                        if (have) continue;
+                        if (u.size() >= kMaxPalette) { fits = false; break; }
+                        u.push_back(groups[b].bones[i]);
+                    }
+                    if (!fits) { ++b; continue; }
+
+                    groups[a].bones.swap(u);
+                    groups[a].faces.insert(groups[a].faces.end(),
+                                           groups[b].faces.begin(), groups[b].faces.end());
+                    groups.erase(groups.begin() + (long)b);
+                    merged = true;
+                }
+            }
+        }
+    }
+
     //  NumInfl is the palette size the caller will feed to D3DRS_VERTEXBLEND,
     //  so it must cover the largest group, and the FVF carries NumInfl-1
     //  weights (the last one is implied).

@@ -1943,3 +1943,10 @@ extern "C" unsigned RanD3D_TextureGL(void *pTex) {
     RanTexture *t = static_cast<RanTexture *>(static_cast<IDirect3DTexture9 *>(pTex));
     return t->GlTexture();
 }
+
+//  Draw calls issued so far this run.
+//
+//  So the client can bracket one entity's render and find out how many draws it
+//  actually costs - the number that decides whether a hundred of them fit in a
+//  frame. Counting from the client side would miss the batching the shim does.
+extern "C" unsigned long RanD3D_DrawCount(void) { return g_stats.draws; }
