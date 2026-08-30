@@ -292,6 +292,9 @@ const char *kFS =
     "uniform int uAlphaArg2;\n"
     "uniform vec4 uTexFactor;\n"
     "uniform samplerCube uTexCube;\n"
+    //  Stage 1 as a plain 2D texture. The character effects put a gloss map
+    //  here - hair, armour trim - and modulate it over the stage 0 result.
+    "uniform sampler2D uTexStage1;\n"
     "#ifndef uStage1\n"
     "uniform int  uStage1;\n"
     "#endif\n"
@@ -357,6 +360,11 @@ const char *kFS =
     "        vec3 vn = normalize(mat3(uView) * normalize(vNormal));\n"
     "        vec3 vp = (uView * vec4(vWorldPos, 1.0)).xyz;\n"
     "        rgb *= texture(uTexCube, reflect(normalize(vp), vn)).rgb;\n"
+    "    } else if (uStage1 == 5) {\n"
+    "        //  MODULATE2X(TEXTURE, CURRENT) with a 2D texture on stage 1 and\n"
+    "        //  coordinate set 0. This is the shine on hair and on the coloured\n"
+    "        //  parts of a character: without it they are flat paint.\n"
+    "        rgb *= 2.0 * texture(uTexStage1, vUV).rgb;\n"
     "    } else if (uStage1 == 2) {\n"
     "        //  MODULATE(TFACTOR, CURRENT): a flat tint over the stage 0 result,\n"
     "        //  with no texture on the stage at all. This is how the ambient\n"
@@ -512,6 +520,10 @@ int    g_stage1Mode = 0;
 unsigned g_stage1Cube = 0;
 float  g_viewMatrix[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 GLint  uFlipY = -1, uWorldM = -1, uViewProj = -1, uVertexBlend = -1, uIndexedBlend = -1;
+GLint  uTexStage1 = -1;
+//  The 2D texture bound to stage 1, on its own unit so the cube map can keep
+//  unit 1 and stage 0 can keep unit 0.
+unsigned g_stage1Tex2D = 0;
 //  Set from the FVF of the mesh being drawn: it carries palette slots or it
 //  does not, and the two blends are not interchangeable.
 int    g_indexedBlend = 0;
@@ -919,6 +931,7 @@ void fetchUniformLocations(GLuint prog) {
     uAlphaArg2      = glGetUniformLocation(prog, "uAlphaArg2");
     uTexFactor      = glGetUniformLocation(prog, "uTexFactor");
     uTexCube        = glGetUniformLocation(prog, "uTexCube");
+    uTexStage1      = glGetUniformLocation(prog, "uTexStage1");
     uStage1         = glGetUniformLocation(prog, "uStage1");
     uTexSize        = glGetUniformLocation(prog, "uTexSize");
     uUiSharpen      = glGetUniformLocation(prog, "uUiSharpen");
@@ -933,6 +946,7 @@ void fetchUniformLocations(GLuint prog) {
     //  Stage 0 stays on unit 0; the cube map lives on unit 1 for its whole life.
     glUseProgram(prog);
     glUniform1i(uTexCube, 1);
+    if (uTexStage1 >= 0) glUniform1i(uTexStage1, 2);
 
     uWorld          = glGetUniformLocation(prog, "uWorld");
     uCameraPos      = glGetUniformLocation(prog, "uCameraPos");
@@ -1087,6 +1101,7 @@ bool buildVariant(unsigned key, Variant &v) {
     //  The cube map lives on unit 1 for the life of the program.
     useProgram(v.prog);
     if (uTexCube >= 0) glUniform1i(uTexCube, 1);
+    if (uTexStage1 >= 0) glUniform1i(uTexStage1, 2);
     return true;
 }
 
@@ -1493,7 +1508,8 @@ extern "C" void RanGLR_SetVertexBlend(int weightCount, const float *worldMatrice
 
 //  Stage 1, bound once per draw. mode 1 means "cube map by camera-space normal";
 //  0 turns the stage off. The cube texture stays on texture unit 1.
-extern "C" void RanGLR_SetStage1(int mode, unsigned glCubeTex, const float *viewMatrix) {
+extern "C" void RanGLR_SetStage1(int mode, unsigned glCubeTex, unsigned gl2DTex,
+                                 const float *viewMatrix) {
     //  1 and 3 are the two cube-map addressings and need a cube bound; 2 is a
     //  flat tint and 4 takes alpha from the stage 0 texture at the second
     //  coordinate set, neither of which needs one.
@@ -1502,8 +1518,18 @@ extern "C" void RanGLR_SetStage1(int mode, unsigned glCubeTex, const float *view
     //  caller asks for never reached the shader even though the shader has a
     //  branch for it.
     if ((mode == 1 || mode == 3) && glCubeTex)  g_stage1Mode = mode;
+    else if (mode == 5 && gl2DTex)              g_stage1Mode = mode;
     else if (mode == 2 || mode == 4)            g_stage1Mode = mode;
     else                                        g_stage1Mode = 0;
+
+    if (gl2DTex && gl2DTex != g_stage1Tex2D) {
+        g_stage1Tex2D = gl2DTex;
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, gl2DTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glActiveTexture(GL_TEXTURE0);
+    }
 
     if (viewMatrix) memcpy(g_viewMatrix, viewMatrix, sizeof(g_viewMatrix));
     if (glCubeTex && glCubeTex != g_stage1Cube) {

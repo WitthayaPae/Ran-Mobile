@@ -1679,6 +1679,8 @@ public:
         {
             int mode = 0;
             unsigned cube = 0;
+            //  A plain 2D texture on stage 1, for the gloss pass below.
+            unsigned stage2D = 0;
             const DWORD op   = m_textureStageState[1][D3DTSS_COLOROP];
             const DWORD arg1 = m_textureStageState[1][D3DTSS_COLORARG1];
             const DWORD arg2 = m_textureStageState[1][D3DTSS_COLORARG2];
@@ -1703,6 +1705,17 @@ public:
                                  "normal is)", (unsigned long)op, (unsigned long)tci);
                         }
                     }
+                } else if (m_texture[1] && op == D3DTOP_MODULATE2X &&
+                           arg1 == D3DTA_TEXTURE && arg2 == D3DTA_CURRENT) {
+                    //  A gloss map over the stage 0 result.
+                    //
+                    //  DxEffCharUserColor draws the piece a second time with the
+                    //  tint on stage 0 and the material's "_m" texture here,
+                    //  MODULATE2X. That second pass is where hair and coloured
+                    //  armour get their shine; with the stage dropped they were
+                    //  flat paint, which is exactly what it looked like.
+                    stage2D = ((RanTexture *)m_texture[1])->GlTexture();
+                    mode = stage2D ? 5 : 0;
                 } else if (!m_texture[1] && op == D3DTOP_MODULATE &&
                            ((arg1 == D3DTA_TFACTOR && arg2 == D3DTA_CURRENT) ||
                             (arg1 == D3DTA_CURRENT && arg2 == D3DTA_TFACTOR))) {
@@ -1734,7 +1747,7 @@ public:
                     }
                 }
             }
-            RanGLR_SetStage1(mode, cube, (const float *)&m_transform[D3DTS_VIEW]);
+            RanGLR_SetStage1(mode, cube, stage2D, (const float *)&m_transform[D3DTS_VIEW]);
         }
 
         RanGLR_SetTextureStage(m_textureStageState[0][D3DTSS_COLOROP],
