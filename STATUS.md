@@ -2634,6 +2634,11 @@ in-game time was 07:20.
 
 ## Sharpness is a setting
 
+> Later measurement: resolution is NOT what costs frames on the Tab S9 - at
+> renderscale 2 it still runs 31-33 fps against ~30 at full res. The setting is
+> a taste control only; there is no speed to buy by turning it down. See "What
+> the frame rate is actually made of" below.
+
 Full-panel rendering makes geometry and text sharper but magnifies art authored
 at 1024x768 further, which can read as softer. Rather than pick for the player,
 `/sdcard/ran/renderscale` chooses: 1 draws at the full panel (default), 2 draws
@@ -2800,6 +2805,64 @@ Noted, not changed:
   `StringCch*` ones. None were traced to a network-controlled source in this
   pass; that trace is still to do.
 * The game protocol itself is unencrypted, which is how the original works.
+
+
+## What the frame rate is actually made of — measured on the Tab S9
+
+Two things I had been reporting were wrong, and both are corrected here.
+
+**My own frame-budget line was reading half the truth.** It timed the interval
+between `Present` calls and divided by 300 — but the client was calling `Present`
+*twice* per rendered frame, so it reported ~18 ms while the game was really
+taking ~37 ms. Wall-clock from the client's own counter is what settles it:
+300 rendered frames in 11.03 s = **27 fps**, matching the on-screen readout.
+Anything earlier in this document quoting a "frame budget" figure is per-swap,
+not per-frame.
+
+The double swap came from `CD3DApplication::Present`, which on PC presents the
+four regions *around* the GUI rectangle so the GUI area is not copied again.
+There are no partial presents here — every one is a full `eglSwapBuffers`, and
+on a tiled GPU each resolves and flushes the tile buffer. Now one swap a frame
+under `RAN_MOBILE`. Worth 27 -> 30 fps: real, but not the main cost.
+
+**Resolution is not the bottleneck, so the sharpness/speed trade offered earlier
+does not exist.** At `renderscale=2`, a quarter of the pixels, the tablet still
+runs 31-33 fps against ~30 at full resolution. This is CPU-bound, not fill-bound.
+Keep full resolution; it is not costing frames.
+
+Where the time really goes, from the client's own profiler:
+
+    FRAME 30.9 fps | 32.3 ms = update 2.0 + render 18.1 + present 12.1
+    FRAME sections: world 12.5ms  w:mobitem 9.6ms  interface 2.7ms
+                    w:land 1.2ms  w:chars 0.8ms  world-eff 0.7ms
+    FRAME gl calls: 3750/frame = uniform 1536, texture 192, attrib 1240,
+                    draw 708, buffer 57
+    FRAME draws: 708 per frame, 14 us each
+
+`w:mobitem` — `CLandManClient::Render_MobItem`, which draws every mob, other
+player and dropped item — is 9.6 ms of the 12.5 ms of world time. `w:chars`, the
+local character, is 0.8 ms. That section *is* the "many mobs and players" case.
+
+And 708 draws at 14 us each is 9.9 ms, which accounts for essentially all of it.
+So the cost is **draw submission**, not pixels: about 2.5 GL state calls per draw
+(1536 uniform + 1240 attrib for 708 draws) on a driver where each one is not
+free. That makes reducing the *number* of draws the right lever, which is what
+the shadow cap does, and it is why cutting resolution changes nothing.
+
+Frame times cluster at 30-33 ms, which is two vsync periods: the frame misses
+the 16.6 ms budget and drops to half rate. Getting under it means roughly halving
+per-frame submission work.
+
+Next, in order of likely return:
+
+* **Batch character pieces.** Every equipment piece and bone-combination
+  attribute group is its own `DrawIndexedPrimitive`. Merging groups that share a
+  material is the single biggest reduction available in `Render_MobItem`.
+* **Cull by distance in `Render_MobItem`** before submitting, not after. A mob
+  across the map still costs its draws today.
+* **The interface is 399 UI draws a frame** in a busy scene (2.7 ms). The shim
+  already batches UI quads; worth checking why so many survive batching.
+* Per-draw state: 2.5 GL calls per draw is the multiplier on all of the above.
 
 ## Still open
 
