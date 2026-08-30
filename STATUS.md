@@ -2923,6 +2923,67 @@ This has not been implemented. The measurement was the work of this session and
 the refactor in (1) is not something to start without room to verify it - a
 half-finished merge of attribute groups would be worse than the current state.
 
+## The crash on entering a map: a bone list read past its own array (fixed 2026-08-30)
+
+Reported three times: entering some maps killed the client. Every tombstone
+landed on the same instruction,
+
+    DxSkinMesh9_NORMAL::DrawMeshContainer+452
+      ldr x2, [x9, x8, lsl #3]        ; ppBoneMatrixPtrs[iMatrixIndex]
+
+with `x8` - the bone id - holding `0x74786554`, which is `"Text"`. A bone id is a
+small index into `ppBoneMatrixPtrs`; that value is a fragment of some other
+allocation, so the first two attempts chased the wrong thing:
+
+1. A null `ppBoneMatrixPtrs[i]` (real, guarded, not this crash).
+2. A dangling mesh container - a `DxCharPart` borrows `m_pmcMesh` from a shared
+   `DxSkinPiece`, and `DeletePiece` frees the piece under everyone else. A live
+   container registry did **not** stop the crash, because the piece is deleted
+   and reloaded straight back into the same address: the pointer looked alive
+   because a new container sat exactly where the old one had.
+
+What settled it was refusing to guess a third time. A check in
+`DrawMeshContainer` compared every id in the bone combination against
+`pSkinInfo->GetNumBones()` and named the mesh when one did not fit:
+
+    bad bone combination: mesh[Plane01[Mesh]] group 1/5 infl 16 bones 36 id0 0xd
+
+The container is intact - name readable, group count sane - so nothing had been
+freed. The bone list itself was wrong, and it is the shim that builds it.
+`shim/d3d/d3dx_hierarchy.cpp` prunes a face that names more bones than the
+palette holds:
+
+    if (need.size() > kMaxInfluences) {          // 4
+        ...
+        for (size_t i = 0; i < kMaxPalette; ++i) // 16
+            need.push_back(strength[i].second);
+
+The test used the per-vertex influence limit (4) and the copy used the palette
+size (16), so every face naming five to fifteen bones went down this path and
+then read up to eleven entries past the end of `strength` - whatever followed it
+on the heap, written into the bone combination table as bone ids. It faults only
+when one of those values lands outside a mapped page, which is why it read as a
+map-change bug: a map change is simply when new meshes load.
+
+The fix is the constant and a clamp: prune against `kMaxPalette`, copy
+`min(kMaxPalette, strength.size())`, and never write a group's bone ids past its
+own row of the table. The guard stays in as a cheap net, and still logs.
+
+Verified on the Tab S9 (xx11, GameMaster Lv150, the prison map, about forty mobs
+on screen). Before the fix the guard fired on `Plane01[Mesh]` every frame and the
+client died within a minute of entering; after it, two world entries, a four
+minute soak and a round trip out to server select produced zero
+`bad bone combination` lines and zero entries in `logcat -b crash`.
+
+Two ownership fixes made while chasing this are kept, because both are real
+even though neither was the crash:
+
+* `DxSkinPieceContainer::DeletePiece` (and the delete inside `ReleasePiece`) now
+  tell every `DxCharPart` and `DxAttBoneData` that borrowed the piece to drop it,
+  instead of leaving them pointing at freed memory.
+* `CreateMeshContainer` / `DestroyMeshContainer` keep a live-container set that
+  `DxCharPart::Render` checks before drawing.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly

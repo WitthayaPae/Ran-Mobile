@@ -413,7 +413,15 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
             //  shoulder or arm looks like. Drop the WEAKEST influences
             //  instead: sum each bone's weight over the face and keep the
             //  strongest kMaxPalette, exactly what D3DX does.
-            if (need.size() > kMaxInfluences) {
+            //  Against the palette, not the per-vertex influence count: a face
+            //  may legitimately name up to kMaxPalette bones, and the list is
+            //  cut to kMaxPalette below. Testing kMaxInfluences (4) sent every
+            //  five-to-fifteen-bone face down here and then copied kMaxPalette
+            //  entries out of a shorter array - reading whatever followed it as
+            //  bone ids. Those ids reached the draw as indices into
+            //  ppBoneMatrixPtrs and faulted mid-frame: the crash on entering
+            //  some maps.
+            if (need.size() > kMaxPalette) {
                 std::vector<std::pair<float, DWORD> > strength;
                 strength.reserve(need.size());
                 for (size_t i = 0; i < need.size(); ++i) {
@@ -429,7 +437,8 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
                 std::sort(strength.begin(), strength.end());
                 std::reverse(strength.begin(), strength.end());
                 need.clear();
-                for (size_t i = 0; i < kMaxPalette; ++i) need.push_back(strength[i].second);
+                const size_t keep = strength.size() < (size_t)kMaxPalette ? strength.size() : (size_t)kMaxPalette;
+                for (size_t i = 0; i < keep; ++i) need.push_back(strength[i].second);
                 ++g_prunedFaces;
             }
             Group g;
@@ -537,7 +546,9 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
         std::map<DWORD, DWORD> slotOf;
         for (size_t s = 0; s < grp.bones.size(); ++s) {
             slotOf[grp.bones[s]] = (DWORD)s;
-            comboBones[g * numInfl + s] = grp.bones[s];
+            //  One row per group, numInfl wide. Never write past it: a longer
+            //  group would spill its bone ids into the next groups row.
+            if (s < (size_t)numInfl) comboBones[g * numInfl + s] = grp.bones[s];
         }
 
         std::map<DWORD, DWORD> emitted;          // old vertex -> new vertex
