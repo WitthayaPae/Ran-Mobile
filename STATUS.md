@@ -3054,6 +3054,50 @@ longer dominated by one thing.
   numbers say is that posing is the cost that scales, and it is now half what it
   was; the next measurement to take is a real crowd, not another quiet map.
 
+## The loading screen flicker was a second Present (fixed 2026-08-30)
+
+Reported as "the loading page is flickering and does not disappear". It is not
+the loading screen at all: the game presents the frame twice, and the second
+swap puts up whatever buffer comes next in the chain - which still held the
+loading screen, for as long as it took to cycle out.
+
+Finding it took measurement rather than reading, because every intuition about
+it was wrong:
+
+* Screenshots taken from the host looked like the world and the loading screen
+  alternating, but stills cannot tell a real alternation from a capture
+  artefact. Sampling one pixel out of `screencap`'s raw output, twenty-four
+  frames in a row, showed it was real: `34 50 58` (the loading art) and
+  `38 37 29` (the ground) alternating irregularly, half a minute after the map
+  had finished loading.
+* It was not the preserved swap. Forced off for the whole run, the alternation
+  stayed.
+* It was not two threads presenting. The loading thread hands the context over
+  cleanly - it presents frames 10118 to 10134, the game presents from 10135 -
+  and only one load phase ever starts.
+* It was not empty frames: every presented frame had drawn something, and the
+  frame report showed a full ~350 draws each time.
+
+Logging every present with its thread and the frame's draw count said it in one
+line:
+
+    PRESENT 13191 tid=14877 draws=349
+    PRESENT 13192 tid=14877 draws=349   <- 1 ms later, nothing new drawn
+
+`CD3DApplication::Render3DEnvironment` calls `Render()` and then `Present()`,
+and `RanMobileApp::Render` - the override - was also presenting at its end. Two
+swaps for every frame drawn. Removing the one in `Render` is the fix.
+
+It was also the single most expensive thing in the frame, because each swap
+resolves and flushes the whole tile buffer:
+
+    before   45 fps   21.7 ms   swap 8.5 ms
+    after    86 fps   11.5 ms   swap 1.3 ms
+
+Verified on the Tab S9 in the same crowded prison map: twenty raw-frame samples
+after the fix contain no loading-screen pixel at all, and the frame report reads
+84-87 fps at 2560x1600 with about thirty mobs on screen.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly

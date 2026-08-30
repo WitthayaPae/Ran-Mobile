@@ -100,6 +100,8 @@ int  RanGLR_TexturesCompressed(void);
 //  Write only the range the client locked into a buffer GL already sized.
 void RanGLR_OrphanBuffer(unsigned buffer, int isIndex, unsigned size);
 void RanGLR_ReportBufferKinds(unsigned frames);
+void RanGLR_FrameEnd(void);
+int  RanGLR_FrameDrawCount(void);
 void RanGLR_GpuSectionBegin(const char *name);
 void RanGLR_GpuSectionEnd(void);
 void RanGLR_ReportGpuSections(unsigned frames);

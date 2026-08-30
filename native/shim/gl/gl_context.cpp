@@ -13,6 +13,7 @@
 #include "../platform/touch_ui.h"
 
 #include <EGL/egl.h>
+#include <unistd.h>
 #include <GLES3/gl3.h>
 #include <android/log.h>
 #include <pthread.h>
@@ -59,6 +60,9 @@ pthread_t g_mainThread;
 void setSwapPreserved(bool on) {
     if (g_display == EGL_NO_DISPLAY || g_surface == EGL_NO_SURFACE) return;
     if (g_forcePreserved) on = true;
+    //  /sdcard/ran/nopreserveswap: never preserve, even for the loading screen.
+    //  For telling a preservation problem apart from something else.
+    if (access("/sdcard/ran/nopreserveswap", F_OK) == 0) on = false;
     if (on == g_swapPreserved) return;
     if (eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
                          on ? EGL_BUFFER_PRESERVED : EGL_BUFFER_DESTROYED) != EGL_TRUE)
@@ -66,6 +70,7 @@ void setSwapPreserved(bool on) {
     EGLint behaviour = 0;
     eglQuerySurface(g_display, g_surface, EGL_SWAP_BEHAVIOR, &behaviour);
     g_swapPreserved = (behaviour == EGL_BUFFER_PRESERVED);
+    LOGI("swap now %s (frame %u)", g_swapPreserved ? "preserved" : "destroyed", g_frameIndex);
 }
 
 const char *eglErrStr(EGLint e) {
@@ -393,11 +398,31 @@ extern "C" double RanGL_TakeSwapSeconds(void) {
     return v;
 }
 
+//  Defined by the renderer: the frame is over, so the next one starts on a
+//  buffer whose contents are not ours.
+extern "C" void RanGLR_FrameEnd(void);
+extern "C" int RanGLR_FrameDrawCount(void);
+
 extern "C" unsigned RanGL_FrameIndex(void) { return g_frameIndex; }
 
 extern "C" void RanGL_Present(void) {
     if (!g_ready) return;
     ++g_frameIndex;
+    //  Temporary: with /sdcard/ran/presentlog present, say who presented each
+    //  frame and how much it drew, for a bounded burst.
+    {
+        static int s_left = 0;
+        static bool s_armed = false;
+        const bool on = (access("/sdcard/ran/presentlog", F_OK) == 0);
+        if (on != s_armed) { s_armed = on; if (on) s_left = 150; }
+        if (s_left > 0) {
+            --s_left;
+            LOGI("PRESENT %u tid=%d draws=%d preserved=%d",
+                 g_frameIndex, (int)gettid(), RanGLR_FrameDrawCount(),
+                 g_swapPreserved ? 1 : 0);
+        }
+    }
+    RanGLR_FrameEnd();
     //  The touch controls go on last, over the finished frame.
     //  The touch controls used to be drawn here, at the end of the frame, which
     //  put them on top of everything including the game's own windows - so an

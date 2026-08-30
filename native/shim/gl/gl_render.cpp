@@ -567,6 +567,15 @@ int g_diagDraws = 0, g_diagUI = 0, g_diagUpload = 0;
 //  -1 leaves every draw alone.
 int g_drawLimit = -1;
 int g_frameDraw = 0;
+//  Whether this frame has cleared the colour buffer yet.
+//
+//  Without preservation the buffer a frame starts on holds whatever was in it
+//  two swaps ago - and the surface has more than two, so that can be a frame
+//  from another screen entirely. If the client draws without clearing first,
+//  that stale image shows through: entering the world alternated between the
+//  world and the loading screen still sitting in the other buffer, which is the
+//  flicker. So a frame that has not cleared gets one before its first draw.
+bool g_frameClearedColor = false;
 //  One frame's worth of "what was draw number N", from /sdcard/ran/drawlog.
 //
 //  The draw-limit sweep says which range of draws costs the frame; this says
@@ -1344,6 +1353,11 @@ extern "C" void RanGLR_ClearRectOff(void) {
     if (g_inited) glDisable(GL_SCISSOR_TEST);
 }
 
+//  The frame is over: the next one starts on a buffer of unknown content.
+extern "C" int RanGLR_FrameDrawCount(void) { return g_frameDraw; }
+
+extern "C" void RanGLR_FrameEnd(void) { g_frameClearedColor = false; }
+
 extern "C" void RanGLR_Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
     if (!g_inited) return;
     //  The client clears the frame once at the top of the scene, which is the
@@ -1351,6 +1365,7 @@ extern "C" void RanGLR_Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil
     if (!g_rtActive && (flags & D3DCLEAR_TARGET)) {
         if (g_drawLog > 0) --g_drawLog;
         g_frameDraw = 0;
+        g_frameClearedColor = true;
     }
     GLbitfield mask = 0;
     if (flags & D3DCLEAR_TARGET) {
@@ -1937,6 +1952,19 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
 
     //  Counted before the cut, so the numbering does not shift as the limit
     //  moves; a draw past the limit simply is not issued.
+    //  Nothing has cleared this frame and the buffer is not preserved, so what
+    //  is under this draw is undefined. Make it defined.
+    if (!g_rtActive && !g_frameClearedColor && !RanGL_SwapPreserved()) {
+        g_frameClearedColor = true;
+        //  A clear obeys the scissor and the depth mask, and both may be set
+        //  from the last draw of the previous frame.
+        glDisable(GL_SCISSOR_TEST);
+        const int maskWas = g_gl.depthMask;
+        if (!maskWas) glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (!maskWas) glDepthMask(GL_FALSE);
+    }
+
     ++g_frameDraw;
     if (g_drawLog > 0) {
         //  Everything that decides what a draw costs to fill: how many pixels it

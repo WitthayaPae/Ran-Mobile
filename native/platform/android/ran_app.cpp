@@ -215,7 +215,14 @@ public:
 
             m_pd3dDevice->EndScene();
         }
-        m_pd3dDevice->Present(NULL, NULL, NULL, NULL);
+        //  No Present here.
+        //
+        //  Render3DEnvironment calls Render() and then Present(), so presenting
+        //  at the end of Render() swapped twice for every frame drawn. The
+        //  second swap put up whichever buffer came next in the chain, which
+        //  still held an older image - the loading screen, for a long time
+        //  after the map had loaded. That is the flicker, and it is also a
+        //  whole extra tile-buffer resolve a frame.
         return S_OK;
     }
 };
