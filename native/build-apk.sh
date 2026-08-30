@@ -34,6 +34,18 @@ for A in $ABIS; do
   mkdir -p "$OUT/lib/$A"
   cp "$SO" "$OUT/lib/$A/"
   cp "$STL" "$OUT/lib/$A/"
+
+  #  An ASan build needs its runtime beside the library, and a wrap.sh, which
+  #  Android runs in place of the app for a debuggable APK. That is the only
+  #  way in without root.
+  if [ "${ASAN:-0}" = 1 ] && [ "$A" = arm64-v8a ]; then
+    RT="$(ls "$U/NDK/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/"*/lib/linux/libclang_rt.asan-aarch64-android.so | head -1)"
+    cp "$RT" "$OUT/lib/$A/"
+    #  LF endings, or /system/bin/sh will not run it.
+    tr -d "" < "$HERE/android/wrap.sh" > "$OUT/lib/$A/wrap.sh"
+    chmod +x "$OUT/lib/$A/wrap.sh"
+    echo "  + asan runtime + wrap.sh"
+  fi
   printf "  + %-12s %.1f MB\n" "$A" "$(stat -c%s "$SO" | awk '{print $1/1048576}')"
   HAVE="$HAVE $A"
 done

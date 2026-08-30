@@ -1,6 +1,29 @@
 cmake_minimum_required(VERSION 3.22)
 project(RanNative CXX C)
 
+#  AddressSanitizer, for hunting memory corruption on the device.
+#
+#  -DRAN_ASAN=ON from build.sh (ASAN=1). The runtime .so and a wrap.sh have to
+#  be packaged as well, which build-apk.sh does with the same switch.
+option(RAN_ASAN "Build with AddressSanitizer" OFF)
+#  Trapping bounds checks, for hunting a stray write.
+#
+#  -DRAN_BOUNDS=ON from build.sh (BOUNDS=1). Unlike AddressSanitizer this needs
+#  no runtime library and no wrap.sh: the compiler plants a trap at the offending
+#  access, so the tombstone points straight at the line. It only sees arrays
+#  whose size the compiler knows, which is the shape of the bug being hunted -
+#  a four-byte write landing on somebody else's pointer.
+option(RAN_BOUNDS "Build with trapping array-bounds checks" OFF)
+if(RAN_BOUNDS)
+    add_compile_options(-fsanitize=array-bounds -fsanitize-trap=array-bounds -g)
+    message(STATUS "array-bounds trapping: on")
+endif()
+if(RAN_ASAN)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address)
+    message(STATUS "AddressSanitizer: on")
+endif()
+
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)

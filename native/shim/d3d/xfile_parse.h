@@ -19,6 +19,15 @@ struct XNode {
     std::string          typeName;      // template name, e.g. "Mesh"
     std::string          name;          // instance name, may be empty
     std::vector<BYTE>    data;          // members packed in stream order
+    //  Byte offsets within data that hold a string pointer.
+    //
+    //  A string member is stored as a pointer into the file's own storage, and
+    //  nothing else in the blob is a pointer. Without this list a reader has to
+    //  assume a member is at a fixed offset and dereference whatever is there:
+    //  a node whose members pack differently - a different .x export, an extra
+    //  leading array - then hands eight bytes of float data to strlen. That is
+    //  a crash on some models and not others, which is exactly how it behaved.
+    std::vector<size_t>  stringOffsets;
     std::vector<XNode *> children;      // owned
     XNode               *reference;     // set for `{ name }` references
     XNode               *parent;

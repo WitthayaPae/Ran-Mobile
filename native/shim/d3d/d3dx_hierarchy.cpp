@@ -775,10 +775,30 @@ const XNode *childOfType(const XNode *n, const char *typeName) {
 }
 
 //  A `.x` string member is stored as a pointer to the parser's own copy.
-const char *stringMember(const std::vector<BYTE> &data, size_t offset) {
-    if (data.size() < offset + sizeof(const char *)) return NULL;
+//
+//  Only at an offset the parser says is a string, though. Reading a pointer out
+//  of a byte blob on the strength of an assumed layout means that a node packed
+//  any other way - a different exporter, an extra leading array - has eight
+//  bytes of float data handed to strlen, which crashes on some models and not
+//  others.
+const char *stringMember(const XNode *n, size_t offset) {
+    if (!n || n->data.size() < offset + sizeof(const char *)) return NULL;
+
+    bool bIsString = false;
+    for (size_t i = 0; i < n->stringOffsets.size(); ++i)
+        if (n->stringOffsets[i] == offset) { bIsString = true; break; }
+    if (!bIsString) {
+        static int said = 0;
+        if (said < 8) {
+            ++said;
+            LOGE("%s: no string member at offset %u (it has %u) - skipped",
+                 n->typeName.c_str(), (unsigned)offset, (unsigned)n->stringOffsets.size());
+        }
+        return NULL;
+    }
+
     const char *p = NULL;
-    memcpy(&p, &data[offset], sizeof(p));
+    memcpy(&p, &n->data[offset], sizeof(p));
     return p;
 }
 
@@ -786,7 +806,7 @@ const char *stringMember(const std::vector<BYTE> &data, size_t offset) {
 bool readSkinWeights(const XNode *n, std::string &boneName,
                      std::vector<DWORD> &vertices, std::vector<float> &weights,
                      D3DXMATRIX &offset) {
-    const char *name = stringMember(n->data, 0);
+    const char *name = stringMember(n, 0);
     if (!name) return false;
     boneName = name;
 

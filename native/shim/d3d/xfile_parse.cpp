@@ -319,6 +319,7 @@ struct BinaryParser {
                     // storage, which is what TextureFilename consumers expect.
                     std::string *stored = new std::string(s);
                     file->strings.push_back(stored);
+                    node->stringOffsets.push_back(node->data.size());
                     appendPtr(node->data, stored->c_str());
                 } break;
                 case TOKEN_NAME: {

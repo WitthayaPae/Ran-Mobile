@@ -3098,6 +3098,80 @@ Verified on the Tab S9 in the same crowded prison map: twenty raw-frame samples
 after the fix contain no loading-screen pixel at all, and the frame report reads
 84-87 fps at 2560x1600 with about thirty mobs on screen.
 
+## The crashes were a stray write, found with trapping bounds checks (2026-08-30)
+
+Three crashes in unrelated places - `RanTexture::Release`, `DxSkinAniMan::DoInterimClean`,
+and the font glyph cache - all faulted on a pointer of the same shape:
+
+    fault addr 0xb400007000000000
+    fault addr 0x0000007000000008
+
+A live heap pointer here looks like `0xb400007X_XXXXXXXX`. These have the top
+half intact and the low half zeroed, which is not a random value: it is a
+four-byte zero written **onto** a pointer. One stray write, three victims.
+
+### Getting a tool onto the device
+
+AddressSanitizer was the obvious instrument and it does not work here.
+Its runtime has to be loaded before the first allocation, which on a non-rooted
+device means `wrap.sh` inside a debuggable APK - and this tablet never runs it
+(a marker written from the script never appeared). Loaded late, as a dependency
+of libran.so, ASan SIGILLs inside its own `AsanInitInternal`. `setprop
+wrap.com.ran.native` is refused on a user build.
+
+What did work: **trapping bounds checks**, `BOUNDS=1 ./build.sh`. Those need no
+runtime and no wrap script - the compiler plants a trap at the offending access,
+so the tombstone points straight at the line. They only see arrays whose size
+the compiler knows, which is exactly the shape of the bug being hunted.
+
+Four traps fired, one after another, all before the game even reached the world:
+
+1. **`CRijndael::Initialize`** - `m_Ke` is declared `[MAX_ROUNDS]` and the key
+   schedule fills and reads `m_Ke[0]` to `m_Ke[m_iROUNDS]` inclusive, which is 14
+   for this client's 32-byte key. The last round key was written one row past the
+   array, onto `m_Kd[0]`. Contained inside the object, but a 32-byte overrun on
+   every encrypted file the client opens.
+
+2. **`SlangFilter::addSlang`** - `sizeof` used as a character count on a
+   `wchar_t` array. `wchar_t` is four bytes here and two on Windows, so
+   `sizeof(buf)` is 1028 for a 257-character buffer: `_snwprintf` was told it
+   could write 1027 characters, and the terminator went to `buf[1027]` - a
+   four-byte zero written 770 characters past a stack buffer, for every word in
+   the slang list at startup.
+
+3. **`CPartyFinderSlot`** - `m_pClassImg[GLCI_NUM_6CLASS]` (12) filled to
+   `GLCI_NUM_7CLASS` (14): two pointers written past the array, over the party
+   data behind it, for every slot and on every device reset.
+
+4. **`CInventoryPage::ResetAllItemSlotRender`** - and this is the one.
+   `m_pItemSlotArray` holds `EM_INVENSIZE_Y` slots (eleven, since the row count
+   was bumped from ten) and both callers still say `ResetAllItemSlotRender(10,20)`,
+   a literal left from when the count was the twenty of the *dummy* array. The
+   loop walked nine entries past the end, read whatever was there as a
+   `CItemSlot*` and called `SetVisibleSingle(FALSE)` on it - a virtual call
+   through a wild pointer, which then writes a four-byte zero at an arbitrary
+   address. That is the corruption, and that is its signature.
+
+   It is a family, not one site: ten classes carry their own `m_pItemSlotArray`
+   with their own callers passing 20 and 50. All 41 call sites are now clamped
+   inside the walkers, so no caller can do it again.
+
+A fifth came out of the release build afterwards, in the `.x` loader: a string
+member is stored as a pointer inside the node's byte blob, and `stringMember`
+read one at an assumed offset. A node packed any other way - a different
+exporter, an extra leading array - had eight bytes of float data handed to
+`strlen`. The parser now records which offsets hold string pointers and the
+reader refuses any other, so a layout it does not recognise loses a name instead
+of crashing.
+
+### Verified
+
+Under the bounds build: startup, world entry, the whole HUD button row, the item
+shop, storage, and a return to server select and back - no traps.
+
+On the release build: three world entries and a two-minute soak, no entries in
+`logcat -b crash`, 105-120 fps.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly
