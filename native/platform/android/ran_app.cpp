@@ -321,7 +321,7 @@ extern "C" void RanApp_Shutdown(void) {
 namespace {
 
 struct ProfSection { const char *name; double seconds; unsigned calls; };
-ProfSection g_sections[24];
+ProfSection g_sections[48];
 unsigned    g_sectionCount = 0;
 
 } // namespace
@@ -380,7 +380,7 @@ extern "C" void RanProf_Section(const char *szName, double fSeconds) {
             return;
         }
     }
-    if (g_sectionCount >= 24) return;
+    if (g_sectionCount >= 48) return;
     g_sections[g_sectionCount].name = szName;
     g_sections[g_sectionCount].seconds = fSeconds;
     g_sections[g_sectionCount].calls = 1;
@@ -441,8 +441,8 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
 
     //  Sections, worst first: the frame's time in the client's own render.
     {
-        char line[512] = "FRAME sections:";
-        for (unsigned pass = 0; pass < g_sectionCount && pass < 6; ++pass) {
+        char line[768] = "FRAME sections:";
+        for (unsigned pass = 0; pass < g_sectionCount && pass < 10; ++pass) {
             int worst = -1;
             for (unsigned i = 0; i < g_sectionCount; ++i)
                 if (g_sections[i].seconds > 0.0 &&

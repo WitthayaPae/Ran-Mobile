@@ -2984,6 +2984,76 @@ even though neither was the crash:
 * `CreateMeshContainer` / `DestroyMeshContainer` keep a live-container set that
   `DxCharPart::Render` checks before drawing.
 
+## Frame rate in a crowd: 27 fps -> 48 fps (2026-08-30)
+
+Measured on the Tab S9 at 2560x1600, in the prison map with about forty mobs on
+screen and roughly twenty of them visible. Every step below was measured on its
+own, and the frame is unchanged pixel for pixel.
+
+    start                          27 fps   35.7 ms   swap 14.3
+    dynamic buffers via the ring   37 fps   26.3 ms   swap 12.6
+    swap preserved only in loading 39 fps   25.6 ms   swap 11.9
+    lighting and fog per vertex    39 fps   25.0 ms   swap 11.3
+    specialised shaders            45 fps   21.7 ms   swap  8.5
+    pose once a frame              48 fps   20.8 ms   swap  8.5
+
+**The dynamic vertex buffers were stalling.** `DxDynamicVB` is a rolling pool -
+it appends with `D3DLOCK_NOOVERWRITE` and starts over with `D3DLOCK_DISCARD` -
+and the shim honoured neither, patching a buffer the GPU was still reading. That
+cost 10 ms a frame for 295 KB, which is not a copy, it is a stall. The slices now
+go into the persistently mapped streaming ring and the draw is pointed at them:
+0.1 ms. Two things were tried first and are worse, so do not re-try them: sending
+the whole buffer each time (15 MB a frame), and an unsynchronised
+`glMapBufferRange`, which costs the same 120 us a call as `glBufferSubData` on
+this driver.
+
+**Preserving the swap is only for the loading screen.** The game frame redraws
+every pixel; preservation makes a tiled GPU reload the whole colour buffer into
+tile memory first, 16 MB at this resolution. It now follows the context handover,
+so the loading screen still gets what it needs.
+
+**Lighting and fog belong in the vertex shader.** D3D fixed function computes
+both per vertex, so this also matches the PC client - per pixel it was eight
+lights, a `pow` and a `distance` for every one of four million pixels.
+
+**One shader per state, not one shader for every state.** This was the big one,
+and the measurement that found it is worth keeping: `/sdcard/ran/plainfs` makes
+the fragment shader return straight after the texture fetch, and that took the
+swap from 13.4 ms to 8.1 ms - while `/sdcard/ran/fsprobe`, which pins any single
+feature to its cheap path, changed nothing at all. A long shader costs even when
+its branches are not taken, because fewer waves fit on the GPU and there is less
+work to hide memory latency behind. So the state that changes the shader's shape
+now picks a program compiled with those uniforms as constants. Twenty-two cover
+the game frame.
+
+**A character was posed twice a frame.** Every character is rendered once for its
+shadow and once for itself, and each pass recomputed the skeleton - 74 us a
+character, measured. Worse, `UpdateTime` advances the animation clock, so the
+animation was being stepped twice as well. It is now done once a frame per
+transform.
+
+Ruled out along the way, so they need not be re-checked: the EGL config is not
+multisampled (it is logged at startup now); per-section GPU timer queries
+attribute nothing on a tiled GPU, because the fragment work all happens at the
+flush; and character shadows, capped at six casters, are worth about 1 ms.
+
+### What is left, and what it would take
+
+The frame is now 20.8 ms: about 8.5 ms of GPU and about 12 ms of CPU. It is no
+longer dominated by one thing.
+
+* **60 fps** needs roughly 4 ms off each side. On the GPU that means less fill -
+  the honest lever is rendering the world at less than the panel's 2560x1600
+  while keeping the interface at full size, which is invisible where it matters
+  and would roughly halve the fill. On the CPU it means the client's own scene
+  walk (`world` 7.0 ms, `w:mobitem` 3.7 ms at twenty mobs).
+* **120 fps** would also need the surface to run at 120 Hz; it is presently
+  handed 60, and the panel supports 120.
+* **The crowd case still has to be proven.** Twenty visible characters is not a
+  hundred, let alone the three hundred an event brings. What the per-character
+  numbers say is that posing is the cost that scales, and it is now half what it
+  was; the next measurement to take is a real crowd, not another quiet map.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly

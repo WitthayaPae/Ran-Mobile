@@ -45,6 +45,8 @@ int  g_renderScale = 1;
 //  about how large the GUI is laid out.
 int  g_bufferDiv = 1;
 bool g_swapPreserved = false;
+//  Counts frames, for anything that must happen once a frame and no more.
+unsigned g_frameIndex = 0;
 //  Set from /sdcard/ran/preserveswap: keep the old behaviour everywhere.
 bool g_forcePreserved = false;
 //  The thread that created the context - the one that draws the game.
@@ -391,8 +393,11 @@ extern "C" double RanGL_TakeSwapSeconds(void) {
     return v;
 }
 
+extern "C" unsigned RanGL_FrameIndex(void) { return g_frameIndex; }
+
 extern "C" void RanGL_Present(void) {
     if (!g_ready) return;
+    ++g_frameIndex;
     //  The touch controls go on last, over the finished frame.
     //  The touch controls used to be drawn here, at the end of the frame, which
     //  put them on top of everything including the game's own windows - so an
