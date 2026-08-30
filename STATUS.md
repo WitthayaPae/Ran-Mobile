@@ -2803,7 +2803,29 @@ Noted, not changed:
 
 ## Still open
 
-### 1. Confirm the frame-rate work on the tablet
+### 1. Confirm the frame-rate work on the tablet — measured, partly
+
+Measured on the Tab S9 in a quiet spot (about five characters visible), at
+2560x1600 with the shipped defaults:
+
+    uncapped              12 off-screen skinned a frame   20.6 ms
+    capped at 6           42                              21.7 ms
+    no character shadows   0                              17.1 ms
+
+So character shadows cost roughly 3.5-4.5 ms a frame for about five casters -
+call it 0.7-0.9 ms each, on the real GPU. Uncapped in a crowd of thirty that is
+in the region of 25 ms of shadows alone, which is the reported lag; the cap
+holds it near 5 ms however many characters are on screen.
+
+What is *not* yet shown is the crowd case on the tablet: the spot tested had
+fewer than the cap, so capped and uncapped are the same there (and the small
+difference above is the scene moving between samples, not the change). Take one
+reading in a busy town to close this properly, and tune the cap against it.
+
+Still worth doing: build once with RAN_TIME_DRAWS defined to find out whether
+what remains is draw submission or fill, which decides whether batching
+character pieces (one draw per bone-combination attribute group today) is the
+next thing worth attempting.
 
 The draw-count reductions are measured and proportional, but on the emulator.
 Confirm on the Tab S9 with a real crowd, and tune `/sdcard/ran/shadowcount`

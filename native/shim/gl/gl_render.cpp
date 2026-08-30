@@ -715,7 +715,10 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
 
     {
         int limit = -1;
-        FILE *f = fopen("/sdcard/ran/drawlimit", "rb");
+        //  access() first: the file resolver logs every failed open, and this is
+        //  polled once a second whether the file is there or not.
+        FILE *f = (access("/sdcard/ran/drawlimit", F_OK) == 0)
+                      ? fopen("/sdcard/ran/drawlimit", "rb") : NULL;
         if (f) {
             char buf[32] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) limit = atoi(buf);
@@ -3041,7 +3044,9 @@ extern "C" int RanGLR_ReflectChars(void) { return g_reflectChars ? 1 : 0; }
 extern "C" void RanGLR_ResetShadowBudget(void) {
     static int s_polled = 0;
     if ((s_polled++ % 120) == 0) {
-        FILE *f = fopen("/sdcard/ran/shadowcount", "rb");
+        //  Same as above: do not make the resolver log a miss every time.
+        FILE *f = (access("/sdcard/ran/shadowcount", F_OK) == 0)
+                      ? fopen("/sdcard/ran/shadowcount", "rb") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {

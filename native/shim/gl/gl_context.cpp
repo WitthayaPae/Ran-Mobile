@@ -178,7 +178,10 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     //  out at the same size either way, so only sharpness changes.
     g_bufferDiv = 1;
     {
-        FILE *f = fopen("/sdcard/ran/renderscale", "rb");
+        //  Read once at startup, so a miss here costs one log line, not one a
+        //  second - but keep it consistent with the other switches.
+        FILE *f = (access("/sdcard/ran/renderscale", F_OK) == 0)
+                      ? fopen("/sdcard/ran/renderscale", "rb") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
