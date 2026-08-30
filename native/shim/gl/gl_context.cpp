@@ -284,6 +284,19 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     //  /sdcard/ran/preserveswap forces it on everywhere, to compare.
     g_forcePreserved = (access("/sdcard/ran/preserveswap", F_OK) == 0);
     setSwapPreserved(g_forcePreserved);
+    //  What the driver actually gave us. eglChooseConfig treats EGL_SAMPLES as a
+    //  minimum, so a multisampled config satisfies a request for none - and on a
+    //  4 megapixel panel that would quietly multiply the fill cost.
+    {
+        EGLint samples = 0, sampleBufs = 0, depth = 0, stencil = 0;
+        eglGetConfigAttrib(g_display, config, EGL_SAMPLES, &samples);
+        eglGetConfigAttrib(g_display, config, EGL_SAMPLE_BUFFERS, &sampleBufs);
+        eglGetConfigAttrib(g_display, config, EGL_DEPTH_SIZE, &depth);
+        eglGetConfigAttrib(g_display, config, EGL_STENCIL_SIZE, &stencil);
+        LOGI("config: %d samples (%d buffers), depth %d, stencil %d",
+             samples, sampleBufs, depth, stencil);
+    }
+
     LOGI("swap behaviour: %s", g_swapPreserved
              ? "preserved" : "destroyed while playing, preserved while loading");
 

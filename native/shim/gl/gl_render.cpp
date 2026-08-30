@@ -63,11 +63,17 @@ const char *kVS =
     "uniform mat4 uMVP;\n"
     "uniform mat4 uWorld;\n"
     "uniform vec2 uViewport;\n"
+    "#ifndef uPreTransformed\n"
     "uniform int  uPreTransformed;\n"
+    "#endif\n"
     "uniform mat4 uWorldM[16];\n"
     "uniform mat4 uViewProj;\n"
+    "#ifndef uVertexBlend\n"
     "uniform int  uVertexBlend;\n"
+    "#endif\n"
+    "#ifndef uIndexedBlend\n"
     "uniform int  uIndexedBlend;\n"
+    "#endif\n"
     "uniform vec3 uCameraPos;\n"
     //  Lighting moved here from the fragment stage.
     //
@@ -75,7 +81,9 @@ const char *kVS =
     //  Gouraud - so per-pixel lighting was both a departure from the PC client
     //  and the most expensive thing in the frame: eight lights, a normalize, a
     //  pow and a branch for every one of four million pixels.
+    "#ifndef uLighting\n"
     "uniform highp int   uLighting;\n"
+    "#endif\n"
     "uniform int   uLightCount;\n"
     "uniform int   uLightType[8];\n"
     "uniform vec3  uLightDiffuse[8];\n"
@@ -88,14 +96,18 @@ const char *kVS =
     "uniform vec3  uMatDiffuse;\n"
     "uniform vec3  uMatAmbient;\n"
     "uniform vec3  uMatEmissive;\n"
+    "#ifndef uSpecularOn\n"
     "uniform highp int   uSpecularOn;\n"
+    "#endif\n"
     "uniform float uMatPower;\n"
     "uniform int   uHasVertexColor;\n"
     "uniform highp vec3  uCameraPosF;\n"
     //  D3DRS_FOGVERTEXMODE: the client asks for vertex fog and the device
     //  reports it, so the factor belongs here - one distance and one exp per
     //  vertex instead of per pixel.
+    "#ifndef uFogMode\n"
     "uniform highp int   uFogMode;\n"
+    "#endif\n"
     "uniform float uFogStart;\n"
     "uniform float uFogEnd;\n"
     "uniform float uFogDensity;\n"
@@ -230,28 +242,42 @@ const char *kFS =
     //  does, and only interpolated here.
     "in vec3 vLit;\n"
     "in vec3 vSpec;\n"
+    "#ifndef uLighting\n"
     "uniform highp int   uLighting;\n"
+    "#endif\n"
+    "#ifndef uSpecularOn\n"
     "uniform highp int   uSpecularOn;\n"
+    "#endif\n"
     "uniform vec3        uMatSpecular;\n"
     "uniform float       uMatAlpha;\n"
     "uniform highp vec3  uCameraPosF;\n"
+    "#ifndef uFogMode\n"
     "uniform highp int   uFogMode;\n"
+    "#endif\n"
     "uniform vec3  uFogColor;\n"
+    "#ifndef uGammaOn\n"
     "uniform int   uGammaOn;\n"
+    "#endif\n"
     "uniform sampler2D uGammaLut;\n"
     "in float vFog;\n"
     "uniform sampler2D uTex;\n"
+    "#ifndef uUseTexture\n"
     "uniform int   uUseTexture;\n"
+    "#endif\n"
     //  Declared in this stage too: the same uniform is shared across the
     //  program, and the fragment stage needs it to tell interface draws from
     //  world ones.
     //  highp explicitly: the vertex stage defaults an int to highp and the
     //  fragment stage to mediump, and a uniform shared by both stages has to
     //  agree or the program will not link.
+    "#ifndef uPreTransformed\n"
     "uniform highp int uPreTransformed;\n"
+    "#endif\n"
     "uniform vec2  uTexSize;\n"     // texels of the bound texture, 0 if unknown
     "uniform float uUiSharpen;\n"   // magnification the interface is drawn at
+    "#ifndef uAlphaTest\n"
     "uniform int   uAlphaTest;\n"
+    "#endif\n"
     //  Measurement only, from /sdcard/ran/plainfs: skip everything after the
     //  texture fetch. If the frame does not get faster, the fragment shader is
     //  not what the GPU is spending its time on and the fill is elsewhere.
@@ -266,7 +292,9 @@ const char *kFS =
     "uniform int uAlphaArg2;\n"
     "uniform vec4 uTexFactor;\n"
     "uniform samplerCube uTexCube;\n"
+    "#ifndef uStage1\n"
     "uniform int  uStage1;\n"
+    "#endif\n"
     "uniform mat4 uView;\n"
     "\n"
     "vec4 argValue(int arg, vec4 tex, vec4 diffuse) {\n"
@@ -472,6 +500,7 @@ std::map<unsigned, std::pair<int, int> > g_texDims;
 
 bool   g_noUiSharp = false;
 bool   g_plainFS = false;
+int    g_fsProbe = 0;
 //  Whether characters are drawn into the water reflection. Off by default on
 //  this port; see RanGLR_ReflectChars below.
 bool   g_reflectChars = false;
@@ -784,6 +813,21 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
     }
 
     {
+        int probe = 0;
+        FILE *f = (access("/sdcard/ran/fsprobe", F_OK) == 0)
+                      ? fopen("/sdcard/ran/fsprobe", "rb") : NULL;
+        if (f) {
+            char buf[16] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0) probe = atoi(buf);
+            fclose(f);
+        }
+        if (probe != g_fsProbe) {
+            g_fsProbe = probe;
+            LOGI("diagnostic: fragment probe %d", g_fsProbe);
+        }
+    }
+
+    {
         //  Delete the file and touch it again to take another frame.
         static bool s_logArmed = false;
         const bool on = (access("/sdcard/ran/drawlog", F_OK) == 0);
@@ -840,6 +884,233 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
     }
 }
 
+//  Read every uniform location out of one program.
+//
+//  Pulled out of the setup so a shader variant can be given the same treatment;
+//  the globals always describe whichever program is bound.
+void fetchUniformLocations(GLuint prog) {
+    uMVP            = glGetUniformLocation(prog, "uMVP");
+    uViewport       = glGetUniformLocation(prog, "uViewport");
+    uPreTransformed = glGetUniformLocation(prog, "uPreTransformed");
+    uFlipY          = glGetUniformLocation(prog, "uFlipY");
+    uMatAlpha       = glGetUniformLocation(prog, "uMatAlpha");
+    uWorldM         = glGetUniformLocation(prog, "uWorldM");
+    uViewProj       = glGetUniformLocation(prog, "uViewProj");
+    uVertexBlend    = glGetUniformLocation(prog, "uVertexBlend");
+    uIndexedBlend   = glGetUniformLocation(prog, "uIndexedBlend");
+    uTex            = glGetUniformLocation(prog, "uTex");
+    uUseTexture     = glGetUniformLocation(prog, "uUseTexture");
+    uAlphaTest      = glGetUniformLocation(prog, "uAlphaTest");
+    uAlphaRef       = glGetUniformLocation(prog, "uAlphaRef");
+    uColorOp        = glGetUniformLocation(prog, "uColorOp");
+    uColorArg1      = glGetUniformLocation(prog, "uColorArg1");
+    uColorArg2      = glGetUniformLocation(prog, "uColorArg2");
+    uAlphaOp        = glGetUniformLocation(prog, "uAlphaOp");
+    uAlphaArg1      = glGetUniformLocation(prog, "uAlphaArg1");
+    uAlphaArg2      = glGetUniformLocation(prog, "uAlphaArg2");
+    uTexFactor      = glGetUniformLocation(prog, "uTexFactor");
+    uTexCube        = glGetUniformLocation(prog, "uTexCube");
+    uStage1         = glGetUniformLocation(prog, "uStage1");
+    uTexSize        = glGetUniformLocation(prog, "uTexSize");
+    uUiSharpen      = glGetUniformLocation(prog, "uUiSharpen");
+    uGammaOn        = glGetUniformLocation(prog, "uGammaOn");
+    uPlain          = glGetUniformLocation(prog, "uPlain");
+    uGammaLut       = glGetUniformLocation(prog, "uGammaLut");
+    uSpecularOn     = glGetUniformLocation(prog, "uSpecularOn");
+    uMatSpecular    = glGetUniformLocation(prog, "uMatSpecular");
+    uMatPower       = glGetUniformLocation(prog, "uMatPower");
+    uLightSpecular  = glGetUniformLocation(prog, "uLightSpecular");
+    uView           = glGetUniformLocation(prog, "uView");
+    //  Stage 0 stays on unit 0; the cube map lives on unit 1 for its whole life.
+    glUseProgram(prog);
+    glUniform1i(uTexCube, 1);
+
+    uWorld          = glGetUniformLocation(prog, "uWorld");
+    uCameraPos      = glGetUniformLocation(prog, "uCameraPos");
+    uCameraPosF     = glGetUniformLocation(prog, "uCameraPosF");
+    uLighting       = glGetUniformLocation(prog, "uLighting");
+    uLightCount     = glGetUniformLocation(prog, "uLightCount");
+    uGlobalAmbient  = glGetUniformLocation(prog, "uGlobalAmbient");
+    uMatDiffuse     = glGetUniformLocation(prog, "uMatDiffuse");
+    uHasVertexColor = glGetUniformLocation(prog, "uHasVertexColor");
+    uMatAmbient     = glGetUniformLocation(prog, "uMatAmbient");
+    uMatEmissive    = glGetUniformLocation(prog, "uMatEmissive");
+    uLightType      = glGetUniformLocation(prog, "uLightType");
+    uLightDiffuse   = glGetUniformLocation(prog, "uLightDiffuse");
+    uLightAmbient   = glGetUniformLocation(prog, "uLightAmbient");
+    uLightPos       = glGetUniformLocation(prog, "uLightPos");
+    uLightDir       = glGetUniformLocation(prog, "uLightDir");
+    uLightAtten     = glGetUniformLocation(prog, "uLightAtten");
+    uFogMode        = glGetUniformLocation(prog, "uFogMode");
+    uFogColor       = glGetUniformLocation(prog, "uFogColor");
+    uFogStart       = glGetUniformLocation(prog, "uFogStart");
+    uFogEnd         = glGetUniformLocation(prog, "uFogEnd");
+    uFogDensity     = glGetUniformLocation(prog, "uFogDensity");
+}
+//  A shader for the state, instead of a shader for every state.
+//
+//  One "uber" program carrying every path the fixed-function pipeline can ask
+//  for is long, and length costs more than the branches themselves: fewer waves
+//  fit on the GPU at once, so there is less work to hide memory latency behind.
+//  Measured on the Tab S9 - a fragment shader that returns straight after the
+//  texture fetch takes the swap from 13.4 ms to 8.1 ms, while pinning any one
+//  feature to its cheap path changes nothing. That is the shape of an occupancy
+//  problem, not an arithmetic one.
+//
+//  So each combination of the state that changes the shader's shape gets its
+//  own program, with those uniforms replaced by constants. There are a few
+//  dozen in practice; they are built the first time they are used and kept.
+namespace {
+
+//  Every uniform location the renderer holds, so a variant can be swapped in
+//  and out without the rest of the file knowing there is more than one program.
+GLint *const kLocationVars[] = {
+    &uMVP, &uViewport, &uPreTransformed, &uFlipY, &uMatAlpha, &uWorldM, &uViewProj,
+    &uVertexBlend, &uIndexedBlend, &uTex, &uUseTexture, &uAlphaTest, &uAlphaRef,
+    &uColorOp, &uColorArg1, &uColorArg2, &uAlphaOp, &uAlphaArg1, &uAlphaArg2,
+    &uTexFactor, &uTexCube, &uStage1, &uTexSize, &uUiSharpen, &uGammaOn, &uPlain,
+    &uGammaLut, &uSpecularOn, &uMatSpecular, &uMatPower, &uLightSpecular, &uView,
+    &uWorld, &uCameraPos, &uCameraPosF, &uLighting, &uLightCount, &uGlobalAmbient,
+    &uMatDiffuse, &uHasVertexColor, &uMatAmbient, &uMatEmissive, &uLightType,
+    &uLightDiffuse, &uLightAmbient, &uLightPos, &uLightDir, &uLightAtten,
+    &uFogMode, &uFogColor, &uFogStart, &uFogEnd, &uFogDensity,
+};
+const size_t kLocationCount = sizeof(kLocationVars) / sizeof(kLocationVars[0]);
+
+struct Variant {
+    GLuint prog;
+    GLint  locs[kLocationCount];
+    //  Its own uniform value cache: a location means nothing in another program,
+    //  and without this every switch would re-upload everything.
+    std::vector<UniformSlot> cache;
+    Variant() : prog(0) { for (size_t i = 0; i < kLocationCount; ++i) locs[i] = -1; }
+};
+
+std::map<unsigned, Variant> g_variants;
+unsigned g_variantKey = 0xFFFFFFFFu;
+
+//  What the key says, and what it becomes in the preamble.
+unsigned variantKey(int preTransformed, int lighting, int specular, int fogMode,
+                    int stage1, int alphaTest, int gammaOn, int useTexture,
+                    int indexedBlend, int vertexBlend) {
+    return (unsigned)((preTransformed ? 1 : 0)
+                    | (lighting  ? 2 : 0)
+                    | (specular  ? 4 : 0)
+                    | ((fogMode & 3) << 3)
+                    | ((stage1  & 7) << 5)
+                    | (alphaTest ? 0x100 : 0)
+                    | (gammaOn   ? 0x200 : 0)
+                    | (useTexture ? 0x400 : 0)
+                    | (indexedBlend ? 0x800 : 0)
+                    | ((vertexBlend & 7) << 12));
+}
+
+std::string variantPreamble(unsigned key) {
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "#define uPreTransformed %d\n"
+             "#define uLighting %d\n"
+             "#define uSpecularOn %d\n"
+             "#define uFogMode %d\n"
+             "#define uStage1 %d\n"
+             "#define uAlphaTest %d\n"
+             "#define uGammaOn %d\n"
+             "#define uUseTexture %d\n"
+             "#define uIndexedBlend %d\n"
+             "#define uVertexBlend %d\n",
+             (key & 1) ? 1 : 0,
+             (key & 2) ? 1 : 0,
+             (key & 4) ? 1 : 0,
+             (int)((key >> 3) & 3),
+             (int)((key >> 5) & 7),
+             (key & 0x100) ? 1 : 0,
+             (key & 0x200) ? 1 : 0,
+             (key & 0x400) ? 1 : 0,
+             (key & 0x800) ? 1 : 0,
+             (int)((key >> 12) & 7));
+    return std::string(buf);
+}
+
+//  The version line has to stay first, so the defines go after it.
+std::string withPreamble(const char *src, const std::string &defines) {
+    std::string out(src);
+    const size_t nl = out.find(0x0a);
+    if (nl == std::string::npos) return out;
+    return out.substr(0, nl + 1) + defines + out.substr(nl + 1);
+}
+
+}
+
+//  Defined below, once the location names are in scope.
+void fetchUniformLocations(GLuint prog);
+
+namespace {
+
+bool buildVariant(unsigned key, Variant &v) {
+    const std::string defines = variantPreamble(key);
+    const std::string vsSrc = withPreamble(kVS, defines);
+    const std::string fsSrc = withPreamble(kFS, defines);
+
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc.c_str());
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fsSrc.c_str());
+    if (!vs || !fs) return false;
+
+    v.prog = glCreateProgram();
+    glAttachShader(v.prog, vs);
+    glAttachShader(v.prog, fs);
+    glLinkProgram(v.prog);
+    GLint ok = 0;
+    glGetProgramiv(v.prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[1024] = {0};
+        glGetProgramInfoLog(v.prog, sizeof(log) - 1, NULL, log);
+        LOGE("variant %04x link failed: %s", key, log);
+        glDeleteProgram(v.prog);
+        v.prog = 0;
+        return false;
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    fetchUniformLocations(v.prog);
+    for (size_t i = 0; i < kLocationCount; ++i) v.locs[i] = *kLocationVars[i];
+
+    //  The cube map lives on unit 1 for the life of the program.
+    useProgram(v.prog);
+    if (uTexCube >= 0) glUniform1i(uTexCube, 1);
+    return true;
+}
+
+void useVariant(unsigned key) {
+    if (key == g_variantKey) return;
+
+    //  Park the current program's cache before the locations change under it.
+    std::map<unsigned, Variant>::iterator prev = g_variants.find(g_variantKey);
+    if (prev != g_variants.end()) prev->second.cache.swap(g_uniformCache);
+    g_uniformCache.clear();
+
+    std::map<unsigned, Variant>::iterator it = g_variants.find(key);
+    if (it == g_variants.end()) {
+        Variant v;
+        if (!buildVariant(key, v)) {
+            //  Fall back to whatever is bound rather than drawing nothing.
+            g_variantKey = 0xFFFFFFFFu;
+            return;
+        }
+        it = g_variants.insert(std::make_pair(key, Variant())).first;
+        it->second.prog = v.prog;
+        for (size_t i = 0; i < kLocationCount; ++i) it->second.locs[i] = v.locs[i];
+        LOGI("shader variant %04x built (%u in all)", key, (unsigned)g_variants.size());
+    }
+
+    for (size_t i = 0; i < kLocationCount; ++i) *kLocationVars[i] = it->second.locs[i];
+    it->second.cache.swap(g_uniformCache);
+    useProgram(it->second.prog);
+    g_variantKey = key;
+}
+
+}
+
 extern "C" int RanGLR_Init(void) {
     if (g_inited) return 1;
     if (!RanGL_Ready()) return 0;
@@ -885,63 +1156,7 @@ extern "C" int RanGLR_Init(void) {
     g_haveAttribFormat = p_glVertexAttribFormat && p_glVertexAttribBinding && p_glBindVertexBuffer;
     LOGI("separate attribute format: %s", g_haveAttribFormat ? "yes" : "no (ES 3.0 path)");
 
-    uMVP            = glGetUniformLocation(g_prog, "uMVP");
-    uViewport       = glGetUniformLocation(g_prog, "uViewport");
-    uPreTransformed = glGetUniformLocation(g_prog, "uPreTransformed");
-    uFlipY          = glGetUniformLocation(g_prog, "uFlipY");
-    uMatAlpha       = glGetUniformLocation(g_prog, "uMatAlpha");
-    uWorldM         = glGetUniformLocation(g_prog, "uWorldM");
-    uViewProj       = glGetUniformLocation(g_prog, "uViewProj");
-    uVertexBlend    = glGetUniformLocation(g_prog, "uVertexBlend");
-    uIndexedBlend   = glGetUniformLocation(g_prog, "uIndexedBlend");
-    uTex            = glGetUniformLocation(g_prog, "uTex");
-    uUseTexture     = glGetUniformLocation(g_prog, "uUseTexture");
-    uAlphaTest      = glGetUniformLocation(g_prog, "uAlphaTest");
-    uAlphaRef       = glGetUniformLocation(g_prog, "uAlphaRef");
-    uColorOp        = glGetUniformLocation(g_prog, "uColorOp");
-    uColorArg1      = glGetUniformLocation(g_prog, "uColorArg1");
-    uColorArg2      = glGetUniformLocation(g_prog, "uColorArg2");
-    uAlphaOp        = glGetUniformLocation(g_prog, "uAlphaOp");
-    uAlphaArg1      = glGetUniformLocation(g_prog, "uAlphaArg1");
-    uAlphaArg2      = glGetUniformLocation(g_prog, "uAlphaArg2");
-    uTexFactor      = glGetUniformLocation(g_prog, "uTexFactor");
-    uTexCube        = glGetUniformLocation(g_prog, "uTexCube");
-    uStage1         = glGetUniformLocation(g_prog, "uStage1");
-    uTexSize        = glGetUniformLocation(g_prog, "uTexSize");
-    uUiSharpen      = glGetUniformLocation(g_prog, "uUiSharpen");
-    uGammaOn        = glGetUniformLocation(g_prog, "uGammaOn");
-    uPlain          = glGetUniformLocation(g_prog, "uPlain");
-    uGammaLut       = glGetUniformLocation(g_prog, "uGammaLut");
-    uSpecularOn     = glGetUniformLocation(g_prog, "uSpecularOn");
-    uMatSpecular    = glGetUniformLocation(g_prog, "uMatSpecular");
-    uMatPower       = glGetUniformLocation(g_prog, "uMatPower");
-    uLightSpecular  = glGetUniformLocation(g_prog, "uLightSpecular");
-    uView           = glGetUniformLocation(g_prog, "uView");
-    //  Stage 0 stays on unit 0; the cube map lives on unit 1 for its whole life.
-    glUseProgram(g_prog);
-    glUniform1i(uTexCube, 1);
-
-    uWorld          = glGetUniformLocation(g_prog, "uWorld");
-    uCameraPos      = glGetUniformLocation(g_prog, "uCameraPos");
-    uCameraPosF     = glGetUniformLocation(g_prog, "uCameraPosF");
-    uLighting       = glGetUniformLocation(g_prog, "uLighting");
-    uLightCount     = glGetUniformLocation(g_prog, "uLightCount");
-    uGlobalAmbient  = glGetUniformLocation(g_prog, "uGlobalAmbient");
-    uMatDiffuse     = glGetUniformLocation(g_prog, "uMatDiffuse");
-    uHasVertexColor = glGetUniformLocation(g_prog, "uHasVertexColor");
-    uMatAmbient     = glGetUniformLocation(g_prog, "uMatAmbient");
-    uMatEmissive    = glGetUniformLocation(g_prog, "uMatEmissive");
-    uLightType      = glGetUniformLocation(g_prog, "uLightType");
-    uLightDiffuse   = glGetUniformLocation(g_prog, "uLightDiffuse");
-    uLightAmbient   = glGetUniformLocation(g_prog, "uLightAmbient");
-    uLightPos       = glGetUniformLocation(g_prog, "uLightPos");
-    uLightDir       = glGetUniformLocation(g_prog, "uLightDir");
-    uLightAtten     = glGetUniformLocation(g_prog, "uLightAtten");
-    uFogMode        = glGetUniformLocation(g_prog, "uFogMode");
-    uFogColor       = glGetUniformLocation(g_prog, "uFogColor");
-    uFogStart       = glGetUniformLocation(g_prog, "uFogStart");
-    uFogEnd         = glGetUniformLocation(g_prog, "uFogEnd");
-    uFogDensity     = glGetUniformLocation(g_prog, "uFogDensity");
+    fetchUniformLocations(g_prog);
 
     glGenVertexArrays(1, &g_vao);
     glGenBuffers(1, &g_vbo);
@@ -1297,64 +1512,28 @@ extern "C" void RanGLR_SetTextureStage(DWORD colorOp, DWORD colorArg1, DWORD col
     g_texFactor[3] = (float)((texFactor >> 24) & 0xFF) / 255.0f;
 }
 
-extern "C" void RanGLR_ApplyState(const DWORD *rs) {
-    if (!g_inited || !rs) return;
-    g_dsBlend = rs[D3DRS_ALPHABLENDENABLE]; g_dsSrc = rs[D3DRS_SRCBLEND]; g_dsDst = rs[D3DRS_DESTBLEND];
-    g_dsZ = rs[D3DRS_ZENABLE]; g_dsZW = rs[D3DRS_ZWRITEENABLE]; g_dsCull = rs[D3DRS_CULLMODE];
-    g_dsATest = rs[D3DRS_ALPHATESTENABLE]; g_dsARef = rs[D3DRS_ALPHAREF] & 0xFF;
-    // The alpha-test uniforms below go to the CURRENT program, so it has to be
-    // bound here and not left to the draw call that follows - through the
-    // cache, since this runs once per draw and the program never changes.
-    useProgram(g_prog);
-
-    setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0,
-             blendFactor(rs[D3DRS_SRCBLEND]), blendFactor(rs[D3DRS_DESTBLEND]));
-
-    //  D3DRS_DEPTHBIAS is a float packed into the state DWORD, added straight to
-    //  the depth value; the engine uses it to lift decals, trims and effect
-    //  layers off the surface they share. Ignoring it left those layers fighting
-    //  the surface, which reads as two textures overlapping each other.
-    //  glPolygonOffset works in units of the smallest resolvable depth step, so
-    //  the bias is scaled by the depth buffer resolution.
-    {
-        float bias = 0.0f, slope = 0.0f;
-        memcpy(&bias,  &rs[D3DRS_DEPTHBIAS], sizeof(float));
-        memcpy(&slope, &rs[D3DRS_SLOPESCALEDEPTHBIAS], sizeof(float));
-        //  The context asks for a 24-bit depth buffer and falls back to 16;
-        //  scaling by the wrong one would offset by 256x.
-        setPolygonOffset(slope, bias * (float)(1 << RanGL_DepthBits()));
+//  Everything the shader needs for this draw, sent to the program that is
+//  actually bound.
+//
+//  This used to run inside RanGLR_ApplyState, which is called before the draw
+//  chooses its shader variant - so the uniforms went to the previous program.
+//  The state is all in globals already, so it simply moved.
+void applyProgramUniforms() {
+    if (g_fsProbe & 1) {
+        //  MODULATE(TEXTURE, DIFFUSE) for colour and alpha both: the cheapest
+        //  path through argValue and the two op ladders.
+        setUniform1i(uColorOp, 4); setUniform1i(uColorArg1, 2); setUniform1i(uColorArg2, 0);
+        setUniform1i(uAlphaOp, 4); setUniform1i(uAlphaArg1, 2); setUniform1i(uAlphaArg2, 0);
+    } else {
+        setUniform1i(uColorOp,   (GLint)g_colorOp);
+        setUniform1i(uColorArg1, (GLint)g_colorArg1);
+        setUniform1i(uColorArg2, (GLint)g_colorArg2);
+        setUniform1i(uAlphaOp,   (GLint)g_alphaOp);
+        setUniform1i(uAlphaArg1, (GLint)g_alphaArg1);
+        setUniform1i(uAlphaArg2, (GLint)g_alphaArg2);
     }
-
-    setDepth(rs[D3DRS_ZENABLE] != 0,
-             cmpFunc(rs[D3DRS_ZFUNC] ? rs[D3DRS_ZFUNC] : D3DCMP_LESSEQUAL),
-             rs[D3DRS_ZWRITEENABLE] != 0);
-
-    // D3D names the winding that is CULLED; GL names the winding that is FRONT.
-    // The face the UI path wants is recorded here and inverted per draw for the
-    // world path, which does not flip Y (see RanGLR_Draw).
-    switch (rs[D3DRS_CULLMODE]) {
-        case D3DCULL_NONE: g_cullWanted = false; break;
-        //  Measured, and it surprised me: the world's ground declares
-        //  D3DCULL_CCW and the character-select ground declares D3DCULL_CW, yet
-        //  both are only visible with GL's front face set to CW. Their geometry
-        //  is wound the same way and one of the two maps disagrees with its own
-        //  declared mode — the PC build never notices because terrain draws
-        //  unlit, where a back face is indistinguishable. So a cull mode of
-        //  either winding culls the same side here; D3DCULL_NONE still means
-        //  none, which is the distinction that actually carries meaning.
-        case D3DCULL_CW:
-        case D3DCULL_CCW:  g_cullWanted = true; g_frontFace = GL_CW; break;
-        default:           g_cullWanted = false; break;
-    }
-
-    setUniform1i(uColorOp,   (GLint)g_colorOp);
-    setUniform1i(uColorArg1, (GLint)g_colorArg1);
-    setUniform1i(uColorArg2, (GLint)g_colorArg2);
-    setUniform1i(uAlphaOp,   (GLint)g_alphaOp);
-    setUniform1i(uAlphaArg1, (GLint)g_alphaArg1);
-    setUniform1i(uAlphaArg2, (GLint)g_alphaArg2);
     setUniformVec4(uTexFactor, g_texFactor);
-    setUniform1i(uStage1, g_stage1Mode);
+    setUniform1i(uStage1, (g_fsProbe & 2) ? 0 : g_stage1Mode);
     if (g_stage1Mode) setUniformMatrix(uView, g_viewMatrix, 1);
 
     setUniform1i(uVertexBlend, g_vertexBlend);
@@ -1385,6 +1564,7 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
         glActiveTexture(GL_TEXTURE0);
     }
     setUniform1i(uPlain, g_plainFS ? 1 : 0);
+    if (g_fsProbe & 4) setUniform1i(uGammaOn, 0);
     setUniform1i(uGammaOn, (g_gammaOn && g_gammaLut) ? 1 : 0);
     if (g_gammaOn && g_gammaLut) {
         glActiveTexture(GL_TEXTURE3);
@@ -1431,8 +1611,59 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
     setUniform1f(uFogEnd, g_fogEnd);
     setUniform1f(uFogDensity, g_fogDensity);
 
-    setUniform1i(uAlphaTest, rs[D3DRS_ALPHATESTENABLE] ? 1 : 0);
-    setUniform1f(uAlphaRef, (rs[D3DRS_ALPHAREF] & 0xFF) / 255.0f);
+    setUniform1i(uAlphaTest, ((g_fsProbe & 8) == 0 && g_dsATest) ? 1 : 0);
+    setUniform1f(uAlphaRef, (float)g_dsARef / 255.0f);
+}
+
+extern "C" void RanGLR_ApplyState(const DWORD *rs) {
+    if (!g_inited || !rs) return;
+    g_dsBlend = rs[D3DRS_ALPHABLENDENABLE]; g_dsSrc = rs[D3DRS_SRCBLEND]; g_dsDst = rs[D3DRS_DESTBLEND];
+    g_dsZ = rs[D3DRS_ZENABLE]; g_dsZW = rs[D3DRS_ZWRITEENABLE]; g_dsCull = rs[D3DRS_CULLMODE];
+    g_dsATest = rs[D3DRS_ALPHATESTENABLE]; g_dsARef = rs[D3DRS_ALPHAREF] & 0xFF;
+    // The alpha-test uniforms below go to the CURRENT program, so it has to be
+    // bound here and not left to the draw call that follows - through the
+    // cache, since this runs once per draw and the program never changes.
+
+    setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0,
+             blendFactor(rs[D3DRS_SRCBLEND]), blendFactor(rs[D3DRS_DESTBLEND]));
+
+    //  D3DRS_DEPTHBIAS is a float packed into the state DWORD, added straight to
+    //  the depth value; the engine uses it to lift decals, trims and effect
+    //  layers off the surface they share. Ignoring it left those layers fighting
+    //  the surface, which reads as two textures overlapping each other.
+    //  glPolygonOffset works in units of the smallest resolvable depth step, so
+    //  the bias is scaled by the depth buffer resolution.
+    {
+        float bias = 0.0f, slope = 0.0f;
+        memcpy(&bias,  &rs[D3DRS_DEPTHBIAS], sizeof(float));
+        memcpy(&slope, &rs[D3DRS_SLOPESCALEDEPTHBIAS], sizeof(float));
+        //  The context asks for a 24-bit depth buffer and falls back to 16;
+        //  scaling by the wrong one would offset by 256x.
+        setPolygonOffset(slope, bias * (float)(1 << RanGL_DepthBits()));
+    }
+
+    setDepth(rs[D3DRS_ZENABLE] != 0,
+             cmpFunc(rs[D3DRS_ZFUNC] ? rs[D3DRS_ZFUNC] : D3DCMP_LESSEQUAL),
+             rs[D3DRS_ZWRITEENABLE] != 0);
+
+    // D3D names the winding that is CULLED; GL names the winding that is FRONT.
+    // The face the UI path wants is recorded here and inverted per draw for the
+    // world path, which does not flip Y (see RanGLR_Draw).
+    switch (rs[D3DRS_CULLMODE]) {
+        case D3DCULL_NONE: g_cullWanted = false; break;
+        //  Measured, and it surprised me: the world's ground declares
+        //  D3DCULL_CCW and the character-select ground declares D3DCULL_CW, yet
+        //  both are only visible with GL's front face set to CW. Their geometry
+        //  is wound the same way and one of the two maps disagrees with its own
+        //  declared mode — the PC build never notices because terrain draws
+        //  unlit, where a back face is indistinguishable. So a cull mode of
+        //  either winding culls the same side here; D3DCULL_NONE still means
+        //  none, which is the distinction that actually carries meaning.
+        case D3DCULL_CW:
+        case D3DCULL_CCW:  g_cullWanted = true; g_frontFace = GL_CW; break;
+        default:           g_cullWanted = false; break;
+    }
+
 }
 
 // FVF layout -> attribute pointers. Only the components the shader consumes are
@@ -1938,7 +2169,9 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             (unsigned long)g_colorOp, (unsigned long)g_colorArg1, (unsigned long)g_colorArg2);
     }
 
-    useProgram(g_prog);
+    //  The program is bound when the draw picks its shader variant, further
+    //  down. Binding the unspecialised one here undid that for every draw that
+    //  reused the previous variant, which is most of them.
 
     GLsizei streamVertexOffset = 0;
     //  A draw from the client's own buffers reuses the same layout every frame,
@@ -2249,9 +2482,22 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     if (!g_skipUniform) {
     const bool indexedBlend = (fvf & D3DFVF_LASTBETA_UBYTE4) != 0 &&
                               boneIdxOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw;
+    const int blendCountNow = (!indexedBlend && blendOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw)
+                                  ? g_vertexBlend : 0;
+    const int lightingNow   = preTransformed ? 0 : g_lightingOn;
+
+    //  The shader this draw wants, which decides where every uniform below
+    //  goes. Everything in the key is a constant inside the program, so the
+    //  driver compiles away the paths this draw does not use.
+    useVariant(variantKey(preTransformed ? 1 : 0, lightingNow, g_specularOn,
+                          g_fogMode, (g_fsProbe & 2) ? 0 : g_stage1Mode,
+                          ((g_fsProbe & 8) == 0 && g_dsATest) ? 1 : 0,
+                          (g_gammaOn && g_gammaLut) ? 1 : 0,
+                          glTexture ? 1 : 0, indexedBlend ? 1 : 0, blendCountNow));
+    applyProgramUniforms();
+
     setUniform1i(uIndexedBlend, indexedBlend ? 1 : 0);
-    setUniform1i(uVertexBlend, (!indexedBlend && blendOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw)
-                                   ? g_vertexBlend : 0);
+    setUniform1i(uVertexBlend, blendCountNow);
     //  Whether this vertex format carries its own colour decides where the
     //  diffuse material comes from, so it is per draw, not per state block.
     setUniform1i(uHasVertexColor, colorOff >= 0 ? 1 : 0);
