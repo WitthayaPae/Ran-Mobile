@@ -1374,8 +1374,8 @@ public:
             weights = 3;
         }
 
-        float palette[64];
-        for (int i = 0; i < 4; ++i)
+        float palette[16 * 16];
+        for (int i = 0; i < 16; ++i)
             memcpy(palette + i * 16, &m_transform[(DWORD)D3DTS_WORLDMATRIX(i)], sizeof(float) * 16);
 
         refreshDerived();
@@ -1822,7 +1822,16 @@ HRESULT RanDevice::GetDeviceCaps(D3DCAPS9 *pCaps) {
     //  D3DVBF_3WEIGHTS is the largest non-indexed blend D3D9 defines, and it
     //  means four matrices. Claiming more makes the engine ask for a blend mode
     //  that does not exist.
-    pCaps->MaxVertexBlendMatrices = 4;
+    //  16, not 4. Four is the limit for *positional* vertex blending, where a
+ //  vertex's weights line up with matrix slots 0..3. The meshes this shim
+ //  builds carry palette indices instead, so a group can reference sixteen
+ //  bones and still blend four per vertex - which is what stops a character
+ //  splitting into twenty-plus draws.
+ //
+ //  DxSkinMesh9_NORMAL checks this before drawing (m_dwMaxVertexBlendMatrices
+ //  >= NumBlend + 1) and silently skips the mesh if it is too small, so the cap
+ //  and kMaxPalette in d3dx_hierarchy.cpp have to agree.
+    pCaps->MaxVertexBlendMatrices = 16;
     pCaps->MaxVertexIndex = 0xFFFFF;
     pCaps->MaxStreams = 8;
     pCaps->VertexShaderVersion = D3DVS_VERSION(1, 1);

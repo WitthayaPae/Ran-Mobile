@@ -43,7 +43,20 @@ namespace {
 //  tuning choice: D3DRS_VERTEXBLEND is an enum whose largest non-indexed value,
 //  D3DVBF_3WEIGHTS, means four matrices. A group of five would make the engine
 //  set a value D3D9 does not define, and the draw would silently stop blending.
-const DWORD kMaxPalette = 4;
+//  Two different limits, which used to be one number and should not be.
+//
+//  A vertex can be influenced by at most four bones - that is the shape of the
+//  data and of the blend. But a *group* of faces drawn in one call can reference
+//  many more than four, as long as each vertex names which four it wants. That
+//  is indexed blending, and it is the difference between a character costing
+//  twenty-three draws and costing three: the group no longer has to split every
+//  time a fifth bone appears anywhere in it.
+//
+//  16 fits comfortably in the vertex shader's uniform budget (16 mat4 = 64 of a
+//  guaranteed 256 vec4) and is far past the point of diminishing returns for
+//  these meshes.
+const DWORD kMaxInfluences = 4;
+const DWORD kMaxPalette    = 16;
 
 //  One-shot load reporting (see g_logLoads below, declared early so the skin
 //  conversion can report too).
@@ -230,7 +243,7 @@ public:
             for (size_t i = 1; i < w.size(); ++i)
                 for (size_t j = i; j > 0 && w[j].second > w[j - 1].second; --j)
                     std::swap(w[j], w[j - 1]);
-            if (w.size() > kMaxPalette) w.resize(kMaxPalette);
+            if (w.size() > kMaxInfluences) w.resize(kMaxInfluences);
             float sum = 0.0f;
             for (size_t i = 0; i < w.size(); ++i) sum += w[i].second;
             if (sum > 0.0f) for (size_t i = 0; i < w.size(); ++i) w[i].second /= sum;
@@ -376,7 +389,7 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
             //  shoulder or arm looks like. Drop the WEAKEST influences
             //  instead: sum each bone's weight over the face and keep the
             //  strongest kMaxPalette, exactly what D3DX does.
-            if (need.size() > kMaxPalette) {
+            if (need.size() > kMaxInfluences) {
                 std::vector<std::pair<float, DWORD> > strength;
                 strength.reserve(need.size());
                 for (size_t i = 0; i < need.size(); ++i) {
@@ -452,18 +465,19 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
     //  NumInfl is the palette size the caller will feed to D3DRS_VERTEXBLEND,
     //  so it must cover the largest group, and the FVF carries NumInfl-1
     //  weights (the last one is implied).
+    //  NumInfl is the palette: how many world matrices the caller will set
+    //  before the draw (DxSkinMesh9_NORMAL loops i < NumInfl calling
+    //  SetTransform(D3DTS_WORLDMATRIX(i))). It is no longer the number of
+    //  weights in a vertex.
     DWORD numInfl = 1;
     for (size_t g = 0; g < groups.size(); ++g)
         if (groups[g].bones.size() > numInfl) numInfl = (DWORD)groups[g].bones.size();
     if (numInfl > kMaxPalette) numInfl = kMaxPalette;
 
-    DWORD blendFVF = D3DFVF_XYZ;
-    switch (numInfl) {
-        case 1:  blendFVF = D3DFVF_XYZ;   break;
-        case 2:  blendFVF = D3DFVF_XYZB1; break;
-        case 3:  blendFVF = D3DFVF_XYZB2; break;
-        default: blendFVF = D3DFVF_XYZB3; break;
-    }
+    //  Always the indexed form: three weights and four palette slots, the
+    //  fourth weight implied as 1 - the others. D3DFVF_LASTBETA_UBYTE4 is how
+    //  D3D says "the last beta is four bytes of indices, not a float".
+    DWORD blendFVF = D3DFVF_XYZB4 | D3DFVF_LASTBETA_UBYTE4;
     if (srcFVF & D3DFVF_NORMAL) blendFVF |= D3DFVF_NORMAL;
     if (srcFVF & D3DFVF_DIFFUSE) blendFVF |= D3DFVF_DIFFUSE;
     if (srcFVF & D3DFVF_TEX1)   blendFVF |= D3DFVF_TEX1;
@@ -477,7 +491,7 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
     if (srcFVF & D3DFVF_TEX1)    { sUV = off; }
 
     // ---- build the blended vertex/index data
-    const DWORD weightCount = numInfl - 1;
+    const DWORD weightCount = 3;                 // the fourth is implied
     const DWORD dstStride   = D3DXGetFVFVertexSize(blendFVF);
 
     std::vector<BYTE>  outVerts;
@@ -524,25 +538,33 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
                     memcpy(dv, sv, 12);                       // position
                     DWORD doff = 12;
 
-                    //  Weights in palette-slot order. Anything this group does
-                    //  not carry stays zero, and slot numInfl-1 is implied by
-                    //  the fixed-function pipeline as 1 - sum(weights).
-                    std::vector<float> w(numInfl, 0.0f);
+                    //  Up to four influences, each as a weight and the palette
+                    //  slot it applies to. The fourth weight is not stored: the
+                    //  blend takes it as 1 - the other three, which is what the
+                    //  fixed-function pipeline does and what the shader mirrors.
+                    float w[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    BYTE  bi[4] = { 0, 0, 0, 0 };
+                    DWORD n = 0;
                     if (v < numVerts) {
-                        for (size_t k = 0; k < infl[v].size(); ++k) {
-                            std::map<DWORD, DWORD>::iterator s = slotOf.find(infl[v][k].first);
-                            if (s != slotOf.end()) w[s->second] += infl[v][k].second;
+                        for (size_t k = 0; k < infl[v].size() && n < kMaxInfluences; ++k) {
+                            std::map<DWORD, DWORD>::iterator sl = slotOf.find(infl[v][k].first);
+                            if (sl == slotOf.end()) continue;   // pruned from this group
+                            w[n]  = infl[v][k].second;
+                            bi[n] = (BYTE)sl->second;
+                            ++n;
                         }
                     }
                     float sum = 0.0f;
-                    for (DWORD i = 0; i < numInfl; ++i) sum += w[i];
-                    if (sum <= 0.0f) w[0] = 1.0f;
-                    else if (sum != 1.0f) for (DWORD i = 0; i < numInfl; ++i) w[i] /= sum;
+                    for (DWORD i = 0; i < 4; ++i) sum += w[i];
+                    if (sum <= 0.0f) { w[0] = 1.0f; bi[0] = 0; }
+                    else if (sum != 1.0f) for (DWORD i = 0; i < 4; ++i) w[i] /= sum;
 
                     for (DWORD i = 0; i < weightCount; ++i) {
                         memcpy(dv + doff, &w[i], 4);
                         doff += 4;
                     }
+                    memcpy(dv + doff, bi, 4);          // the four palette slots
+                    doff += 4;
 
                     if (blendFVF & D3DFVF_NORMAL) {
                         if (sNormal != 0xFFFFFFFF) memcpy(dv + doff, sv + sNormal, 12);

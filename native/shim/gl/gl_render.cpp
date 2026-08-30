@@ -56,13 +56,18 @@ const char *kVS =
     //  picks its phase out of a 2x2 atlas with it - but nothing could before,
     //  because only the first set was ever read off the vertex.
     "layout(location=5) in vec2 aUV2;\n"
+    //  Which palette slot each of the vertex's four influences uses. Only read
+    //  when the mesh carries them (D3DFVF_LASTBETA_UBYTE4); positional meshes
+    //  leave it at zero and take the branch below instead.
+    "layout(location=6) in vec4 aBoneIdx;\n"
     "uniform mat4 uMVP;\n"
     "uniform mat4 uWorld;\n"
     "uniform vec2 uViewport;\n"
     "uniform int  uPreTransformed;\n"
-    "uniform mat4 uWorldM[4];\n"
+    "uniform mat4 uWorldM[16];\n"
     "uniform mat4 uViewProj;\n"
     "uniform int  uVertexBlend;\n"
+    "uniform int  uIndexedBlend;\n"
     "uniform vec3 uCameraPos;\n"
     "out vec4 vColor;\n"
     "out vec2 vUV;\n"
@@ -77,10 +82,31 @@ const char *kVS =
     "        gl_Position = vec4(x, y, aPos.z, 1.0);\n"
     "        vWorldPos = vec3(0.0);\n"
     "        vNormal = vec3(0.0, 1.0, 0.0);\n"
+    "    } else if (uIndexedBlend == 1) {\n"
+    "        //  Indexed blending: three weights and four palette slots, the\n"
+    "        //  fourth weight implied as 1 - the others. The slot numbers let a\n"
+    "        //  group reference the whole sixteen-matrix palette while any one\n"
+    "        //  vertex still blends four, which is what keeps a character to a\n"
+    "        //  few draws instead of one per four bones.\n"
+    "        float w3 = 1.0 - (aBlend.x + aBlend.y + aBlend.z);\n"
+    "        ivec4 bi = ivec4(aBoneIdx + 0.5);\n"
+    "        vec4 p4 = vec4(aPos.xyz, 1.0);\n"
+    "        vec4 n4 = vec4(aNormal, 0.0);\n"
+    "        vec3 pos = aBlend.x * (uWorldM[bi.x] * p4).xyz\n"
+    "                 + aBlend.y * (uWorldM[bi.y] * p4).xyz\n"
+    "                 + aBlend.z * (uWorldM[bi.z] * p4).xyz\n"
+    "                 +      w3  * (uWorldM[bi.w] * p4).xyz;\n"
+    "        vec3 nrm = aBlend.x * (uWorldM[bi.x] * n4).xyz\n"
+    "                 + aBlend.y * (uWorldM[bi.y] * n4).xyz\n"
+    "                 + aBlend.z * (uWorldM[bi.z] * n4).xyz\n"
+    "                 +      w3  * (uWorldM[bi.w] * n4).xyz;\n"
+    "        gl_Position = uViewProj * vec4(pos, 1.0);\n"
+    "        vWorldPos = pos;\n"
+    "        vNormal = mat3(uWorld) * nrm;\n"
     "    } else if (uVertexBlend > 0) {\n"
-    "        //  D3DRS_VERTEXBLEND: the vertex carries uVertexBlend weights,\n"
-    "        //  the matrix after them takes the weight left over, and the\n"
-    "        //  palette is D3DTS_WORLDMATRIX(0..4).\n"
+    "        //  Positional blending, for meshes that do not carry slots: the\n"
+    "        //  vertex has uVertexBlend weights and the matrix after them takes\n"
+    "        //  what is left, against D3DTS_WORLDMATRIX(0..3).\n"
     "        float w[4];\n"
     "        w[0] = aBlend.x; w[1] = aBlend.y; w[2] = aBlend.z; w[3] = 0.0;\n"
     "        float used = 0.0;\n"
@@ -422,7 +448,10 @@ int    g_shadowLeft = 0;
 int    g_stage1Mode = 0;
 unsigned g_stage1Cube = 0;
 float  g_viewMatrix[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
-GLint  uFlipY = -1, uWorldM = -1, uViewProj = -1, uVertexBlend = -1;
+GLint  uFlipY = -1, uWorldM = -1, uViewProj = -1, uVertexBlend = -1, uIndexedBlend = -1;
+//  Set from the FVF of the mesh being drawn: it carries palette slots or it
+//  does not, and the two blends are not interchangeable.
+int    g_indexedBlend = 0;
 GLint  uMVP = -1, uViewport = -1, uPreTransformed = -1, uTex = -1,
        uUseTexture = -1, uAlphaTest = -1, uAlphaRef = -1,
        uColorOp = -1, uColorArg1 = -1, uColorArg2 = -1,
@@ -440,7 +469,7 @@ int   g_lightingOn = 0, g_lightCount = 0;
 //  Fixed-function vertex blending: how many weights the vertices carry (0 = off)
 //  and the world matrices the palette slots point at.
 int   g_vertexBlend = 0;
-float g_worldM[64] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
+float g_worldM[16 * 16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
                        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
                        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
                        1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
@@ -810,6 +839,7 @@ extern "C" int RanGLR_Init(void) {
     uWorldM         = glGetUniformLocation(g_prog, "uWorldM");
     uViewProj       = glGetUniformLocation(g_prog, "uViewProj");
     uVertexBlend    = glGetUniformLocation(g_prog, "uVertexBlend");
+    uIndexedBlend   = glGetUniformLocation(g_prog, "uIndexedBlend");
     uTex            = glGetUniformLocation(g_prog, "uTex");
     uUseTexture     = glGetUniformLocation(g_prog, "uUseTexture");
     uAlphaTest      = glGetUniformLocation(g_prog, "uAlphaTest");
@@ -1270,7 +1300,7 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
     if (g_stage1Mode) setUniformMatrix(uView, g_viewMatrix, 1);
 
     setUniform1i(uVertexBlend, g_vertexBlend);
-    setUniformMatrix(uWorldM, g_worldM, 4);
+    setUniformMatrix(uWorldM, g_worldM, 16);
     setUniformMatrix(uViewProj, g_viewProj, 1);
 
     setUniform1i(uLighting, g_lightingOn);
@@ -1945,13 +1975,18 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     GLsizei off = 0;
     GLsizei posOff = 0, colorOff = -1, uvOff = -1, normalOff = -1;
     GLsizei blendOff = -1, blendCount = 0;
+    GLsizei boneIdxOff = -1;
     switch (fvf & D3DFVF_POSITION_MASK) {
         case D3DFVF_XYZRHW: off = 16; break;
         case D3DFVF_XYZ:    off = 12; break;
         case D3DFVF_XYZB1:  off = 16; blendOff = 12; blendCount = 1; break;
         case D3DFVF_XYZB2:  off = 20; blendOff = 12; blendCount = 2; break;
         case D3DFVF_XYZB3:  off = 24; blendOff = 12; blendCount = 3; break;
-        case D3DFVF_XYZB4:  off = 28; blendOff = 12; blendCount = 3; break;
+        case D3DFVF_XYZB4:  off = 28; blendOff = 12; blendCount = 3;
+                            //  With LASTBETA_UBYTE4 the fourth beta is four bytes
+                            //  of palette slots rather than a weight.
+                            if (fvf & D3DFVF_LASTBETA_UBYTE4) boneIdxOff = 24;
+                            break;
         case D3DFVF_XYZB5:  off = 32; blendOff = 12; blendCount = 3; break;
         default:            off = 12; break;
     }
@@ -1995,6 +2030,17 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             } else {
                 glDisableVertexAttribArray(4);
                 glVertexAttrib3f(4, 0.0f, 0.0f, 0.0f);
+            }
+
+            //  Palette slots, unnormalised: they are indices, not colours, so
+            //  the shader wants 0..15 and not 0..1.
+            if (boneIdxOff >= 0) {
+                p_glVertexAttribFormat(6, 4, GL_UNSIGNED_BYTE, GL_FALSE, (GLuint)boneIdxOff);
+                p_glVertexAttribBinding(6, 0);
+                glEnableVertexAttribArray(6);
+            } else {
+                glDisableVertexAttribArray(6);
+                glVertexAttrib4f(6, 0.0f, 0.0f, 0.0f, 0.0f);
             }
 
             if (colorOff >= 0) {
@@ -2063,6 +2109,15 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         glVertexAttrib4f(4, 0.0f, 0.0f, 0.0f, 0.0f);
     }
 
+    if (boneIdxOff >= 0) {
+        glEnableVertexAttribArray(6);
+        glVertexAttribPointer(6, 4, GL_UNSIGNED_BYTE, GL_FALSE, stride,
+                              (const void *)(intptr_t)(boneIdxOff + vbBase));
+    } else {
+        glDisableVertexAttribArray(6);
+        glVertexAttrib4f(6, 0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
     if (colorOff >= 0) {
         glEnableVertexAttribArray(1);
         // D3DCOLOR is BGRA bytes in memory; GL_BGRA is not in ES, so the shader
@@ -2126,7 +2181,11 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  Blending applies only to vertices that actually carry weights: the
     //  client leaves D3DRS_VERTEXBLEND set after drawing a character.
     if (!g_skipUniform) {
-    setUniform1i(uVertexBlend, (blendOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw) ? g_vertexBlend : 0);
+    const bool indexedBlend = (fvf & D3DFVF_LASTBETA_UBYTE4) != 0 &&
+                              boneIdxOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw;
+    setUniform1i(uIndexedBlend, indexedBlend ? 1 : 0);
+    setUniform1i(uVertexBlend, (!indexedBlend && blendOff >= 0 && !g_skipBlend && !cpuSkinnedThisDraw)
+                                   ? g_vertexBlend : 0);
     //  Whether this vertex format carries its own colour decides where the
     //  diffuse material comes from, so it is per draw, not per state block.
     setUniform1i(uHasVertexColor, colorOff >= 0 ? 1 : 0);
