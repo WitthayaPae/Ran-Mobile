@@ -93,6 +93,10 @@ extern "C" int RanGL_Init(void *nativeWindow) {
         EGL_STENCIL_SIZE,    8,
         //  The client leaves parts of the frame untouched between swaps, so the
         //  surface has to keep them — see RanGL_SwapPreserved.
+        //  Keep asking for a preserved-capable config even though preservation
+        //  is left off: measured, dropping the bit made the driver pick a worse
+        //  config and cost 4 fps (swap 9.9 -> 13.0 ms). Requesting the
+        //  capability is not the same as using it.
         EGL_SURFACE_TYPE,    EGL_WINDOW_BIT | EGL_SWAP_BEHAVIOR_PRESERVED_BIT,
         EGL_NONE
     };
@@ -232,7 +236,26 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     // as the CPU allows and burn the battery for nothing.
     //  Ask the surface to keep its contents across swaps. If the driver says no
     //  the renderer clears the whole frame instead (see RanGL_SwapPreserved).
-    g_swapPreserved = eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
+    //  Preserved swap is expensive on a tiled GPU: it stops the driver
+    //  discarding the tile buffer at the swap and makes it restore the whole
+    //  frame instead, which is a full-screen copy every frame at panel size.
+    //
+    //  The client clears the frame at the top of every scene anyway, and the
+    //  renderer already handles a destroyed surface by clearing everything
+    //  rather than honouring a partial clear rectangle - so nothing depends on
+    //  it. /sdcard/ran/preserveswap asks for it back, to compare.
+    //  Preserved by default again.
+    //
+    //  Turning it off is worth about 4 fps - the driver can then discard the
+    //  tile buffer at the swap instead of restoring it - but the loading screen
+    //  draws incrementally and leaves most of the frame untouched between
+    //  swaps, so without preservation it flickers and never settles. That is
+    //  what the surface attribute is for and the frame rate does not buy it.
+    //
+    //  /sdcard/ran/nopreserveswap turns it off for measurement.
+    const bool wantPreserved = (access("/sdcard/ran/nopreserveswap", F_OK) != 0);
+    g_swapPreserved = wantPreserved &&
+                      eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
                                        EGL_BUFFER_PRESERVED) == EGL_TRUE;
     if (g_swapPreserved) {
         EGLint behaviour = 0;
@@ -241,7 +264,9 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     }
     LOGI("swap behaviour: %s", g_swapPreserved ? "preserved" : "destroyed (frames are fully cleared)");
 
-    eglSwapInterval(g_display, 1);
+    //  /sdcard/ran/novsync releases the frame rate from the display, to find
+    //  out whether the GPU could go faster or is simply the limit.
+    eglSwapInterval(g_display, (access("/sdcard/ran/novsync", F_OK) == 0) ? 0 : 1);
 
     g_ready = true;
     return 1;
