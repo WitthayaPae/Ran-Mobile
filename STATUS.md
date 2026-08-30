@@ -2864,6 +2864,65 @@ Next, in order of likely return:
   already batches UI quads; worth checking why so many survive batching.
 * Per-draw state: 2.5 GL calls per draw is the multiplier on all of the above.
 
+
+## The frame rate: measured cause, and why 100+ entities breaks it
+
+Per-entity costs on the Tab S9, from the client's own profiler with counters
+added to `Render_MobItem`:
+
+    mi:mob-list 16/frame      mobs the client knows about
+    mi:mob-seen 13/frame      mobs that survive the frustum test
+    mi:mob-draw 11.9 ms       drawing those 13
+    mi:mob-namecast 3.0 ms    the camera-to-entity raycasts for name display
+    mi:pc-seen 0/frame        no other players present in this test
+
+    796 draws a frame at ~20 us each
+
+So **one visible character costs about 0.92 ms to draw and 0.23 ms for its name
+raycast**, and takes roughly 40 draw calls. That is the number that matters,
+because it multiplies:
+
+    200 entities x 0.92 ms  = 184 ms a frame -> about 5 fps
+    200 entities x 40 draws = 8000 draws     -> 160 ms of submission alone
+
+A hundred mobs and a hundred players will not fit in a frame as this stands.
+That is arithmetic from measured per-entity cost, not a guess.
+
+### What is already correct, and was checked rather than assumed
+
+* **Frustum culling works.** `GLCrowClient::Render` returns early on
+  `IsVisibleDetect` and `IsCollisionVolume` before touching the device. The
+  outer loop in `Render_MobItem` calls `Render` unconditionally, which looks
+  wrong but is not - the cull is inside.
+* **Resolution is not the cost.** At `renderscale=2`, a quarter of the pixels,
+  the tablet still runs 31-33 fps against ~30. This is submission-bound.
+* **`USE_SKINMESH_LOD` is not the answer.** The engine has a character LOD flag,
+  commented out in `DxSkinDefine.h`, with distance and "more than ten already
+  drawn at high detail" rules already written. But its only four read sites are
+  `if (g_dwLOD == 0) ++g_dwHIGHDRAW_NUM;` - it counts, and never selects a
+  cheaper mesh. Turning it on would change nothing.
+
+### The fix, and why it has not been done yet
+
+The cost is ~40 draw calls per character, submitted at ~20 us each. Everything
+else is downstream of that. Three routes, in order of expected return:
+
+1. **Merge attribute groups that share a material.** A skinned mesh is drawn one
+   `DrawIndexedPrimitive` per bone-combination attribute group
+   (`DxSkinMesh9_NORMAL.cpp`), and per equipment piece on top. Groups that share
+   a material and fit one bone palette can be one draw. This is where the 40
+   comes from and where it can most honestly be reduced.
+2. **Finish the LOD the engine started.** The selection logic exists; what is
+   missing is a cheaper thing to select. A distant character drawn as body only,
+   without separate equipment pieces, would cut most of its draws.
+3. **Drop the name raycast for distant entities.** 0.23 ms each, purely to
+   decide whether a name is occluded. It is the cheapest win and needs no mesh
+   work: skip it beyond a distance, or spread it across frames.
+
+This has not been implemented. The measurement was the work of this session and
+the refactor in (1) is not something to start without room to verify it - a
+half-finished merge of attribute groups would be worse than the current state.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly

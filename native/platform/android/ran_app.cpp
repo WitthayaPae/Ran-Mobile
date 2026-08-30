@@ -340,6 +340,35 @@ extern "C" void RanProf_Get(float *fps, float *engineMs, float *submitMs, float 
 
 namespace { double g_collSeconds = 0.0; unsigned long g_collCalls = 0; }
 
+//  A clock the client's own code can time a phase with, and a per-frame count
+//  to divide that phase by.
+//
+//  A total is not useful on its own here: the question is what one more player
+//  or one more mob costs, because the scene this has to survive is a hundred of
+//  each, not the dozen that happens to be standing around.
+extern "C" double RanProf_Now(void) { return DXUtil_Timer(TIMER_GETABSOLUTETIME); }
+
+namespace {
+struct ProfCount { const char *name; unsigned long total; unsigned long frames; };
+ProfCount g_counts[12];
+unsigned  g_countCount = 0;
+}
+
+extern "C" void RanProf_Count(const char *szName, int nCount) {
+    for (unsigned i = 0; i < g_countCount; ++i) {
+        if (g_counts[i].name == szName) {
+            g_counts[i].total += (unsigned long)(nCount < 0 ? 0 : nCount);
+            ++g_counts[i].frames;
+            return;
+        }
+    }
+    if (g_countCount >= 12) return;
+    g_counts[g_countCount].name = szName;
+    g_counts[g_countCount].total = (unsigned long)(nCount < 0 ? 0 : nCount);
+    g_counts[g_countCount].frames = 1;
+    ++g_countCount;
+}
+
 extern "C" void RanProf_Collision(double fSeconds) { g_collSeconds += fSeconds; ++g_collCalls; }
 
 extern "C" void RanProf_Section(const char *szName, double fSeconds) {
@@ -424,6 +453,20 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
         }
         if (g_sectionCount) LOGI("%s", line);
         for (unsigned i = 0; i < g_sectionCount; ++i) { g_sections[i].seconds = 0.0; g_sections[i].calls = 0; }
+    }
+
+    //  How many entities went through those phases, and what one costs. This is
+    //  the number that says whether a hundred players will fit in a frame.
+    if (g_countCount) {
+        char line[512] = "FRAME counts:";
+        for (unsigned i = 0; i < g_countCount; ++i) {
+            const double per = g_counts[i].frames ? (double)g_counts[i].total / g_counts[i].frames : 0.0;
+            char one[80];
+            snprintf(one, sizeof(one), " %s %.1f/frame", g_counts[i].name, per);
+            strncat(line, one, sizeof(line) - strlen(line) - 1);
+            g_counts[i].total = 0; g_counts[i].frames = 0;
+        }
+        LOGI("%s", line);
     }
 
     g_lastFps    = (float)(s_frames / (now - s_last));
