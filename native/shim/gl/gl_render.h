@@ -98,6 +98,15 @@ void RanGLR_TakeBufferStats(unsigned long *count, unsigned long *bytes, double *
 //  be decoded on the CPU (four times the memory and texture bandwidth).
 int  RanGLR_TexturesCompressed(void);
 //  Write only the range the client locked into a buffer GL already sized.
+void RanGLR_OrphanBuffer(unsigned buffer, int isIndex, unsigned size);
+void RanGLR_ReportBufferKinds(unsigned frames);
+void RanGLR_GpuSectionBegin(const char *name);
+void RanGLR_GpuSectionEnd(void);
+void RanGLR_ReportGpuSections(unsigned frames);
+int  RanGLR_StreamVertices(const void *data, unsigned size,
+                           unsigned *outBuffer, unsigned *outOffset);
+void RanGLR_UpdateBufferRangeUnsync(unsigned buffer, int isIndex, unsigned offset,
+                                    const void *data, unsigned size);
 void RanGLR_UpdateBufferRange(unsigned buffer, int isIndex, unsigned offset,
                               const void *data, unsigned size);
 void RanGLR_LogTextureStats(void);

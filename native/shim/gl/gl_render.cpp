@@ -69,6 +69,39 @@ const char *kVS =
     "uniform int  uVertexBlend;\n"
     "uniform int  uIndexedBlend;\n"
     "uniform vec3 uCameraPos;\n"
+    //  Lighting moved here from the fragment stage.
+    //
+    //  D3D fixed function lights per vertex and interpolates the result -
+    //  Gouraud - so per-pixel lighting was both a departure from the PC client
+    //  and the most expensive thing in the frame: eight lights, a normalize, a
+    //  pow and a branch for every one of four million pixels.
+    "uniform highp int   uLighting;\n"
+    "uniform int   uLightCount;\n"
+    "uniform int   uLightType[8];\n"
+    "uniform vec3  uLightDiffuse[8];\n"
+    "uniform vec3  uLightAmbient[8];\n"
+    "uniform vec4  uLightPos[8];\n"
+    "uniform vec3  uLightDir[8];\n"
+    "uniform vec3  uLightAtten[8];\n"
+    "uniform vec3  uLightSpecular[8];\n"
+    "uniform vec3  uGlobalAmbient;\n"
+    "uniform vec3  uMatDiffuse;\n"
+    "uniform vec3  uMatAmbient;\n"
+    "uniform vec3  uMatEmissive;\n"
+    "uniform highp int   uSpecularOn;\n"
+    "uniform float uMatPower;\n"
+    "uniform int   uHasVertexColor;\n"
+    "uniform highp vec3  uCameraPosF;\n"
+    //  D3DRS_FOGVERTEXMODE: the client asks for vertex fog and the device
+    //  reports it, so the factor belongs here - one distance and one exp per
+    //  vertex instead of per pixel.
+    "uniform highp int   uFogMode;\n"
+    "uniform float uFogStart;\n"
+    "uniform float uFogEnd;\n"
+    "uniform float uFogDensity;\n"
+    "out float vFog;\n"
+    "out vec3 vLit;\n"
+    "out vec3 vSpec;\n"
     "out vec4 vColor;\n"
     "out vec2 vUV;\n"
     "out vec2 vUV2;\n"
@@ -136,6 +169,53 @@ const char *kVS =
     "    vColor = aColor.bgra;\n"   // D3DCOLOR is B,G,R,A in memory
     "    vUV = aUV;\n"
     "    vUV2 = aUV2;\n"
+    "\n"
+    "    vFog = 1.0;\n"
+    "    if (uFogMode > 0) {\n"
+    "        float fd = distance(vWorldPos, uCameraPosF);\n"
+    "        if (uFogMode == 3) vFog = (uFogEnd - fd) / max(uFogEnd - uFogStart, 0.0001);\n"
+    "        else if (uFogMode == 1) vFog = exp(-uFogDensity * fd);\n"
+    "        else vFog = exp(-uFogDensity * uFogDensity * fd * fd);\n"
+    "        vFog = clamp(vFog, 0.0, 1.0);\n"
+    "    }\n"
+    "    vLit = vec3(1.0);\n"
+    "    vSpec = vec3(0.0);\n"
+    "    if (uLighting == 1) {\n"
+    "        vec3 n = normalize(vNormal);\n"
+    "        vec3 lit = uMatEmissive + uMatAmbient * uGlobalAmbient;\n"
+    "        vec3 spec = vec3(0.0);\n"
+    "        vec3 V = normalize(uCameraPosF - vWorldPos);\n"
+    "        for (int i = 0; i < 8; ++i) {\n"
+    "            if (i >= uLightCount) break;\n"
+    "            vec3 L;\n"
+    "            float atten = 1.0;\n"
+    "            if (uLightType[i] == 3) {\n"          // directional
+    "                L = -normalize(uLightDir[i]);\n"
+    "            } else {\n"                            // point / spot
+    "                vec3 d = uLightPos[i].xyz - vWorldPos;\n"
+    "                float dist = length(d);\n"
+    "                if (dist > uLightPos[i].w) continue;\n"
+    "                L = d / max(dist, 0.0001);\n"
+    "                atten = 1.0 / max(uLightAtten[i].x + uLightAtten[i].y * dist +\n"
+    "                                  uLightAtten[i].z * dist * dist, 0.0001);\n"
+    "                atten = clamp(atten, 0.0, 1.0);\n"
+    "            }\n"
+    "            float ndotl = max(dot(n, L), 0.0);\n"
+    //  D3D takes the diffuse material from the vertex colour when the vertex has
+    //  one (D3DMCS_COLOR1, the default) and from the material only when it does
+    //  not. The vertex colour is already multiplied in by the texture stage, so
+    //  applying the material as well would count it twice.
+    "            vec3 md = (uHasVertexColor == 1) ? vec3(1.0) : uMatDiffuse;\n"
+    "            lit += atten * (uLightDiffuse[i] * md * ndotl + uLightAmbient[i]);\n"
+    "            if (uSpecularOn == 1 && ndotl > 0.0) {\n"
+    "                vec3 H = normalize(L + V);\n"                  // Blinn half-vector
+    "                float sp = pow(max(dot(n, H), 0.0), max(uMatPower, 1.0));\n"
+    "                spec += atten * uLightSpecular[i] * sp;\n"
+    "            }\n"
+    "        }\n"
+    "        vLit = clamp(lit, 0.0, 1.0);\n"
+    "        vSpec = spec;\n"
+    "    }\n"
     "}\n";
 
 const char *kFS =
@@ -146,32 +226,20 @@ const char *kFS =
     "in vec2 vUV2;\n"
     "in vec3 vWorldPos;\n"
     "in vec3 vNormal;\n"
-    "uniform int   uLighting;\n"
-    "uniform int   uLightCount;\n"
-    "uniform int   uLightType[8];\n"
-    "uniform vec3  uLightDiffuse[8];\n"
-    "uniform vec3  uLightAmbient[8];\n"
-    "uniform vec4  uLightPos[8];\n"      // xyz position, w range
-    "uniform vec3  uLightDir[8];\n"
-    "uniform vec3  uLightAtten[8];\n"
-    "uniform vec3  uGlobalAmbient;\n"
-    "uniform vec3  uMatDiffuse;\n"
-    "uniform int   uSpecularOn;\n"
-    "uniform vec3  uMatSpecular;\n"
-    "uniform float uMatPower;\n"
-    "uniform vec3  uLightSpecular[8];\n"
-    "uniform int   uHasVertexColor;\n"
-    "uniform vec3  uMatAmbient;\n"
-    "uniform vec3  uMatEmissive;\n"
-    "uniform float uMatAlpha;\n"
-    "uniform vec3  uCameraPosF;\n"
-    "uniform int   uFogMode;\n"
+    //  Gouraud: the lighting was worked out per vertex, as D3D's fixed function
+    //  does, and only interpolated here.
+    "in vec3 vLit;\n"
+    "in vec3 vSpec;\n"
+    "uniform highp int   uLighting;\n"
+    "uniform highp int   uSpecularOn;\n"
+    "uniform vec3        uMatSpecular;\n"
+    "uniform float       uMatAlpha;\n"
+    "uniform highp vec3  uCameraPosF;\n"
+    "uniform highp int   uFogMode;\n"
     "uniform vec3  uFogColor;\n"
     "uniform int   uGammaOn;\n"
     "uniform sampler2D uGammaLut;\n"
-    "uniform float uFogStart;\n"
-    "uniform float uFogEnd;\n"
-    "uniform float uFogDensity;\n"
+    "in float vFog;\n"
     "uniform sampler2D uTex;\n"
     "uniform int   uUseTexture;\n"
     //  Declared in this stage too: the same uniform is shared across the
@@ -184,6 +252,10 @@ const char *kFS =
     "uniform vec2  uTexSize;\n"     // texels of the bound texture, 0 if unknown
     "uniform float uUiSharpen;\n"   // magnification the interface is drawn at
     "uniform int   uAlphaTest;\n"
+    //  Measurement only, from /sdcard/ran/plainfs: skip everything after the
+    //  texture fetch. If the frame does not get faster, the fragment shader is
+    //  not what the GPU is spending its time on and the fill is elsewhere.
+    "uniform highp int uPlain;\n"
     "uniform float uAlphaRef;\n"
     "out vec4 oColor;\n"
     "uniform int uColorOp;\n"     // D3DTOP_*, stage 0
@@ -229,6 +301,7 @@ const char *kFS =
     "    vec2 uvS = (uPreTransformed == 1 && uUseTexture == 1 &&\n"
     "                uTexSize.x > 1.0 && uUiSharpen > 1.0) ? sharpUV(vUV) : vUV;\n"
     "    vec4 tex = (uUseTexture == 1) ? texture(uTex, uvS) : vec4(1.0);\n"
+    "    if (uPlain == 1) { oColor = tex * vColor; return; }\n"
     "    //  With lighting on, the pipeline's diffuse alpha is the material's;\n"
     "    //  the vertex colour only carries it for unlit geometry.\n"
     "    vec4 diffuse = vec4(vColor.rgb, uLighting == 1 ? uMatAlpha : vColor.a);\n"
@@ -283,53 +356,13 @@ const char *kFS =
     "    vec4 c = vec4(rgb, alpha);\n"
     "\n"
     "    if (uLighting == 1) {\n"
-    "        vec3 n = normalize(vNormal);\n"
-    "        vec3 lit = uMatEmissive + uMatAmbient * uGlobalAmbient;\n"
-    "        vec3 spec = vec3(0.0);\n"
-    "        vec3 V = normalize(uCameraPosF - vWorldPos);\n"
-    "        for (int i = 0; i < 8; ++i) {\n"
-    "            if (i >= uLightCount) break;\n"
-    "            vec3 L;\n"
-    "            float atten = 1.0;\n"
-    "            if (uLightType[i] == 3) {\n"          // directional
-    "                L = -normalize(uLightDir[i]);\n"
-    "            } else {\n"                            // point / spot
-    "                vec3 d = uLightPos[i].xyz - vWorldPos;\n"
-    "                float dist = length(d);\n"
-    "                if (dist > uLightPos[i].w) continue;\n"
-    "                L = d / max(dist, 0.0001);\n"
-    "                atten = 1.0 / max(uLightAtten[i].x + uLightAtten[i].y * dist +\n"
-    "                                  uLightAtten[i].z * dist * dist, 0.0001);\n"
-    "                atten = clamp(atten, 0.0, 1.0);\n"
-    "            }\n"
-    "            float ndotl = max(dot(n, L), 0.0);\n"
-    "            //  D3D takes the diffuse material from the vertex colour when the\n"
-    "            //  vertex has one (D3DMCS_COLOR1, the default) and from the\n"
-    "            //  material only when it does not. The vertex colour is already\n"
-    "            //  multiplied in by the texture stage, so applying the material\n"
-    "            //  as well would count it twice and darken the whole scene.\n"
-    "            vec3 md = (uHasVertexColor == 1) ? vec3(1.0) : uMatDiffuse;\n"
-    "            lit += atten * (uLightDiffuse[i] * md * ndotl + uLightAmbient[i]);\n"
-    "            if (uSpecularOn == 1 && ndotl > 0.0) {\n"
-    "                vec3 H = normalize(L + V);\n"                  // Blinn half-vector
-    "                float s = pow(max(dot(n, H), 0.0), max(uMatPower, 1.0));\n"
-    "                spec += atten * uLightSpecular[i] * s;\n"
-    "            }\n"
-    "        }\n"
-    "        c.rgb *= clamp(lit, 0.0, 1.0);\n"
-    "        if (uSpecularOn == 1) c.rgb += uMatSpecular * spec;\n"   // added, not modulated
+    "        c.rgb *= vLit;\n"
+    "        if (uSpecularOn == 1) c.rgb += uMatSpecular * vSpec;\n"
     "    }\n"
     "\n"
     "    if (uAlphaTest == 1 && c.a < uAlphaRef) discard;\n"
     "\n"
-    "    if (uFogMode > 0) {\n"
-    "        float d = distance(vWorldPos, uCameraPosF);\n"
-    "        float f;\n"
-    "        if (uFogMode == 3) f = (uFogEnd - d) / max(uFogEnd - uFogStart, 0.0001);\n"  // LINEAR
-    "        else if (uFogMode == 1) f = exp(-uFogDensity * d);\n"                        // EXP
-    "        else f = exp(-uFogDensity * uFogDensity * d * d);\n"                         // EXP2
-    "        c.rgb = mix(uFogColor, c.rgb, clamp(f, 0.0, 1.0));\n"
-    "    }\n"
+    "    if (uFogMode > 0) c.rgb = mix(uFogColor, c.rgb, vFog);\n"
     "    //  The display gamma ramp the client asked for. Applied here because\n"
     "    //  everything the client draws passes through this shader, which makes\n"
     "    //  it equivalent to programming the display LUT.\n"
@@ -438,6 +471,7 @@ float  g_texFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 std::map<unsigned, std::pair<int, int> > g_texDims;
 
 bool   g_noUiSharp = false;
+bool   g_plainFS = false;
 //  Whether characters are drawn into the water reflection. Off by default on
 //  this port; see RanGLR_ReflectChars below.
 bool   g_reflectChars = false;
@@ -458,7 +492,7 @@ GLint  uMVP = -1, uViewport = -1, uPreTransformed = -1, uTex = -1,
        uAlphaOp = -1, uAlphaArg1 = -1, uAlphaArg2 = -1, uTexFactor = -1,
        uTexCube = -1, uStage1 = -1, uView = -1,
        uTexSize = -1, uUiSharpen = -1,
-       uGammaOn = -1, uGammaLut = -1;
+       uGammaOn = -1, uGammaLut = -1, uPlain = -1;
 GLuint g_vbo = 0, g_ibo = 0, g_vao = 0;
 // Stage-0 combiner, mirroring the device's texture stage state.
 DWORD g_colorOp = 4 /*MODULATE*/, g_colorArg1 = 2 /*TEXTURE*/, g_colorArg2 = 0 /*DIFFUSE*/;
@@ -504,6 +538,12 @@ int g_diagDraws = 0, g_diagUI = 0, g_diagUpload = 0;
 //  -1 leaves every draw alone.
 int g_drawLimit = -1;
 int g_frameDraw = 0;
+//  One frame's worth of "what was draw number N", from /sdcard/ran/drawlog.
+//
+//  The draw-limit sweep says which range of draws costs the frame; this says
+//  what those draws are. Written for one frame only, because it is one line per
+//  draw and there are hundreds.
+int g_drawLog = 0;
 
 //  How much of the frame is drawn into an off-screen target rather than
 //  straight at the panel, and how big the largest such target is.
@@ -728,6 +768,7 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "/sdcard/ran/cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
         { "/sdcard/ran/noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
         { "/sdcard/ran/nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
+        { "/sdcard/ran/plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
         { "/sdcard/ran/reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
     };
 
@@ -739,6 +780,19 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         if (on != s_probe) {
             s_probe = on;
             if (on) RanD3D_ProbeTextures();
+        }
+    }
+
+    {
+        //  Delete the file and touch it again to take another frame.
+        static bool s_logArmed = false;
+        const bool on = (access("/sdcard/ran/drawlog", F_OK) == 0);
+        if (on != s_logArmed) {
+            s_logArmed = on;
+            //  Two, because the clear that starts the logged frame takes one:
+            //  arming lands mid-frame, so the first clear only opens the frame
+            //  that gets logged and the second closes it.
+            if (on) g_drawLog = 2;
         }
     }
 
@@ -856,6 +910,7 @@ extern "C" int RanGLR_Init(void) {
     uTexSize        = glGetUniformLocation(g_prog, "uTexSize");
     uUiSharpen      = glGetUniformLocation(g_prog, "uUiSharpen");
     uGammaOn        = glGetUniformLocation(g_prog, "uGammaOn");
+    uPlain          = glGetUniformLocation(g_prog, "uPlain");
     uGammaLut       = glGetUniformLocation(g_prog, "uGammaLut");
     uSpecularOn     = glGetUniformLocation(g_prog, "uSpecularOn");
     uMatSpecular    = glGetUniformLocation(g_prog, "uMatSpecular");
@@ -1078,7 +1133,10 @@ extern "C" void RanGLR_Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil
     if (!g_inited) return;
     //  The client clears the frame once at the top of the scene, which is the
     //  only frame boundary visible from this layer.
-    if (!g_rtActive && (flags & D3DCLEAR_TARGET)) g_frameDraw = 0;
+    if (!g_rtActive && (flags & D3DCLEAR_TARGET)) {
+        if (g_drawLog > 0) --g_drawLog;
+        g_frameDraw = 0;
+    }
     GLbitfield mask = 0;
     if (flags & D3DCLEAR_TARGET) {
         // D3DCOLOR is ARGB, packed 0xAARRGGBB.
@@ -1326,6 +1384,7 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glActiveTexture(GL_TEXTURE0);
     }
+    setUniform1i(uPlain, g_plainFS ? 1 : 0);
     setUniform1i(uGammaOn, (g_gammaOn && g_gammaLut) ? 1 : 0);
     if (g_gammaOn && g_gammaLut) {
         glActiveTexture(GL_TEXTURE3);
@@ -1648,6 +1707,13 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  Counted before the cut, so the numbering does not shift as the limit
     //  moves; a draw past the limit simply is not issued.
     ++g_frameDraw;
+    if (g_drawLog > 0) {
+        //  Everything that decides what a draw costs to fill: how many pixels it
+        //  can touch, and whether it can be rejected early.
+        LOGI("DRAW %d prims %u fvf %04lx tex %u blend %d ztest %d zwrite %d",
+             g_frameDraw, (unsigned)primCount, (unsigned long)fvf, glTexture,
+             (int)g_gl.blendEnabled, (int)g_gl.depthTest, (int)g_gl.depthMask);
+    }
     if (g_drawLimit >= 0 && g_frameDraw > g_drawLimit) return;
     if (g_rtActive) {
         ++g_rtDraws;
@@ -2304,12 +2370,215 @@ extern "C" unsigned RanGLR_CreateBuffer(void) {
 unsigned long g_bufUploads = 0, g_bufUploadBytes = 0;
 double        g_bufUploadSeconds = 0.0;
 
+//  Which kind of write the buffer time is going into.
+//
+//  "whole" and "sub" are driver calls against a buffer the client owns; "map"
+//  is a memcpy into the streaming ring. Splitting them is what showed that the
+//  cost was never the bytes - 295 KB a frame took 10 ms - but the call.
+struct BufKind { const char *name; unsigned long calls; double seconds; };
+BufKind g_bufKinds[4] = { {"orphan",0,0.0}, {"map",0,0.0}, {"sub",0,0.0}, {"whole",0,0.0} };
+void noteBufKind(int k, double dt) { ++g_bufKinds[k].calls; g_bufKinds[k].seconds += dt; }
+
+//  How long the GPU spent on a section, rather than how long the CPU took to
+//  submit it. On this tiled GPU the answer turned out to be "almost nothing in
+//  any single section" - the fragment work all happens at the flush - which is
+//  itself the finding: a fill-bound frame cannot be attributed this way, and
+//  the A/B switches below are what measure it.
+namespace {
+
+typedef void (*PFN_GENQUERIES)(GLsizei, GLuint *);
+typedef void (*PFN_DELETEQUERIES)(GLsizei, const GLuint *);
+typedef void (*PFN_BEGINQUERY)(GLenum, GLuint);
+typedef void (*PFN_ENDQUERY)(GLenum);
+typedef void (*PFN_GETQUERYOBJECTUI64V)(GLuint, GLenum, GLuint64 *);
+typedef void (*PFN_GETQUERYOBJECTUIV)(GLuint, GLenum, GLuint *);
+
+PFN_GENQUERIES          p_glGenQueriesEXT = NULL;
+PFN_DELETEQUERIES       p_glDeleteQueriesEXT = NULL;
+PFN_BEGINQUERY          p_glBeginQueryEXT = NULL;
+PFN_ENDQUERY            p_glEndQueryEXT = NULL;
+PFN_GETQUERYOBJECTUI64V p_glGetQueryObjectui64vEXT = NULL;
+PFN_GETQUERYOBJECTUIV   p_glGetQueryObjectuivEXT = NULL;
+
+#define RAN_GL_TIME_ELAPSED_EXT           0x88BF
+#define RAN_GL_QUERY_RESULT_EXT           0x8866
+#define RAN_GL_QUERY_RESULT_AVAILABLE_EXT 0x8867
+
+bool g_gpuTimerChecked = false, g_gpuTimerOn = false;
+
+struct GpuSection { const char *name; GLuint query; double seconds; };
+GpuSection g_gpuSections[16];
+unsigned   g_gpuSectionCount = 0;
+int        g_gpuActive = -1;
+
+bool gpuTimerReady() {
+    if (!g_gpuTimerChecked) {
+        g_gpuTimerChecked = true;
+        const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+        if (ext && strstr(ext, "GL_EXT_disjoint_timer_query")) {
+            p_glGenQueriesEXT = (PFN_GENQUERIES)eglGetProcAddress("glGenQueriesEXT");
+            p_glDeleteQueriesEXT = (PFN_DELETEQUERIES)eglGetProcAddress("glDeleteQueriesEXT");
+            p_glBeginQueryEXT = (PFN_BEGINQUERY)eglGetProcAddress("glBeginQueryEXT");
+            p_glEndQueryEXT = (PFN_ENDQUERY)eglGetProcAddress("glEndQueryEXT");
+            p_glGetQueryObjectui64vEXT = (PFN_GETQUERYOBJECTUI64V)eglGetProcAddress("glGetQueryObjectui64vEXT");
+            p_glGetQueryObjectuivEXT = (PFN_GETQUERYOBJECTUIV)eglGetProcAddress("glGetQueryObjectuivEXT");
+            g_gpuTimerOn = p_glGenQueriesEXT && p_glBeginQueryEXT && p_glEndQueryEXT &&
+                           p_glGetQueryObjectui64vEXT && p_glGetQueryObjectuivEXT;
+        }
+        LOGI("GPU timer queries: %s", g_gpuTimerOn ? "yes" : "no");
+    }
+    return g_gpuTimerOn;
+}
+
+int gpuSectionIndex(const char *name) {
+    for (unsigned i = 0; i < g_gpuSectionCount; ++i)
+        if (g_gpuSections[i].name == name) return (int)i;
+    if (g_gpuSectionCount >= 16) return -1;
+    GpuSection &sec = g_gpuSections[g_gpuSectionCount];
+    sec.name = name; sec.query = 0; sec.seconds = 0.0;
+    return (int)g_gpuSectionCount++;
+}
+
+//  Takes whatever results are ready; never waits, because waiting would stall
+//  the thing being measured.
+void collectGpuSections() {
+    for (unsigned i = 0; i < g_gpuSectionCount; ++i) {
+        if (!g_gpuSections[i].query) continue;
+        GLuint ready = 0;
+        p_glGetQueryObjectuivEXT(g_gpuSections[i].query, RAN_GL_QUERY_RESULT_AVAILABLE_EXT, &ready);
+        if (!ready) continue;
+        GLuint64 ns = 0;
+        p_glGetQueryObjectui64vEXT(g_gpuSections[i].query, RAN_GL_QUERY_RESULT_EXT, &ns);
+        g_gpuSections[i].seconds += (double)ns * 1e-9;
+        p_glDeleteQueriesEXT(1, &g_gpuSections[i].query);
+        g_gpuSections[i].query = 0;
+    }
+}
+
+}
+
+//  One section at a time: the passes worth measuring do not nest.
+extern "C" void RanGLR_GpuSectionBegin(const char *name) {
+    if (!g_inited || !gpuTimerReady() || g_gpuActive >= 0) return;
+    const int i = gpuSectionIndex(name);
+    if (i < 0 || g_gpuSections[i].query) return;      // last one not collected yet
+    GLuint q = 0;
+    p_glGenQueriesEXT(1, &q);
+    if (!q) return;
+    p_glBeginQueryEXT(RAN_GL_TIME_ELAPSED_EXT, q);
+    g_gpuSections[i].query = q;
+    g_gpuActive = i;
+}
+
+extern "C" void RanGLR_GpuSectionEnd(void) {
+    if (g_gpuActive < 0) return;
+    p_glEndQueryEXT(RAN_GL_TIME_ELAPSED_EXT);
+    g_gpuActive = -1;
+}
+
+extern "C" void RanGLR_ReportGpuSections(unsigned frames) {
+    if (!g_gpuTimerOn || !frames || !g_gpuSectionCount) return;
+    collectGpuSections();
+    char line[512] = "FRAME gpu:";
+    for (unsigned i = 0; i < g_gpuSectionCount; ++i) {
+        char one[64];
+        snprintf(one, sizeof(one), " %s %.1fms", g_gpuSections[i].name,
+                 g_gpuSections[i].seconds * 1000.0 / frames);
+        strncat(line, one, sizeof(line) - strlen(line) - 1);
+        g_gpuSections[i].seconds = 0.0;
+    }
+    LOGI("%s", line);
+}
+
+extern "C" void RanGLR_ReportBufferKinds(unsigned frames) {
+    if (!frames) return;
+    char line[256] = "FRAME buffer calls:";
+    for (int k = 0; k < 4; ++k) {
+        char one[64];
+        snprintf(one, sizeof(one), " %s %.1f/f %.2fms", g_bufKinds[k].name,
+                 (double)g_bufKinds[k].calls / frames, g_bufKinds[k].seconds * 1000.0 / frames);
+        strncat(line, one, sizeof(line) - strlen(line) - 1);
+        g_bufKinds[k].calls = 0; g_bufKinds[k].seconds = 0.0;
+    }
+    LOGI("%s", line);
+}
+
 extern "C" void RanGLR_TakeBufferStats(unsigned long *count, unsigned long *bytes, double *seconds) {
     if (count) *count = g_bufUploads;
     if (bytes) *bytes = g_bufUploadBytes;
     if (seconds) *seconds = g_bufUploadSeconds;
     g_bufUploads = g_bufUploadBytes = 0;
     g_bufUploadSeconds = 0.0;
+}
+
+//  Put a slice of vertices in the streaming ring and say where it landed.
+//
+//  The ring is persistently mapped, so this is a memcpy: no driver call, no
+//  synchronisation, no allocation. Writing the same bytes into a buffer the
+//  client owns costs about 120 us a call on this driver, whether through
+//  glBufferSubData or an unsynchronised glMapBufferRange - measured at ninety
+//  calls and 11 ms a frame, a third of the frame.
+//
+//  Returns 0 if the ring cannot take it, in which case the caller writes the
+//  client's own buffer as before.
+extern "C" int RanGLR_StreamVertices(const void *data, unsigned size,
+                                     unsigned *outBuffer, unsigned *outOffset) {
+    if (!g_inited || !data || !size) return 0;
+    const double t0 = nowSeconds();
+    const GLintptr off = g_streamVerts.write(data, (GLsizei)size);
+    if (!g_streamVerts.buffer) return 0;
+    if (outBuffer) *outBuffer = g_streamVerts.buffer;
+    if (outOffset) *outOffset = (unsigned)off;
+    ++g_bufUploads;
+    g_bufUploadBytes += size;
+    { const double dt = nowSeconds() - t0; g_bufUploadSeconds += dt; noteBufKind(1, dt); }
+    return 1;
+}
+
+//  Throw a buffer's contents away and take fresh storage for it.
+//
+//  This is D3DLOCK_DISCARD: the client is about to rewrite the buffer and does
+//  not care what was in it. Respecifying with no data lets the driver hand back
+//  new memory at once and retire the old allocation behind the frames still
+//  reading it, so the write that follows never waits.
+extern "C" void RanGLR_OrphanBuffer(unsigned buffer, int isIndex, unsigned size) {
+    if (!g_inited || !buffer || !size) return;
+    const double t0 = nowSeconds();
+    const GLenum target = isIndex ? GL_ELEMENT_ARRAY_BUFFER : GL_ARRAY_BUFFER;
+    if (isIndex) bindElements(buffer); else bindArray(buffer);
+    glBufferData(target, (GLsizeiptr)size, NULL, GL_STREAM_DRAW);
+    ++g_callsBuffer;
+    { const double dt = nowSeconds() - t0; g_bufUploadSeconds += dt; noteBufKind(0, dt); }
+    if (isIndex) g_gl.elementBuffer = 0xFFFFFFFFu;
+}
+
+//  Write a range the client has promised the GPU is not reading.
+//
+//  This is D3DLOCK_NOOVERWRITE. It is the fallback for when the streaming ring
+//  cannot take the slice; the ring is faster still, because this call costs the
+//  driver about 120 us whether it synchronises or not.
+extern "C" void RanGLR_UpdateBufferRangeUnsync(unsigned buffer, int isIndex, unsigned offset,
+                                               const void *data, unsigned size) {
+    if (!g_inited || !buffer || !data || !size) return;
+    const double t0 = nowSeconds();
+    const GLenum target = isIndex ? GL_ELEMENT_ARRAY_BUFFER : GL_ARRAY_BUFFER;
+    if (isIndex) bindElements(buffer); else bindArray(buffer);
+    void *dst = glMapBufferRange(target, (GLintptr)offset, (GLsizeiptr)size,
+                                 GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT |
+                                 GL_MAP_INVALIDATE_RANGE_BIT);
+    if (dst) {
+        memcpy(dst, data, size);
+        glUnmapBuffer(target);
+    } else {
+        //  A driver that will not map falls back to the blocking write rather
+        //  than to nothing being drawn.
+        glBufferSubData(target, (GLintptr)offset, (GLsizeiptr)size, data);
+    }
+    ++g_callsBuffer;
+    ++g_bufUploads;
+    g_bufUploadBytes += size;
+    { const double dt = nowSeconds() - t0; g_bufUploadSeconds += dt; noteBufKind(2, dt); }
+    if (isIndex) g_gl.elementBuffer = 0xFFFFFFFFu;
 }
 
 extern "C" void RanGLR_UpdateBuffer(unsigned buffer, int isIndex, const void *data, unsigned size) {
@@ -2322,7 +2591,7 @@ extern "C" void RanGLR_UpdateBuffer(unsigned buffer, int isIndex, const void *da
     ++g_callsBuffer;
     ++g_bufUploads;
     g_bufUploadBytes += size;
-    g_bufUploadSeconds += nowSeconds() - t0;
+    { const double dt = nowSeconds() - t0; g_bufUploadSeconds += dt; noteBufKind(3, dt); }
     //  Ran outside the draw path: make the next draw bind for real.
     if (isIndex) g_gl.elementBuffer = 0xFFFFFFFFu;
 }
@@ -2342,7 +2611,7 @@ extern "C" void RanGLR_UpdateBufferRange(unsigned buffer, int isIndex, unsigned 
     ++g_callsBuffer;
     ++g_bufUploads;
     g_bufUploadBytes += size;
-    g_bufUploadSeconds += nowSeconds() - t0;
+    { const double dt = nowSeconds() - t0; g_bufUploadSeconds += dt; noteBufKind(2, dt); }
     //  Ran outside the draw path: make the next draw bind for real.
     if (isIndex) g_gl.elementBuffer = 0xFFFFFFFFu;
 }

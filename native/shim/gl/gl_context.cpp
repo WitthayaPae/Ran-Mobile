@@ -45,6 +45,26 @@ int  g_renderScale = 1;
 //  about how large the GUI is laid out.
 int  g_bufferDiv = 1;
 bool g_swapPreserved = false;
+//  Set from /sdcard/ran/preserveswap: keep the old behaviour everywhere.
+bool g_forcePreserved = false;
+//  The thread that created the context - the one that draws the game.
+pthread_t g_mainThread;
+//  Ask EGL to keep or drop the colour buffer across the swap.
+//
+//  Changing this costs one EGL call and only when it actually changes, so it
+//  can follow whoever is drawing: the loading thread wants its incremental
+//  frame kept, the game thread wants the tile buffer discarded.
+void setSwapPreserved(bool on) {
+    if (g_display == EGL_NO_DISPLAY || g_surface == EGL_NO_SURFACE) return;
+    if (g_forcePreserved) on = true;
+    if (on == g_swapPreserved) return;
+    if (eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
+                         on ? EGL_BUFFER_PRESERVED : EGL_BUFFER_DESTROYED) != EGL_TRUE)
+        return;
+    EGLint behaviour = 0;
+    eglQuerySurface(g_display, g_surface, EGL_SWAP_BEHAVIOR, &behaviour);
+    g_swapPreserved = (behaviour == EGL_BUFFER_PRESERVED);
+}
 
 const char *eglErrStr(EGLint e) {
     switch (e) {
@@ -222,6 +242,7 @@ extern "C" int RanGL_Init(void *nativeWindow) {
         return 0;
     }
     g_ctxThread = pthread_self();
+    g_mainThread = pthread_self();
     g_ctxHeld = true;
 
     eglQuerySurface(g_display, g_surface, EGL_WIDTH, &g_width);
@@ -252,17 +273,19 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     //  swaps, so without preservation it flickers and never settles. That is
     //  what the surface attribute is for and the frame rate does not buy it.
     //
-    //  /sdcard/ran/nopreserveswap turns it off for measurement.
-    const bool wantPreserved = (access("/sdcard/ran/nopreserveswap", F_OK) != 0);
-    g_swapPreserved = wantPreserved &&
-                      eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
-                                       EGL_BUFFER_PRESERVED) == EGL_TRUE;
-    if (g_swapPreserved) {
-        EGLint behaviour = 0;
-        eglQuerySurface(g_display, g_surface, EGL_SWAP_BEHAVIOR, &behaviour);
-        g_swapPreserved = (behaviour == EGL_BUFFER_PRESERVED);
-    }
-    LOGI("swap behaviour: %s", g_swapPreserved ? "preserved" : "destroyed (frames are fully cleared)");
+    //  Preserved only while the loading screen needs it - see setSwapPreserved.
+    //
+    //  Preservation is not free on a tiled GPU: every frame begins by loading
+    //  the whole colour buffer back into tile memory, which at 2560x1600 is
+    //  16 MB read before a single triangle. The game frame does not need it,
+    //  because it redraws every pixel; the loading screen does, because it
+    //  draws a progress bar and nothing else between swaps.
+    //
+    //  /sdcard/ran/preserveswap forces it on everywhere, to compare.
+    g_forcePreserved = (access("/sdcard/ran/preserveswap", F_OK) == 0);
+    setSwapPreserved(g_forcePreserved);
+    LOGI("swap behaviour: %s", g_swapPreserved
+             ? "preserved" : "destroyed while playing, preserved while loading");
 
     //  /sdcard/ran/novsync releases the frame rate from the display, to find
     //  out whether the GPU could go faster or is simply the limit.
@@ -286,6 +309,7 @@ extern "C" void RanGL_Shutdown(void) {
 }
 
 extern "C" int  RanGL_SwapPreserved(void) { return g_swapPreserved ? 1 : 0; }
+
 extern "C" int  RanGL_Ready(void)  { return g_ready ? 1 : 0; }
 extern "C" int  RanGL_DepthBits(void) { return g_depthBits; }
 
@@ -313,6 +337,11 @@ extern "C" int RanGL_AcquireContext(void) {
     }
     g_ctxThread = pthread_self();
     g_ctxHeld = true;
+
+    //  The loading screen draws a little of the frame at a time and swaps, so
+    //  it needs what it drew last time to still be there. The game thread does
+    //  not, and paying for the restore every frame is 16 MB of tile traffic.
+    setSwapPreserved(!pthread_equal(pthread_self(), g_mainThread));
     return 1;
 }
 extern "C" int  RanGL_Width(void)  { return g_width; }
@@ -356,6 +385,14 @@ extern "C" void RanGL_Present(void) {
     //  put them on top of everything including the game's own windows - so an
     //  open inventory appeared underneath the joystick. They are drawn from
     //  DxGameStage now, just before the interface, so every window covers them.
+    //  Nothing needs the depth or stencil buffer after the frame is finished, so
+    //  say so: a tiled GPU otherwise writes both back out to memory at the end
+    //  of every render pass. At 2560x1600 that is 16 MB of pure waste a frame.
+    {
+        const GLenum unwanted[] = { GL_DEPTH, GL_STENCIL };
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, unwanted);
+    }
+
     struct timespec ts0;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
     if (!eglSwapBuffers(g_display, g_surface)) {

@@ -49,6 +49,7 @@
 extern "C" void RanShim_SetModulePath(const char *p);
 extern "C" void RanShim_SetClientSize(int w, int h);
 extern "C" void RanD3D_LogStats(void);
+extern "C" void RanD3D_ReportBuffers(unsigned frames);
 extern "C" void RanPath_ProbeVersionFile(void);
 
 namespace {
@@ -434,6 +435,9 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
          drawCount ? submit * 1e6 / drawCount : 0.0);
     LOGI("FRAME buffers: %lu uploads/frame, %lu KB/frame, %.1f ms/frame",
          bufCount / s_frames, bufBytes / 1024 / s_frames, bufSeconds * 1000.0 / s_frames);
+    RanD3D_ReportBuffers(s_frames);
+    RanGLR_ReportBufferKinds(s_frames);
+    RanGLR_ReportGpuSections(s_frames);
 
     //  Sections, worst first: the frame's time in the client's own render.
     {

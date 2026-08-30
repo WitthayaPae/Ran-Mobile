@@ -461,6 +461,46 @@ unsigned RanSurface::RenderTargetTexture() {
 }
 
 // ---------------------------------------------------- vertex / index buffers
+
+//  Per-buffer upload accounting.
+//
+//  The frame report says how many uploads and how many bytes, which is enough to
+//  see there is a problem and not enough to see whose it is: a hundred small
+//  buffers and one enormous one look the same in a total. This keeps a row per
+//  buffer for a second and prints the worst few, so the system responsible has a
+//  name - its size, its FVF and how much of it changes.
+namespace {
+struct BufRow { unsigned gl; unsigned length; unsigned fvf; unsigned uploads; unsigned long bytes; };
+BufRow g_bufRows[64];
+unsigned g_bufRowCount = 0;
+
+void noteBufferUpload(unsigned gl, unsigned length, unsigned fvf, unsigned bytes) {
+    for (unsigned i = 0; i < g_bufRowCount; ++i) {
+        if (g_bufRows[i].gl == gl) { ++g_bufRows[i].uploads; g_bufRows[i].bytes += bytes; return; }
+    }
+    if (g_bufRowCount >= 64) return;
+    BufRow &r = g_bufRows[g_bufRowCount++];
+    r.gl = gl; r.length = length; r.fvf = fvf; r.uploads = 1; r.bytes = bytes;
+}
+}
+
+extern "C" void RanD3D_ReportBuffers(unsigned frames) {
+    if (!frames || !g_bufRowCount) return;
+    for (int pass = 0; pass < 6; ++pass) {
+        int worst = -1;
+        for (unsigned i = 0; i < g_bufRowCount; ++i)
+            if (g_bufRows[i].bytes && (worst < 0 || g_bufRows[i].bytes > g_bufRows[worst].bytes))
+                worst = (int)i;
+        if (worst < 0) break;
+        const BufRow &r = g_bufRows[worst];
+        LOGI("BUF vb%u size %u KB fvf %04x: %.1f uploads/frame, %lu KB/frame",
+             r.gl, r.length / 1024, r.fvf,
+             (double)r.uploads / frames, r.bytes / 1024 / frames);
+        g_bufRows[worst].bytes = 0;
+    }
+    g_bufRowCount = 0;
+}
+
 class RanVertexBuffer : public IDirect3DVertexBuffer9 {
 public:
     LONG m_ref = 1;
@@ -480,8 +520,29 @@ public:
     UINT m_dirtyBegin = 0, m_dirtyEnd = 0;
     bool m_glCreated = false;
 
+    //  Where the slices of a dynamic buffer went in the streaming ring.
+    //
+    //  A dynamic buffer is a rolling pool: the client locks a slice, fills it,
+    //  draws it, and moves on, coming back to the start with a discard. Each
+    //  slice is copied into the ring instead of into a buffer of its own, and
+    //  the draw is pointed at the ring - so the offsets the client thinks in
+    //  have to be translated. There are only as many live slices as locks since
+    //  the last discard, a few dozen at most.
+    struct Slice { UINT begin, end; unsigned glBuf, ringOff; };
+    std::vector<Slice> m_slices;
+
+    //  What the client said when it locked.
+    //
+    //  DxDynamicVB is a rolling pool: it appends with D3DLOCK_NOOVERWRITE and
+    //  starts over with D3DLOCK_DISCARD when it runs out of room, which is
+    //  exactly the pair GL needs to upload without stalling. Ignoring them cost
+    //  10 ms a frame in a crowd; honouring them is the whole fix.
+    bool m_lockDiscard = false, m_lockNoOverwrite = false;
+
     void markRange(UINT offset, UINT size, DWORD flags) {
         if (flags & D3DLOCK_READONLY) return;   // nothing will change
+        if (flags & D3DLOCK_DISCARD)     m_lockDiscard = true;
+        if (flags & D3DLOCK_NOOVERWRITE) m_lockNoOverwrite = true;
         if (size == 0 || offset + size > m_length) { size = m_length - (offset < m_length ? offset : m_length); }
         if (!size) return;
         if (m_dirtyEnd <= m_dirtyBegin) { m_dirtyBegin = offset; m_dirtyEnd = offset + size; }
@@ -491,6 +552,42 @@ public:
         }
         m_glDirty = true;
     }
+
+    //  The buffer and byte offset a draw starting at byteOffset should use.
+    //
+    //  For a streamed slice that is the ring and the slice's place in it; for
+    //  everything else it is the buffer's own name and the offset unchanged.
+    unsigned GlBufferFor(UINT byteOffset, UINT *outOffset) {
+        //  Anything written since the last draw goes up first: for a streamed
+        //  buffer that is what creates the slice this draw is about to look for.
+        const unsigned own = GlBuffer();
+
+        for (size_t i = m_slices.size(); i-- > 0; ) {
+            const Slice &s = m_slices[i];
+            if (byteOffset >= s.begin && byteOffset < s.end) {
+                if (outOffset) *outOffset = s.ringOff + (byteOffset - s.begin);
+                return s.glBuf;
+            }
+        }
+
+        if (outOffset) *outOffset = byteOffset;
+        //  A draw into a region that was never streamed. The buffer own GL copy
+        //  has not been kept up to date while streaming, so put the whole thing
+        //  up once and go back to the plain path.
+        if (m_streamed) {
+            m_streamed = false;
+            m_slices.clear();
+            m_dirtyBegin = 0; m_dirtyEnd = m_length;
+            m_glDirty = true;
+            m_lockDiscard = m_lockNoOverwrite = false;
+            return GlBuffer();
+        }
+        return own;
+    }
+
+    //  Set once this buffer has been streamed rather than uploaded, so a draw
+    //  that falls outside every slice knows the GL copy is stale.
+    bool m_streamed = false;
 
     unsigned GlBuffer() {
         if (m_data.empty()) return 0;
@@ -502,10 +599,47 @@ public:
                 RanGLR_UpdateBuffer(m_glBuffer, 0, m_data.data(), (unsigned)m_data.size());
                 m_glCreated = true;
             } else if (m_dirtyEnd > m_dirtyBegin) {
-                RanGLR_UpdateBufferRange(m_glBuffer, 0, m_dirtyBegin,
-                                         m_data.data() + m_dirtyBegin,
-                                         (unsigned)(m_dirtyEnd - m_dirtyBegin));
+                if (m_lockDiscard || m_lockNoOverwrite) {
+                    //  The client says this is streamed data, so it goes in the
+                    //  ring: a memcpy into memory already mapped, rather than a
+                    //  driver call against a buffer the GPU may be reading.
+                    unsigned ringBuf = 0, ringOff = 0;
+                    //  A discard means the client is about to reuse the pool
+                    //  from the start - but the copy already in the ring is
+                    //  somewhere else and stays good, and draws submitted
+                    //  before the discard still point at it. So the slices are
+                    //  kept and the newest match wins; only the count is
+                    //  bounded, because the ring itself is not.
+                    if (m_slices.size() > 256) m_slices.erase(m_slices.begin(), m_slices.begin() + 128);
+                    noteBufferUpload(m_glBuffer, m_length, m_fvf,
+                                     (unsigned)(m_dirtyEnd - m_dirtyBegin));
+                    if (RanGLR_StreamVertices(m_data.data() + m_dirtyBegin,
+                                              (unsigned)(m_dirtyEnd - m_dirtyBegin),
+                                              &ringBuf, &ringOff)) {
+                        Slice s; s.begin = m_dirtyBegin; s.end = m_dirtyEnd;
+                        s.glBuf = ringBuf; s.ringOff = ringOff;
+                        m_slices.push_back(s);
+                        m_streamed = true;
+                        m_lockDiscard = m_lockNoOverwrite = false;
+                        m_dirtyBegin = m_dirtyEnd = 0;
+                        m_glDirty = false;
+                        return m_glBuffer;
+                    }
+                    //  No ring: fall back to writing the buffer itself.
+                    if (m_lockDiscard) RanGLR_OrphanBuffer(m_glBuffer, 0, (unsigned)m_data.size());
+                    RanGLR_UpdateBufferRangeUnsync(m_glBuffer, 0, m_dirtyBegin,
+                                                   m_data.data() + m_dirtyBegin,
+                                                   (unsigned)(m_dirtyEnd - m_dirtyBegin));
+                } else {
+                    //  No promise from the client, so the blocking write it is.
+                    noteBufferUpload(m_glBuffer, m_length, m_fvf,
+                                     (unsigned)(m_dirtyEnd - m_dirtyBegin));
+                    RanGLR_UpdateBufferRange(m_glBuffer, 0, m_dirtyBegin,
+                                             m_data.data() + m_dirtyBegin,
+                                             (unsigned)(m_dirtyEnd - m_dirtyBegin));
+                }
             }
+            m_lockDiscard = m_lockNoOverwrite = false;
             m_dirtyBegin = m_dirtyEnd = 0;
             m_glDirty = false;
         }
@@ -1631,14 +1765,15 @@ public:
         countDraw(m_fvf ? m_fvf : vb->m_fvf, PrimitiveCount * 3);
         prepareDraw();
         float mvp[16]; currentMVP(mvp);
-        const unsigned glVB = vb->GlBuffer();
-        const UINT base = m_stream0Offset + (UINT)((size_t)StartVertex * m_stream0Stride);
+        const UINT baseSrc = m_stream0Offset + (UINT)((size_t)StartVertex * m_stream0Stride);
+        UINT base = baseSrc;
+        const unsigned glVB = vb->GlBufferFor(base, &base);
         if (glVB) {
             RanGLR_DrawVBO(Type, PrimitiveCount, glVB, base, m_stream0Stride,
                            m_fvf ? m_fvf : vb->m_fvf, boundGlTexture(), mvp,
                            0, 0, 0, 0, 0);
         } else {
-            RanGLR_Draw(Type, PrimitiveCount, vb->m_data.data() + base,
+            RanGLR_Draw(Type, PrimitiveCount, vb->m_data.data() + baseSrc,
                         m_stream0Stride, m_fvf ? m_fvf : vb->m_fvf, boundGlTexture(), mvp,
                         NULL, 0, 0, 0);
         }
@@ -1658,9 +1793,10 @@ public:
         UINT idxCount = indexCountFor(Type, PrimitiveCount);
         // Indices are relative to BaseVertexIndex, so the vertex slice starts
         // there; MinVertexIndex + NumVertices is how far into it they reach.
-        const UINT vbBase = m_stream0Offset +
+        UINT vbBase = m_stream0Offset +
             (UINT)((size_t)(BaseVertexIndex > 0 ? BaseVertexIndex : 0) * m_stream0Stride);
-        const unsigned glVB = vb->GlBuffer();
+        const UINT vbSrc = vbBase;
+        const unsigned glVB = vb->GlBufferFor(vbBase, &vbBase);
         const unsigned glIB = ib->GlBuffer();
         {
             static int s_n = 0;
@@ -1675,14 +1811,14 @@ public:
             //  The dump needs the vertices, and a buffer draw only carries a
             //  name; the copy the upload came from is still here.
             if (RanGLR_DiagArmed()) {
-                RanGLR_DiagVerts(vb->m_data.data() + vbBase);
+                RanGLR_DiagVerts(vb->m_data.data() + vbSrc);
                 RanGLR_DiagIndices(ib->m_data.data() + ibBase, idxBits);
             }
             RanGLR_DrawVBO(Type, PrimitiveCount, glVB, vbBase, m_stream0Stride,
                            m_fvf ? m_fvf : vb->m_fvf, boundGlTexture(), mvp,
                            glIB, ibBase, idxBits, idxCount, MinVertexIndex + NumVertices);
         } else {
-            RanGLR_Draw(Type, PrimitiveCount, vb->m_data.data() + vbBase,
+            RanGLR_Draw(Type, PrimitiveCount, vb->m_data.data() + vbSrc,
                         m_stream0Stride, m_fvf ? m_fvf : vb->m_fvf, boundGlTexture(), mvp,
                         ib->m_data.data() + ibBase, idxBits,
                         idxCount, MinVertexIndex + NumVertices);
