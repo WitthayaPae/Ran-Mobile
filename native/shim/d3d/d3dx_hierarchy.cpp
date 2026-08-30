@@ -56,7 +56,31 @@ namespace {
 //  guaranteed 256 vec4) and is far past the point of diminishing returns for
 //  these meshes.
 const DWORD kMaxInfluences = 4;
-const DWORD kMaxPalette    = 16;
+
+//  Read once, from /sdcard/ran/bonepalette, so the palette can be put back to 4
+//  without a rebuild.
+//
+//  4 is the old positional behaviour - one draw per four bones - and is the
+//  thing to compare against if a crash appears in the skinning path, because it
+//  takes this change out of the picture entirely.
+DWORD paletteLimit() {
+    static DWORD s_limit = 0;
+    if (s_limit) return s_limit;
+    s_limit = 16;
+    FILE *f = (access("/sdcard/ran/bonepalette", F_OK) == 0)
+                  ? fopen("/sdcard/ran/bonepalette", "rb") : NULL;
+    if (f) {
+        char buf[16] = { 0 };
+        if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
+            const int v = atoi(buf);
+            if (v >= 4 && v <= 16) s_limit = (DWORD)v;
+        }
+        fclose(f);
+    }
+    LOGI("bone palette: %u per draw group", (unsigned)s_limit);
+    return s_limit;
+}
+#define kMaxPalette (paletteLimit())
 
 //  One-shot load reporting (see g_logLoads below, declared early so the skin
 //  conversion can report too).
