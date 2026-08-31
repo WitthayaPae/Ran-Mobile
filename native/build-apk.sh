@@ -12,6 +12,7 @@ U="/c/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/Andr
 BT="$U/SDK/build-tools/36.0.0"
 PLATFORM="$U/SDK/platforms/android-34/android.jar"
 JAVA="$U/OpenJDK/bin/java.exe"
+JAVAC="$U/OpenJDK/bin/javac.exe"
 ABIS="${ABIS:-arm64-v8a x86_64}"
 OUT="$HERE/out/apk"
 NAME="${NAME:-ran-phase2}"
@@ -42,7 +43,7 @@ for A in $ABIS; do
     RT="$(ls "$U/NDK/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/"*/lib/linux/libclang_rt.asan-aarch64-android.so | head -1)"
     cp "$RT" "$OUT/lib/$A/"
     #  LF endings, or /system/bin/sh will not run it.
-    tr -d "" < "$HERE/android/wrap.sh" > "$OUT/lib/$A/wrap.sh"
+    tr -d "" < "$HERE/android/wrap.sh" > "$OUT/lib/$A/wrap.sh"
     chmod +x "$OUT/lib/$A/wrap.sh"
     echo "  + asan runtime + wrap.sh"
   fi
@@ -50,6 +51,41 @@ for A in $ABIS; do
   HAVE="$HAVE $A"
 done
 [ -n "$HAVE" ] || { echo "[!] nothing built — run ./build.sh first"; exit 1; }
+
+# The Java launcher -> classes.dex.
+#
+# The APK was hasCode="false" and pure NativeActivity until the patcher needed
+# somewhere to live. javac then d8 straight from the SDK, same as everything
+# else here - no Gradle.
+echo "== java =="
+JSRC="$HERE/android/java"
+if [ -d "$JSRC" ]; then
+  JOUT="$OUT/classes"
+  mkdir -p "$JOUT"
+  #  javac and d8 are Windows tools: they need Windows paths, and this tree
+  #  lives under "DEV EP9", a directory with a space in it. An @argfile of
+  #  bare POSIX paths splits on that space and javac reports
+  #  "invalid flag: /c/Users/.../DEV". Quoted paths in the argfile, and a
+  #  jar handed to d8 rather than a list of .class files, keep every path a
+  #  single argument.
+  find "$JSRC" -name '*.java' | while read -r f; do
+    printf '"%s"\n' "$(cygpath -m "$f")"
+  done > "$OUT/java.list"
+  "$JAVAC" -source 8 -target 8 -nowarn -encoding UTF-8 \
+      -bootclasspath "$(cygpath -w "$PLATFORM")" \
+      -classpath "$(cygpath -w "$PLATFORM")" \
+      -d "$(cygpath -w "$JOUT")" "@$(cygpath -w "$OUT/java.list")" 2>&1 | grep -v '^Note:' || true
+  CLASSES=$(find "$JOUT" -name '*.class' | wc -l)
+  [ "$CLASSES" -gt 0 ] || { echo "[!] javac produced no classes"; exit 1; }
+  "$U/OpenJDK/bin/jar.exe" cf "$(cygpath -w "$OUT/classes.jar")" -C "$(cygpath -w "$JOUT")" .
+  "$JAVA" -cp "$(cygpath -w "$BT/lib/d8.jar")" com.android.tools.r8.D8 \
+      --min-api 24 --lib "$(cygpath -w "$PLATFORM")" \
+      --output "$(cygpath -w "$OUT")" "$(cygpath -w "$OUT/classes.jar")"
+  printf "  + %s classes -> classes.dex %.1f KB\n" "$CLASSES" \
+      "$(stat -c%s "$OUT/classes.dex" | awk '{print $1/1024}')"
+else
+  echo "  (no java sources)"
+fi
 
 # resources (the splash window background) -> flat archive, then link
 "$BT/aapt2.exe" compile --dir "$(cygpath -w "$HERE/android/res")" -o "$(cygpath -w "$OUT/res.zip")"
@@ -72,12 +108,16 @@ fi
 # zip update — STORED, because Android loads .so straight out of the APK.
 WINAPK="$(cygpath -w "$OUT/base.apk")"
 WINLIB="$(cygpath -w "$OUT/lib")"
+WINDEX="$(cygpath -w "$OUT/classes.dex")"
 powershell.exe -NoProfile -Command "
   Add-Type -A System.IO.Compression.FileSystem
   \$zip = [System.IO.Compression.ZipFile]::Open('$WINAPK','Update')
   foreach (\$f in Get-ChildItem -Recurse -File '$WINLIB') {
     \$rel = 'lib/' + \$f.Directory.Name + '/' + \$f.Name
     [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(\$zip, \$f.FullName, \$rel, [System.IO.Compression.CompressionLevel]::NoCompression)
+  }
+  if (Test-Path '$WINDEX') {
+    [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(\$zip, '$WINDEX', 'classes.dex', [System.IO.Compression.CompressionLevel]::Optimal)
   }
   \$zip.Dispose()"
 

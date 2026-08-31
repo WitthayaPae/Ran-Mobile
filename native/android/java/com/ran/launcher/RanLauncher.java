@@ -1,0 +1,411 @@
+//  Package is com.ran.launcher, not com.ran.native: 'native' is a Java
+//  reserved word and cannot be a package segment. The APPLICATION id stays
+//  com.ran.native - that is an Android identifier, not a Java one - so
+//  getPackageName() below still returns it.
+package com.ran.launcher;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/*  The patcher, and the first thing that runs.
+ *
+ *  It reconciles /sdcard/ran against a manifest on the patch host, then hands
+ *  off to NativeActivity. The game itself knows nothing about any of this.
+ *
+ *  Why Java rather than the native side: HTTP, a progress UI, the storage
+ *  permission prompt and the APK install prompt are all a few lines here and
+ *  a fight in C++ through JNI. This layer is also what the Thai composing IME
+ *  needs, so it earns its place twice.
+ */
+public class RanLauncher extends Activity {
+
+    /*  The patch host. Everything else about publishing is derived from this. */
+    private static final String BASE_DEFAULT = "http://143.14.11.244:1521/launcher_mobile/";
+
+    /*  An override, read from /sdcard/ran/.patchbase when it exists. Testing a
+     *  patch against a local server otherwise means rebuilding the APK to
+     *  change one string, which is slow enough that it does not get done. */
+    private static String base() {
+        try {
+            java.io.File f = new java.io.File(ROOT, ".patchbase");
+            if (f.exists()) {
+                String s = new String(readAll(new FileInputStream(f)), "UTF-8").trim();
+                if (s.length() > 0) return s.endsWith("/") ? s : s + "/";
+            }
+        } catch (Throwable t) { }
+        return BASE_DEFAULT;
+    }
+
+    /*  Where the game reads its data. The manifest's paths are relative to
+     *  this, so an entry's "path" is literally where it lands - no mapping. */
+    private static final String ROOT = "/sdcard/ran";
+
+    /*  Written only after every file in a manifest has been verified. If we
+     *  are killed part way through, this still names the OLD version, so the
+     *  next launch reconciles again and finishes. That one ordering rule is
+     *  what makes the whole thing crash-safe. */
+    private static final String VER_FILE = ".patchver";
+
+    /*  path \t size \t mtime \t sha256, one line per file. Without it every
+     *  launch would hash 1.7 GB to discover that nothing changed. */
+    private static final String INDEX_FILE = ".patchindex";
+
+    private static final String TAG = "RanPatch";
+
+    private TextView status, detail;
+    private ProgressBar bar;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+
+    @Override protected void onCreate(Bundle b) {
+        super.onCreate(b);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setBackgroundColor(Color.parseColor("#0D1012"));
+        int pad = dp(28);
+        root.setPadding(pad, pad, pad, pad);
+
+        status = new TextView(this);
+        status.setTextColor(Color.parseColor("#DCE3E7"));
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        status.setGravity(Gravity.CENTER);
+        status.setText("Starting");
+        root.addView(status);
+
+        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(18);
+        bar.setLayoutParams(lp);
+        root.addView(bar);
+
+        detail = new TextView(this);
+        detail.setTextColor(Color.parseColor("#8D989F"));
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        detail.setGravity(Gravity.CENTER);
+        detail.setPadding(0, dp(12), 0, 0);
+        root.addView(detail);
+
+        setContentView(root);
+
+        if (!hasStorage()) { askForStorage(); return; }
+        //  Claim the guard here, not just in onResume: onCreate is followed
+        //  immediately by onResume, and without this both start a patch
+        //  thread and the game is launched twice.
+        started = true;
+        new Thread(new Runnable() { public void run() { patchThenPlay(); } }).start();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        /*  Coming back from the storage-permission screen. */
+        if (hasStorage() && !started) {
+            started = true;
+            new Thread(new Runnable() { public void run() { patchThenPlay(); } }).start();
+        }
+    }
+    private boolean started = false;
+
+    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
+
+    private void say(final String s, final String d, final int permille) {
+        if (s != null || d != null) Log.i(TAG, (s == null ? "" : s) + (d == null ? "" : "  |  " + d));
+        ui.post(new Runnable() { public void run() {
+            if (s != null) status.setText(s);
+            if (d != null) detail.setText(d);
+            if (permille >= 0) { bar.setIndeterminate(false); bar.setProgress(permille); }
+            else bar.setIndeterminate(true);
+        }});
+    }
+
+    /* ------------------------------------------------------------- storage */
+
+    private boolean hasStorage() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true;
+        return Environment.isExternalStorageManager();
+    }
+
+    private void askForStorage() {
+        say("Storage permission needed",
+            "RAN keeps its game data on shared storage.\nAllow 'All files access', then come back.", 0);
+        try {
+            Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                  Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Throwable t) {
+            try { startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)); }
+            catch (Throwable t2) { /* nothing else to try; the message stands */ }
+        }
+    }
+
+    /* --------------------------------------------------------------- patch */
+
+    private void patchThenPlay() {
+        try {
+            patch();
+        } catch (Throwable t) {
+            /*  A patch failure must not be fatal when the game is already
+             *  installed - a player on a bad connection should still get in. */
+            Log.e(TAG, "patch failed", t);
+            final String msg = t.getMessage() == null ? t.toString() : t.getMessage();
+            if (new File(ROOT, "data/glogic/GLogic.rcc").exists()) {
+                say("Could not reach the patch server", msg + "\nStarting with the data already installed.", 1000);
+                sleep(1800);
+            } else {
+                fail("Could not download the game data", msg);
+                return;
+            }
+        }
+        play();
+    }
+
+    private void patch() throws Exception {
+        say("Checking for updates", base(), -1);
+
+        JSONObject m = new JSONObject(new String(httpGet(base() + "manifest.json"), "UTF-8"));
+        int version = m.getInt("version");
+        int minApk = m.optInt("minApk", 0);
+
+        int myApk = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        if (minApk > myApk) {
+            /*  A data patch cannot fix a client whose packet layout is stale,
+             *  so this is a hard stop rather than a warning. */
+            fail("This version of RAN is out of date",
+                 "The server needs app version " + minApk + ", this is " + myApk +
+                 ".\nDownload the new APK and install it over this one.");
+            throw new Exception("apk too old");
+        }
+
+        File rootDir = new File(ROOT);
+        if (!rootDir.exists() && !rootDir.mkdirs())
+            throw new Exception("cannot create " + ROOT);
+
+        int localVersion = readVersion();
+        if (localVersion == version) { say("Up to date", "version " + version, 1000); return; }
+
+        JSONArray arr = m.getJSONArray("files");
+        Map<String, String> index = readIndex();          //  path -> "size:mtime:sha"
+        List<String[]> todo = new ArrayList<String[]>();  //  {path, sha, size}
+        long todoBytes = 0;
+
+        say("Checking files", arr.length() + " files", 0);
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject e = arr.getJSONObject(i);
+            String p = e.getString("path");
+            String sha = e.getString("sha256");
+            long size = e.getLong("size");
+
+            File f = new File(rootDir, p);
+            boolean ok = false;
+            if (f.exists() && f.length() == size) {
+                String key = index.get(p);
+                String want = size + ":" + f.lastModified() + ":" + sha;
+                if (key != null && key.equals(want)) ok = true;      //  trusted
+                else ok = sha.equalsIgnoreCase(sha256(f));           //  verify
+            }
+            if (!ok) { todo.add(new String[]{ p, sha, String.valueOf(size) }); todoBytes += size; }
+            if ((i & 255) == 0) say(null, "checked " + i + " / " + arr.length(), i * 1000 / arr.length());
+        }
+
+        if (todo.isEmpty()) {
+            writeIndexFrom(arr, rootDir);
+            writeVersion(version);
+            say("Up to date", "version " + version, 1000);
+            return;
+        }
+
+        say("Downloading update", todo.size() + " files, " + mb(todoBytes), 0);
+        long done = 0;
+        for (int i = 0; i < todo.size(); i++) {
+            String[] t = todo.get(i);
+            File dest = new File(rootDir, t[0]);
+            File parent = dest.getParentFile();
+            if (parent != null && !parent.exists()) parent.mkdirs();
+
+            File tmp = new File(dest.getPath() + ".tmp");
+            httpToFile(base() + "blobs/" + t[1], tmp);
+
+            String got = sha256(tmp);
+            if (!got.equalsIgnoreCase(t[1])) {
+                tmp.delete();
+                throw new Exception("checksum failed for " + t[0]);
+            }
+            /*  Replace only once the bytes are known good, so being killed
+             *  mid-download can never leave a corrupt file behind. */
+            if (dest.exists() && !dest.delete()) throw new Exception("cannot replace " + t[0]);
+            if (!tmp.renameTo(dest)) throw new Exception("cannot rename " + t[0]);
+
+            done += Long.parseLong(t[2]);
+            say(null, (i + 1) + " / " + todo.size() + "   " + mb(done) + " of " + mb(todoBytes),
+                (int) (todoBytes == 0 ? 1000 : done * 1000 / todoBytes));
+        }
+
+        writeIndexFrom(arr, rootDir);
+        writeVersion(version);                 //  last, always
+        say("Updated", "version " + version, 1000);
+    }
+
+    /* --------------------------------------------------------------- state */
+
+    private int readVersion() {
+        try {
+            byte[] b = readAll(new FileInputStream(new File(ROOT, VER_FILE)));
+            return Integer.parseInt(new String(b, "UTF-8").trim());
+        } catch (Throwable t) { return -1; }
+    }
+
+    private void writeVersion(int v) throws Exception {
+        FileOutputStream o = new FileOutputStream(new File(ROOT, VER_FILE));
+        try { o.write(String.valueOf(v).getBytes("UTF-8")); } finally { o.close(); }
+    }
+
+    private Map<String, String> readIndex() {
+        Map<String, String> m = new HashMap<String, String>();
+        try {
+            String s = new String(readAll(new FileInputStream(new File(ROOT, INDEX_FILE))), "UTF-8");
+            for (String line : s.split("\n")) {
+                int a = line.indexOf('\t');
+                if (a > 0) m.put(line.substring(0, a), line.substring(a + 1).trim());
+            }
+        } catch (Throwable t) { /* no index yet: everything gets hashed once */ }
+        return m;
+    }
+
+    private void writeIndexFrom(JSONArray arr, File rootDir) throws Exception {
+        StringBuilder sb = new StringBuilder(1 << 18);
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject e = arr.getJSONObject(i);
+            String p = e.getString("path");
+            File f = new File(rootDir, p);
+            sb.append(p).append('\t').append(f.length()).append(':')
+              .append(f.lastModified()).append(':').append(e.getString("sha256")).append('\n');
+        }
+        FileOutputStream o = new FileOutputStream(new File(ROOT, INDEX_FILE));
+        try { o.write(sb.toString().getBytes("UTF-8")); } finally { o.close(); }
+    }
+
+    /* ---------------------------------------------------------------- http */
+
+    private byte[] httpGet(String url) throws Exception {
+        HttpURLConnection c = open(url);
+        try { return readAll(c.getInputStream()); } finally { c.disconnect(); }
+    }
+
+    /*  Resumable: a 574 MB pack over mobile data will be interrupted, and
+     *  starting again from zero each time never finishes. */
+    private void httpToFile(String url, File tmp) throws Exception {
+        long have = tmp.exists() ? tmp.length() : 0;
+        HttpURLConnection c = open(url);
+        if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
+        try {
+            int code = c.getResponseCode();
+            boolean append = (code == 206);
+            if (!append && have > 0) have = 0;          //  server ignored Range
+            if (code != 200 && code != 206) throw new Exception("HTTP " + code + " for " + url);
+
+            InputStream in = c.getInputStream();
+            OutputStream out = new FileOutputStream(tmp, append);
+            try {
+                byte[] buf = new byte[1 << 16];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            } finally { out.close(); in.close(); }
+        } finally { c.disconnect(); }
+    }
+
+    private HttpURLConnection open(String url) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setInstanceFollowRedirects(true);
+        return c;
+    }
+
+    /* --------------------------------------------------------------- utils */
+
+    private static byte[] readAll(InputStream in) throws Exception {
+        java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[1 << 16];
+        int n;
+        try { while ((n = in.read(buf)) > 0) o.write(buf, 0, n); } finally { in.close(); }
+        return o.toByteArray();
+    }
+
+    private static String sha256(File f) throws Exception {
+        MessageDigest d = MessageDigest.getInstance("SHA-256");
+        FileInputStream in = new FileInputStream(f);
+        try {
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) d.update(buf, 0, n);
+        } finally { in.close(); }
+        byte[] h = d.digest();
+        StringBuilder sb = new StringBuilder(64);
+        for (byte x : h) sb.append(Character.forDigit((x >> 4) & 0xF, 16))
+                           .append(Character.forDigit(x & 0xF, 16));
+        return sb.toString();
+    }
+
+    private static String mb(long b) { return String.format("%.1f MB", b / 1048576.0); }
+    private static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException e) {} }
+
+    private void fail(final String title, final String msg) {
+        ui.post(new Runnable() { public void run() {
+            bar.setVisibility(ViewGroup.INVISIBLE);
+            new AlertDialog.Builder(RanLauncher.this)
+                .setTitle(title).setMessage(msg).setCancelable(false)
+                .setPositiveButton("Close", null).show();
+            status.setText(title);
+            detail.setText(msg);
+        }});
+    }
+
+    /* ---------------------------------------------------------------- play */
+
+    private void play() {
+        //  A bare Intent plus setComponent. Intent(Context, Class) builds the
+        //  ComponentName from the class immediately, so passing null there
+        //  throws before setComponent can replace it.
+        Intent i = new Intent();
+        i.setComponent(new ComponentName(getPackageName(), "android.app.NativeActivity"));
+        i.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        startActivity(i);
+        finish();
+    }
+}

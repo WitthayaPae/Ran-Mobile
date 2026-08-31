@@ -3745,3 +3745,118 @@ neighbours need 1.6 slot widths between centres, spacing along a quarter arc is
 
 Verified on the emulator: `native/out/edge2.png`, a crop of the boundary itself
 rather than the whole screen.
+
+## The mobile patcher (2026-08-31)
+
+The PC client is patched by a third-party incremental updater over
+`http://143.14.11.244:1521/launcher/`, which publishes 2,300 `.ken` and 194
+`.eiei` files plus an encrypted `incupdate.idx`. None of that is reusable on
+Android: the index format is opaque, and the payload is the *loose* file tree
+while mobile reads `.rcc` packs. Mobile gets its own subtree,
+`/launcher_mobile/`, published from the same host.
+
+### What ships
+
+`MOBILE/tools/patch/make-manifest.js` builds the payload:
+
+    manifest.json          version, minApk, one entry per file (path/size/sha256)
+    blobs/<sha256>         content-addressed, immutable, append-only
+
+Content addressing means uploads only ever ADD, so there is no cache to
+invalidate and no window where a client can fetch a half-replaced file;
+rollback is republishing an older manifest. It also deduped 246 byte-identical
+files for free.
+
+**8,263 files, 1,679.6 MB** - against the 5.7 GB currently on the test device.
+The difference is loose copies of already-packed content plus 352 MB of
+`.bak_pre_*` files that `push-data.sh` carried across because it copies whole
+directories. The generator ships from an explicit allowlist instead.
+
+### Working out what actually ships, and one bug it caught
+
+Verified in both directions rather than assumed:
+
+- `skin`, `piece`, `object`, `skeleton`, `help` are in no pack (only 79 of
+  skin's 2,883 files appear in SkinObject.rcc), so they ship loose - 722 MB.
+- every loose file inside a packed directory *is* in its pack, so excluding
+  those copies is safe. The one apparent exception,
+  `_bowstring_ready - +_+.egp`, is in the pack under a mojibake name - an
+  encoding mismatch in the comparison, not a gap.
+
+That check missed something anyway: it only looked at files directly inside each
+directory and never recursed. `data/glogic` has four **subdirectories** -
+`quest`, `npctalk`, `level`, `activity` - plus `data/effect/char`, none of them
+in any pack. **1,968 files, 54 MB**, and losing them is silent: quests and NPC
+dialogue simply stop working.
+
+The fix is structural. The allowlist was derived from `CLIENT/`, a development
+tree where inclusion means nothing; `Ran/` is a *working install* and therefore
+ground truth. `--verify` now walks the shipped PC client and reports anything it
+has that the manifest does not:
+
+    verify: every file under .../Ran/data is in the manifest.
+
+`data/glogicserver` was dropped for the same reason: the shipped PC client has
+no such directory.
+
+**End to end:** with only the manifest's files present (1,738 MB) the client
+boots, logs in, and renders world, characters, NPCs and mobs. The 392
+"file not found" lines in logcat are probes for random-option tables like
+`contri_rv.bin` that do not exist in the PC client either.
+
+### The launcher
+
+The APK was `hasCode="false"` - pure NativeActivity, no Java at all. It now has
+a launcher Activity, `com.ran.launcher.RanLauncher`, which patches and then
+starts the game. `javac` and `d8` run from the same SDK as everything else; no
+Gradle. **This is also the layer the Thai composing IME needs.**
+
+Boot flow, with the one ordering rule that makes it crash-safe:
+
+    fetch manifest -> compare to /sdcard/ran/.patchver
+                   -> reconcile against .patchindex, hashing only what moved
+                   -> download to .tmp, verify sha256, rename over
+                   -> rewrite .patchindex
+                   -> write .patchver LAST
+                   -> start NativeActivity
+
+Killed part way through, `.patchver` still names the old version, so the next
+launch reconciles again and finishes.
+
+Measured on the emulator: a full reconcile of 8,263 files takes ~10 s, and a
+second launch with the version already current takes **35 ms** to check and
+**378 ms** to reach the game. Without `.patchindex` every launch would hash
+1.7 GB.
+
+Four bugs found by running it, three of them mine:
+
+1. `package com.ran.native` does not compile - **`native` is a Java reserved
+   word**. The class lives in `com.ran.launcher`; the application id is
+   unchanged, because that is an Android identifier rather than a Java one.
+2. `Intent(Context, Class)` builds a ComponentName immediately, so passing a
+   null class throws before `setComponent` can replace it.
+3. `onCreate` started the patch thread without claiming the guard `onResume`
+   checks, so both ran and the game was launched twice.
+4. **Android 9+ refuses cleartext HTTP**, and the patch host is plain `http://`.
+   Every fetch failed and the launcher fell through to "could not reach the
+   patch server" - which would have happened to every player. Fixed with a
+   network security config scoped to that host rather than
+   `usesCleartextTraffic` application-wide.
+
+`/sdcard/ran/.patchbase` overrides the base URL when present, so a patch can be
+tested against a local server over `adb reverse` without rebuilding the APK.
+
+### Still open on this piece
+
+- **The patch host is plain HTTP on a bare IP.** A patcher trusts what it
+  downloads, and over cleartext an attacker on the same network can substitute
+  the payload *and* the manifest, so hash checking does not help. The box
+  already has OpenSSL. A hostname also matters: if `143.14.11.244` changes,
+  every installed client is orphaned and needs a new APK to find the new address.
+- **Back up `native/android/debug.keystore`.** It is gitignored and exists only
+  on one machine, and `build-apk.sh` silently regenerates a *different* key if
+  it goes missing - after which no update will install over an existing app.
+- Apache 2.4.41 / OpenSSL 1.0.2s / PHP 7.1.33 on the patch host are all
+  end-of-life since 2019.
+- `minApk` is 1 and `versionCode` is 1; give the APK a real numbering scheme
+  before relying on the out-of-date gate.
