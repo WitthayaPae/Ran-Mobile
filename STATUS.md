@@ -3249,3 +3249,499 @@ as you go:
 * **Skill press during an attack is unverified** — the test character has no
   skills slotted. Slot one, spam attack, then press it.
 * **The moon is unverified** — the four-phase fix only shows at night.
+
+## The dead mob kept its name and health bar (2026-08-30)
+
+Reported as "the target mob is delay to disappear the name the hp after I kill
+them so the target is not change". Two separate defects looked like one:
+
+**The drop itself was on time.** A temporary log in `MobileTargetTick` printed
+what the target looked like at the moment it was dropped:
+
+    target dropped: id 346 copy yes hp 2 dying 1
+
+`dying 1` is `IsACTION(GLAT_DIE)` — the target is released the frame the death
+action starts, which is the earliest the client knows. Note `hp 2`, not 0: the
+server announces the death as an action and the last damage packet never brings
+the bar to zero, so anything keyed on `HP == 0` would never have fired at all.
+
+**Nothing hid the display.** Dropping the target only stops `SetTargetInfo`
+being called each frame; the groups it had shown stay up. The client's own path
+never shows this because it re-picks from the cursor every frame and the pick
+simply stops matching — with a finger there is no pick to stop.
+
+There are *two* groups, and hiding one leaves the other:
+
+* `CROW_TARGET_INFO` — the fixed panel above the touch pad
+  (`ResetTargetInfoCrow` / `…Npc` / `…Player`).
+* `TARGETINFO_DISPLAY` — the name and health bar drawn over the target's own
+  head (`ResetTargetInfo` / `…Npc` / `…Player`), which is the one actually seen
+  sitting on a corpse.
+
+`MobileTargetTick` now calls all six when the target stops being live.
+
+**Measured on the Tab S9** (`out/k3.png` … `out/k5.png`): with a mob targeted the
+panel reads `Lv.167 ไอ้ค้อนใหญ่ (นักโทษ) 30000/30000 (100%)` and a red bar sits
+over its head; at `2/30000` both are still up; three seconds later, with the
+loot on the ground, both are gone and no bar is left on the corpse.
+
+## "Classic Name" did nothing: two defects (2026-08-30)
+
+**The touch pad ate the window's buttons.** `RanTouch_PointerDown` claimed any
+press landing on one of its own buttons without asking what else was on screen.
+The client's windows are movable and several open into the lower right - the
+options window does - so their buttons sit under the pad. Measured: the tick
+flipped (`opt flip: classic=1`) but `GamePlayOption_OK` never ran, and dragging
+the window's title bar out of the corner only flipped the pad's skill page to
+`4/4`. `CUIMan::IsPointInControl(x,y)` (new, mobile-only; walks top/focus/bottom
+in draw order for a visible control covering the point) is exported as
+`RanUI_PointInControl` and consulted before the pad claims a press. This unblocks
+every window whose buttons land under the pad, not just the options one.
+
+**The plate never followed the option.** `CNameDisplay::SetName` is the only
+place that shows or hides `m_pNameLineBox`, and it runs when a name display is
+handed out - so turning the option on left every name already on screen without
+a plate. Measured at render time: `box vis=0` on every display seconds after
+`opt OK: classic=1`. `CNameDisplay::Render` now tracks the flag directly.
+
+Verified on the Tab S9: after ticking Classic Name and pressing ตกลง the window
+closes and every mob name gains the dark plate (`out/f2c.png`); the plate art is
+black at alpha 177 in `interface_main.dds` at (315,460), which is what the PC
+draws too.
+
+### Still open: touch item interaction
+
+The PC item model is mouse-shaped: 27 distinct item gestures, four of them
+behind ALT/CTRL and so unreachable on a tablet (preview, box contents, chat
+link, buy-without-confirm). Worse, carrying an item makes a stray tap on the
+terrain drop it on the ground with no confirm, and a long press in the world
+cancels a trade offer. Design written up in `MOBILE/ITEM-TOUCH-PLAN.md`: a per-slot
+action sheet, a touch count sheet for split/buy/sell, bigger slot hit areas.
+Not implemented - waiting on four decisions listed at the end of that file.
+
+## Touch item interaction, phases 1-5 and 9 (2026-08-31)
+
+Built to `MOBILE/ITEM-TOUCH-PLAN.md` and verified on LDPlayer (the tablet's
+wireless adb drops mid-session). **LDPlayer runs `lib/x86_64/libran.so`**, so
+every emulator test needs `ABI=x86_64 ./build.sh` as well - an hour went into
+probes that were compiled into the arm64 library while the emulator ran the
+previous day's x86_64 one.
+
+**Phase 1 - carrying is visible and cannot lose an item.**
+`GLCharacter.cpp`'s world-click drop is compiled out on mobile: a tap on the
+ground no longer throws the carried item away, and a long press out in the world
+no longer cancels a trade offer (both were reachable by accident). `CItemMove`
+parks the carried icon at the top centre instead of following the pointer -
+snap, which normally parks it on the hovered slot, is a hover effect and hid the
+icon inside the bag grid, so a full hand looked like an empty one. Tapping that
+icon calls the new `GLCharacter::MobilePutHeldBack`, which finds a free cell the
+way an unequip does. Measured: an item stuck in `SLOT_HOLD` from an earlier
+session was invisible until this landed.
+
+**Phases 2-3 - the action sheet.** `CMobileItemSheet` (new, mobile-only) lists
+what can be done to the tapped item: equip/use, move, split, preview, box
+contents, chat link, enhance, drop, close. Rows come from the client's own
+tests (`sSuitOp.emSuit` for wearable, `IsInvenSplitItem`, `PreviewItemCheckSimple`,
+`ITEM_BOX`/`sRandomBox`), and each row calls the same `Req*` the PC calls. Bag,
+worn gear, the quick tray and storage route into it; a full hand still places,
+swaps and splits on release, and a drag still lifts an item.
+
+**Phase 5 - the count sheet.** `CMobileCountSheet` replaces the number modal for
+split (`-1 / +1 / 1/2 / All`, then `ReqInvenSplit`). Verified: a 600 stack split
+599 off, server accepted.
+
+**Phase 9 - the enhance window.** `CMobileEnhanceWindow`: pick target, pick
+material, press อัพเกรด. It does the carrying itself - `ReqInvenTo` to fill the
+hand, wait for the server, `ReqInvenDrug` on the target, then empty the hand
+whatever happened - which is exactly the PC's carry-and-right-click, with no
+carry state exposed to the player. The picker reuses the action sheet rather
+than drawing a second list. Verified end to end with a cleanser.
+
+Text lives in `gameword.xml` (`MOBILE_ITEM_SHEET`, `MOBILE_ENHANCE`) and
+`gameintext.xml` (`MOBILE_DROP_CONFIRM`), so it translates with the rest -
+which meant writing `MOBILE/tools/rcc-extract/rcc-pack.js`, since the GUI ships
+inside `Gui.rcc` and the loose XML is unreachable on device.
+
+**Still open on this piece:** shop and trade grids still use the PC path (both
+already confirm, so nothing is silently destructive); mix/rebuild/transfer/
+garbage work through the sheet's "move" row; the latched tooltip with a close
+button is not built (the pointer stays parked on the tapped slot, so the tooltip
+already behaves, and the sheet suppresses it while open). Slot hit-padding from
+the plan is **dropped**: cells in these grids are adjacent, so padding one cell
+only steals from its neighbour - bigger targets need a different cell layout,
+which is a data change.
+
+### The touch panels now wear the client's own skin (2026-08-31)
+
+First pass built them out of the combo-box back and a text list, which read as
+bolted on. Rebuilt against what the client already ships:
+
+* **Item sheet** - the ESC menu's frame (`CreateBaseBoxESCMenu`) with one
+  `SIZE22` text button per row, shadowed font and all, because that menu is
+  exactly this menu with different rows.
+* **Count sheet and enhance window** - real `CUIWindowEx` windows built with
+  `CreateBaseWindowLightGray`, so they have the game's title bar, its close
+  button, its frame and its buttons. Their control rects live in
+  `uiinnercfg02.xml` like every other window's.
+
+Two engine rules came out of it, both now in memory:
+
+1. **A derived window must start its control ids at `ET_CONTROL_NEXT`.**
+   `CUIWindow` numbers title/focus-title/close/body from `NO_ID+1`, so ids
+   starting at 1 collide with the frame: the colliding controls never draw, and
+   the container's destructor later double-frees one - a SIGSEGV in `je_free`
+   from `~CBasicTextBox`, and a bogus pointer in the font path on the loading
+   thread. Three of the four steppers were invisible until this was found.
+2. **A window lays its children out from their LOCAL rects every time it moves**,
+   so the layout has to be the local rect - a global position holds only until
+   the next move.
+
+### Touch item UX, second pass (2026-08-31)
+
+Four changes after seeing it in use, each verified on the emulator:
+
+* **The panel opens beside the item's own detail**, not on top of it and not
+  under the thumb: `MobileOpenItemSheet` reads `INFO_DISPLAY`'s rect and puts
+  the panel to its left, or its right when there is no room. The tooltip is no
+  longer suppressed while the panel is up - the two are read together.
+* **The panel wears the tooltip's skin.** `CreateBaseBoxVarTextBox`, the same
+  frame `CBasicVarTextBox` builds itself from, so the pair share a background
+  and an outline. Stretching it is `AlignSubControl` + `SetLocalPos`, not a
+  ratio resize - the ratio drifted as the row count changed and left the frame
+  short of its own rows.
+* **Moving is hold, drag, release** - and the item follows the finger, because
+  the lift now happens on the DOWN edge of the long press while the finger is
+  still on the glass. Lifting on the release instead meant the icon only
+  appeared once the finger had gone. `CItemMove` is back on the client's own
+  path (follow the pointer, honour snap); the parked top-centre icon is gone.
+* **The enhance window has real slots.** Two `CItemImage` slots show what is in
+  them; dropping a carried item on one puts it there, and with the window open
+  the item sheet grows an **ใส่** row that sends a bag cell straight into the
+  slot it belongs in.
+
+Also: the first row now reads **ใช้งาน** rather than สวมใส่.
+
+### Upgrade row honesty, and Auto Potion start/stop (2026-08-31)
+
+**The upgrade row appeared on items that cannot be upgraded.** The rule was
+"any suit, or any material", which is far looser than the client's. Each
+material's real target test is now mirrored from the request that enforces it:
+
+| material | target must be |
+|---|---|
+| grinding stone | a suit with `sSuitOp.wReModelNum > 0` |
+| cleanser | something carrying a disguise (`nidDISGUISE`) |
+| disjunction | not a wrapped item |
+| random-option card | a suit with `sRandomOpt.bPVPItem` |
+| non-drop card | a suit that is not GM-generated |
+| skill reform card | a held weapon that has a skill |
+| wrapper | something not already exchangeable |
+| disguise card | a suit that is not itself a disguise |
+
+and the row is offered only when the bag actually holds a material that takes
+this item (or the item is itself a material) - `CMobileEnhanceWindow::
+CanEnhanceCell`. What is deliberately left to the client to say are the checks
+that depend on state rather than the pair: grade caps, stone counts, class
+match, cost. Verified: a potion no longer offers the row.
+
+**Auto Potion now starts and stops.** OK/Cancel are gone on mobile: **เริ่ม**
+saves the three thresholds and turns auto-potting on, **หยุด** turns it off,
+and the window stays open because the next thing anyone does after stopping is
+change a threshold and start again. The X still closes it. Measured: the
+client's own `Auto-pots start` / `Auto-pots stop` lines appear in the console.
+
+### Icon strip: duplicates out, mini-party back (2026-08-31)
+
+The corner has two rows: standalone buttons on top, the collapsible MENU strip
+below. Quest and item shop existed in both, so the strip's copies are gone on
+mobile - `CBasicGameMenu::CreateSubControl` hides `MENU_QUEST_BUTTON` and
+`MENU_ITEMSHOP_BUTTON`, slides the eight icons to their right along by 25 px
+each and shortens the strip by 50, so there are no holes and the frame ends
+where the icons do. The outer pair is what remains, and the quest one there
+still blinks when something is waiting, which the strip's never did.
+
+`MINIPARTY_OPEN` is no longer force-hidden: it is one of the PC client's own
+icons and it now sits in the top row with the rest instead of as a stray tab
+against the left edge.
+
+Identifying which control was which took a temporary id probe in the row
+layout, because the ids in the comments come from an old census and do not
+match the enum. Both probes are removed. Verified on the emulator: the strip
+lost exactly two icons, nothing else moved, and tapping the shifted icons opens
+the window that now sits there.
+
+### Windows would not move, and the mini-party panel now opens middle-left (2026-08-31)
+
+Dragging a window by its title bar did nothing on touch. The cause was in the
+input shim, not the UI: a pointer position is applied the instant it arrives,
+while button events wait in a queue that drains one per frame. On a drag the
+press was therefore delivered a frame or more after the finger had moved on, so
+`CUIWindow::TranslateUIMessage` saw a press at a point outside the title and
+never started the drag - and the faster the drag, the further outside it was.
+
+Each queued button event now carries the position it happened at
+(`shim/platform/dinput_mobile.cpp`). Draining one applies its position for that
+frame and hands the real position back on the next pump - a straight assignment
+with no delta and no `DIMOFS` event, because the motion between the two points
+was already accumulated when it arrived; counting it twice would have spun the
+camera. `RanInput_PointerMove` writes to whichever of the two the borrow leaves
+live, and `RanInput_WarpPointer` (the client pinning the cursor) cancels a
+borrow outright.
+
+Two smaller fixes went with it: `CMobileEnhanceWindow::Update` was calling
+`CUIGroup::Update` and so skipped the drag branch that lives in
+`CUIWindow::Update`; and the touch layer chose its drag button from
+`RanUI_MouseInControl()`, a stale hover flag, instead of a fresh
+`RanUI_PointInControl` hit test at the point the finger went down - over a
+window that made the drag a camera drag.
+
+The mini-party panel is placed against the middle of the left edge on first
+appearance (`DxGameStage::MobileArrangeInterface`). Its own place is the top
+left, where the health, level and experience bars already are. Placement happens
+once per appearance, so a panel the player drags elsewhere stays there.
+
+Verified on the emulator (screenshots `native/out/k2.png`, `k6.png`, `k7.png`):
+the inventory window and the upgrade window both follow a title drag, and the
+mini-party panel opens centred on the left edge. Probes removed, both ABIs
+rebuilt, `out/ran-phase3.apk` repacked.
+
+### The action sheet: detail stays up, no move row, honest use row (2026-08-31)
+
+Three things were wrong with the sheet a tap opens.
+
+**The item detail vanished behind it.** `SHOW_ITEM_INFO` refuses to draw while
+the pointer is inside a control, which is a hover rule - and the sheet is under
+the finger that opened it, so the detail the player is deciding from was thrown
+away the moment the rows appeared. `CInnerInterface::MobilePinItemInfo` is the
+sheet's own hover: called every frame the sheet is open, it steps around that one
+rule and pins the box at a fixed place instead of at the pointer, so tapping a row
+cannot drag the detail (and with it the panel) out from under the finger. The box
+only knows its size once it has been laid out, so the pin clamps against the live
+rect each frame, and `CMobileItemSheet::PlaceAt` keeps the panel beside it as it
+settles. `MobileUnpinItemInfo` restores the cursor gap on close, or the next
+hover would draw its tooltip wherever the sheet left it.
+
+**ย้าย is gone.** A long press already lifts the item and carries it; the row was a
+second way to do what the finger does.
+
+**ใช้งาน is offered only when something would happen.** It was gated on the suit
+switch alone - and `SUIT_HEADGEAR` is zero, so every card, potion and megaphone
+in the bag read as a hat and got an equip row that failed silently. The real gate
+is `CHECKSLOT_ITEM`, which refuses anything that is not one of seven item types
+before it looks at the suit; `IsWearable` now runs that test first. Beside it,
+`IsUsable` mirrors `ReqInvenDrug`'s own type switch (a cure only counts with a
+drug effect on it), and `IsStorageUsable` mirrors `ReqStorageDrug`, which takes
+only a drink, a skill book and a pet skill book. One label for both branches, since
+an item is either put on or used up, never both.
+
+Verified on the emulator: sword ใช้งาน/อัพเกรด/ลิงก์ในแชท/ทิ้ง/ปิด with its detail
+beside the panel (`native/out/q2.png`), megaphone แยก/ลิงก์ในแชท/ปิด with no use row
+(`q1.png`), recall card ใช้งาน (`r1.png`), talisman and skill book both keeping
+theirs. Both ABIs rebuilt, `out/ran-phase3.apk` repacked.
+
+### The use row now agrees with the line above it (2026-08-31)
+
+An item whose detail said [ไม่สามารถใช้ได้] - gear for another class, or a sword
+past this character's Dex - still carried a ใช้งาน row. Type and suit were the only
+tests; the requirements were not checked at all.
+
+Both paths are gated now, each by its own test, which are not the same test:
+equipping runs `ACCEPT_ITEM` (class, school, brightness, level, stats, skill) -
+that is the very call whose result prints the red line in the detail, so the row
+and the line can no longer disagree - and using runs `SIMPLE_CHECK_ITEM` (class,
+school, level), which is what `ReqInvenDrug` and `ReqStorageDrug` check before
+they do anything. A worn item's disguise id picks the two-argument form, as
+`ReqInvenToWear` does.
+
+Verified on the emulator: BaiYou Sword, detail [ไม่สามารถใช้ได้], rows อัพเกรด /
+ลิงก์ในแชท / ทิ้ง / ปิด with no use row (`native/out/s1.png`); recall card and
+talisman, both [สามารถใช้ได้], keep theirs (`s2.png`, `s3.png`).
+
+### A hold on another player opens their menu (2026-08-31)
+
+Shift + left click is how the PC opens the P2P menu on another player - trade,
+whisper, party, club, friend, view gear. There is no Shift on a tablet, so that
+whole menu was unreachable.
+
+The 450 ms hold is now that gesture. In `GLCharacter::FindActionTarget`,
+`bODER_P2P` - which is what makes the function return a player as
+`EMACTAR_PC_P2P` (someone to deal with) rather than `EMACTAR_PC_PVP` (someone to
+hit) - is set by the right mouse button on mobile, which is what the hold
+produces. The state is tested with `DOWNED|UP|DUP`, not `DOWNED` alone: the frame
+the menu opens on is the frame the finger lifts, and by then the button is no
+longer held.
+
+The reaction runs **ahead of** the skill branch in `PlayerUpdate`, not as another
+arm after it. The same right button casts a skill, and a skill is nearly always in
+hand, so as the last arm the hold never ran once - it reached the skill branch,
+which has nothing to do with a P2P target, and stopped there.
+
+One regression prevented while testing: the mobile target latch (which stores what
+a click landed on so the attack button and the skill arc know what to fight) would
+have stored the P2P actor, and neither `MobileAttackNearest` nor
+`MobileSkillAtTarget` accepts one - so a hold on an enemy would have left the
+player unable to attack or cast until they tapped again. The latch now skips
+`EMACTAR_PC_P2P`.
+
+Verified on the emulator: hold on test02 opens the six-icon P2P menu titled with
+their name (`native/out/v1.png`); a plain tap still selects them, red HP bar and
+all (`v2.png`). The menu's own buttons work through touch - whisper put `@test02`
+into the chat box and printed the whisper hint (`w1c.png`). The magnifier (view
+character) does nothing, on mobile and on the PC alike: `RequestCharacterInfo`
+returns immediately unless `RANPARAM::bFeatureViewCharInfo` is set, and it
+defaults FALSE and is off in this config. Both ABIs rebuilt, `out/ran-phase3.apk`
+repacked.
+
+### The touch overlay is Gunmetal now (2026-08-31)
+
+The on-screen controls were warm cream with a terracotta accent - the one pale
+warm thing on a screen full of the client's own dark steel windows, so they read
+as bolted on. They are now the same gunmetal, lit from the top left, with colour
+reserved for state: amber when an action is available, cyan when a system is on,
+crimson for PK.
+
+**The renderer change everything rides on: a per-vertex colour attribute.** The
+overlay carried one flat colour per draw and faked a gradient by stacking up to
+thirty filled fans. That was the banding on the stick, the visible polygon
+corners on every disc, and most of the draw calls. With `aColor` a gradient is
+one fan and a feathered edge is a ring of transparent vertices, so it is better
+looking *and* cheaper. On top of that: an additive pass for blooms, a dark halo
+under each control, a gloss over the face, a catchlight on the top edge, and
+`drawArcFade` - an arc whose alpha ramps to nothing at both ends, which is what
+removes the hard notch where the lit and shadowed halves of a bevel meet.
+
+**The glyphs are painted, and measured rather than drawn from memory.** A sword
+in steel with a lit edge and gold furniture; the same sword crossed for PK; a
+wooden chest with iron straps for loot. All three were rasterised from their
+references on game-icons.net and measured:
+
+- lorc's *broadsword*: -45 degrees from vertical, length/width 2.46, guard/blade
+  5.8 - about twice as slender as the one drawn by eye, which had looked like a
+  toy.
+- delapouite's *chest*: the lid is a flat-topped trapezoid at 36% of the height,
+  not a dome at 25%; four vertical gaps at +/-0.52 and +/-0.78 are where the
+  bands go; the lock plate is large and straddles the seam with the keyhole cut
+  through it.
+
+Painted art cannot also carry state colour - a crimson sword is not a sword - so
+state moved outward to the chrome, and the art only ever dims.
+
+**Also changed:** the stick's well went from a near-opaque black disc to 30% with
+eight ticks and a heading wedge on the rim, so the world shows through and the
+control finally shows direction; empty skill slots keep a dimmed frame instead of
+being stripped to nothing, which had read as holes where buttons should be.
+
+**Two process notes**, both of which cost several rounds before they stuck:
+
+1. *Judge at true size.* Every glyph that looked right blown up failed at the
+   size it is actually drawn - a hand became an arrow, an arrow's shaft vanished,
+   a chest became a house. The preview renders every candidate twice, and only
+   the small row decides anything.
+2. *Measure the reference, do not copy it by eye.* Checking the chest's aspect
+   ratio passed (1.29 against 1.37) while every internal proportion was wrong.
+   Extracting the mask and reading coordinates took two minutes and settled what
+   several rounds of taste could not.
+
+Tooling that came out of it and is worth keeping, in the session scratchpad:
+`svglib.js` (SVG path parser plus mask rasteriser), `measure.js` (principal axis
+and width profile of a reference icon), `art.js` (shaded glyph preview at true
+button size), `svgview.js` (rasterise reference SVGs to look at).
+
+Verified on the emulator: `native/out/hud3_r.png`. Both ABIs rebuilt,
+`out/ran-phase3.apk` repacked.
+
+**Still open on this piece:** auto-loot on a hold of the loot button
+(`GLCharacter::m_bAutoLoot` already exists and is only ever set by the
+auto-pilot); the attack button dimming when nothing is targeted; the skill
+ready-flash and the radial cooldown sweep; and the page arrows are still 76 px
+against a 92 px minimum touch target.
+
+### Three dead toggles: a window nobody can see was eating the presses (2026-08-31)
+
+The auto-target, PK and camera-lock buttons did nothing. A probe in
+`RanTouch_PointerDown` logging any press the client's hit test swallowed showed
+it was exactly those three and nothing else:
+
+    padeat: slot -4 at 1188,439      auto
+    padeat: slot -5 at 1188,368      PK
+    padeat: slot -7 at 1188,298      camera lock
+
+A second probe inside `PointInList` named the culprit:
+
+    padblock: id 114 rect 1080,200 200x300
+
+Id 114 is `GENDER_CHANGE_WINDOW` - parked at (1080,200) 200x300, drawing
+nothing, with its visible flag set. It sits directly over the pad's mode-toggle
+column, so those three buttons had been dead since the day the hit test was
+added (in this session, for the Classic Name fix - the pad used to eat presses
+meant for the client's own windows, and this was the cure).
+
+`CUIMan::IsPointInControl` filtered on `IsVisible()`, which this window passes.
+It now filters on `IsNoRender()` instead: **a control the player cannot see must
+not take a press away from one they can.** The loot button and the page arrows
+were never affected, which is why the failure looked arbitrary.
+
+Verified: the probe logs nothing, and all three toggles light - camera lock cyan,
+PK crimson, auto correctly switching itself off when PK comes on, which is the
+client's own mutual exclusion. Both probes removed.
+
+**Also in this pass**
+
+- **The page readout is gunmetal.** It was the client's own cream chamfered
+  plate, which was right while the overlay was cream and was the one bright
+  rectangle on the screen once it was not. Dark chamfer, steel rim, and the page
+  number in amber because the page you are on is a state, and amber is what
+  state is drawn in everywhere else on the pad. Verified stepping 1 -> 3 with
+  the arrows (`native/out/pg2c.png`).
+- **Attack and loot moved inboard**, from `g_unit * 1.35` to `g_unit * 1.68`
+  from the right edge. The arrows and mode toggles stack *outboard* of the
+  attack button, so measuring the inset to the attack button alone put it right
+  of the middle of its own cluster and it read as shoved into the corner.
+
+- **Attack and loot moved inboard again**, `g_unit * 1.68` -> `g_unit * 2.00`. The skill
+  arc follows, because the client derives it from `RanTouch_GetAttackCircle`.
+- **The page plate lost its "/ 4".** The total never changes, so it was a
+  constant occupying a third of the plate to say nothing, and it kept the
+  figure small. The page number now has the whole well and is set larger
+  (`0.68` of the well height, up from `0.52`). Verified on the emulator:
+  `native/out/hud7_c.png`.
+- **The page plate was overlapping the attack ring**, by 2.7 logical px - 5 on
+  device. The arrow column was positioned relative to `attackX`, so pulling the
+  attack button inboard dragged the column in with it, and the plate is wider
+  than the arrows (`0.46` of a module against `0.34`) so the plate is what
+  reached back and collided. The column is now anchored to the screen edge
+  (`g_width - g_unit * 0.42`), which decouples it: the action buttons can move
+  without it following. Measured clear by 79 logical px, 19 px right margin.
+  Screenshot `native/out/hud8_c.png`.
+
+### How far the attack button can actually move: 1.48 modules (2026-08-31)
+
+Pulling the attack button inboard was pushing the skill arc over the chat panel.
+The client hangs the arc off this button, so the button cannot be placed on its
+own - and the numbers were guessed twice before being measured.
+
+Measured off a running build rather than assumed:
+
+- a skill slot is **41 logical px**, not the 33 an old comment implies. Taken
+  from the rendered rim: it is 26.5 px in radius and the overlay draws it at
+  `1.30` of the slot half-width.
+- so `fInner = 159.0`, `fOuter = 232.6`, rim `26.7` - the arc reaches
+  **259 px left of the attack centre**.
+- the chat panel's right edge is at **x = 862**, found by walking a brightness
+  profile across row 1260 of a screenshot until the panel's step up to the world
+  appears.
+
+That gives a hard ceiling of **1.48 modules** from the right edge. Settled at
+`g_unit * 1.45`, which leaves 13 px between the outermost slot and the chat.
+
+Both intermediate values were already wrong when they shipped: 1.68 overlapped by
+11 px and 1.80 by 23, which is why this only surfaced as "the skill slot overlaps
+the chat" after two rounds of moving it.
+
+**This is most of the room there is.** Going further in means narrowing the chat
+panel or tightening the arc, and the arc is near its own minimum already:
+neighbours need 1.6 slot widths between centres, spacing along a quarter arc is
+`0.393 * fInner`, and the inner radius only just provides it.
+
+Verified on the emulator: `native/out/edge2.png`, a crop of the boundary itself
+rather than the whole screen.

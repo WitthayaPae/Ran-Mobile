@@ -20,6 +20,12 @@
 extern "C" void RanGLR_InvalidateStateCache(void);
 extern "C" void RanInput_PointerWheel(int dz);
 
+//  Whether one of the game's own controls covers a point.
+//
+//  Weakly linked: this file is also built into targets that have no client to
+//  ask, and a pad with no windows over it behaves exactly as it did before.
+extern "C" int RanUI_PointInControl(int x, int y) __attribute__((weak));
+
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanTouch", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanTouch", __VA_ARGS__)
 
@@ -125,15 +131,30 @@ int unclaimedCount() {
 // ------------------------------------------------------------------- GL
 GLuint g_prog = 0, g_vbo = 0, g_vao = 0;
 
-//  Scratch for one shape at a time; the buffer is sized to hold it.
-float g_verts[256 * 2];
-GLint  uViewport = -1, uColor = -1;
+//  Interleaved x,y,r,g,b,a. Sized for the largest shape we emit, which is a
+//  96-segment feathered disc: (1 + 97 + 97) vertices.
+const int   kFloatsPerVert = 6;
+float g_verts[1600 * kFloatsPerVert];
+GLint uViewport = -1;
+
+//  One colour, passed around as four floats, so a helper can take "a colour"
+//  rather than four parameters that can be given in the wrong order.
+struct Col { float r, g, b, a; };
+inline Col rgba(float r, float g, float b, float a) { Col c = { r, g, b, a }; return c; }
+inline Col alpha(Col c, float k) { c.a *= k; return c; }
+inline Col mixc(Col x, Col y, float t) {
+    return rgba(x.r + (y.r - x.r) * t, x.g + (y.g - x.g) * t,
+                x.b + (y.b - x.b) * t, x.a + (y.a - x.a) * t);
+}
 
 const char *kVS =
     "#version 300 es\n"
     "layout(location=0) in vec2 aPos;\n"
+    "layout(location=1) in vec4 aCol;\n"
     "uniform vec2 uViewport;\n"
+    "out vec4 vCol;\n"
     "void main() {\n"
+    "    vCol = aCol;\n"
     //  Surface pixels, y down, to clip space.
     "    vec2 p = vec2(aPos.x / uViewport.x, 1.0 - aPos.y / uViewport.y);\n"
     "    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
@@ -142,24 +163,24 @@ const char *kVS =
 const char *kFS =
     "#version 300 es\n"
     "precision mediump float;\n"
-    "uniform vec4 uColor;\n"
+    "in vec4 vCol;\n"
     "out vec4 oColor;\n"
-    "void main() { oColor = uColor; }\n";
+    "void main() { oColor = vCol; }\n";
 
 GLuint compile(GLenum type, const char *src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, NULL);
-    glCompileShader(s);
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, NULL);
+    glCompileShader(sh);
     GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
     if (!ok) {
         char log[512];
-        glGetShaderInfoLog(s, sizeof(log), NULL, log);
+        glGetShaderInfoLog(sh, sizeof(log), NULL, log);
         LOGE("touch shader: %s", log);
-        glDeleteShader(s);
+        glDeleteShader(sh);
         return 0;
     }
-    return s;
+    return sh;
 }
 
 bool buildProgram() {
@@ -181,22 +202,18 @@ bool buildProgram() {
         return false;
     }
     uViewport = glGetUniformLocation(g_prog, "uViewport");
-    uColor    = glGetUniformLocation(g_prog, "uColor");
     glGenBuffers(1, &g_vbo);
 
     //  A VAO of our own, and this is not optional.
     //
     //  glVertexAttribPointer records into whichever VAO is bound. Without one of
     //  these the overlay was writing attribute 0 of whatever the client had
-    //  bound, pointing that VAO at this two-float buffer. The renderer caches
-    //  which VAOs it has already described and rebinds them without describing
-    //  them again, so it then drew geometry out of here - long white streaks
-    //  across the scene, with the driver allocating GPU memory inside every draw
-    //  call trying to service it. That surfaced as an ANR: a stalled render loop
+    //  bound, pointing that VAO at this buffer. The renderer caches which VAOs
+    //  it has already described and rebinds them without describing them again,
+    //  so it then drew geometry out of here - long white streaks across the
+    //  scene, with the driver allocating GPU memory inside every draw call
+    //  trying to service it. That surfaced as an ANR: a stalled render loop
     //  stops input being consumed, and the system kills the app for it.
-    //
-    //  It was harmless only while the overlay drew last, after all client
-    //  drawing. Moving it under the interface is what armed it.
     glGenVertexArrays(1, &g_vao);
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
@@ -204,90 +221,165 @@ bool buildProgram() {
     //  shape: forty glBufferData calls a frame is forty allocations, and this
     //  driver charges real time for them.
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(g_verts), NULL, GL_STREAM_DRAW);
+    const GLsizei stride = kFloatsPerVert * sizeof(float);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (const void *)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (const void *)(2 * sizeof(float)));
     glBindVertexArray(0);
 
     return true;
 }
 
-//  A filled circle as a fan, and a ring as a triangle strip. Both are rebuilt
-//  per draw: a handful of controls a frame is nothing next to the scene.
+// ------------------------------------------------------------- primitives
 
-void drawFan(float cx, float cy, float r, float r_, float g_, float b_, float a_) {
-    //  Segment count follows the radius. A fixed 40-gon is smooth on a page
-    //  arrow and visibly faceted on the attack button, which is five times the
-    //  size - the flat sides are what read as "pixelated".
-    const int seg = r > 80.0f ? 96 : (r > 40.0f ? 64 : 40);
-    int n = 0;
-    g_verts[n++] = cx; g_verts[n++] = cy;
-    for (int i = 0; i <= seg; ++i) {
-        const float t = (float)i / (float)seg * 6.2831853f;
-        g_verts[n++] = cx + cosf(t) * r;
-        g_verts[n++] = cy + sinf(t) * r;
-    }
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, n / 2);
+int g_n = 0;                                   //  floats written this shape
+
+inline void vtx(float x, float y, Col c) {
+    if (g_n + kFloatsPerVert > (int)(sizeof(g_verts) / sizeof(g_verts[0]))) return;
+    g_verts[g_n++] = x; g_verts[g_n++] = y;
+    g_verts[g_n++] = c.r; g_verts[g_n++] = c.g; g_verts[g_n++] = c.b; g_verts[g_n++] = c.a;
+}
+inline void begin() { g_n = 0; }
+inline void flush(GLenum mode) {
+    if (g_n <= 0) return;
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(g_n * sizeof(float)), g_verts);
+    glDrawArrays(mode, 0, g_n / kFloatsPerVert);
+    g_n = 0;
 }
 
-//  The bottom `frac` of a disc, filled flat.
+//  Segment count follows the radius. A fixed 40-gon is smooth on a page arrow
+//  and visibly faceted on the attack button, which is five times the size.
+inline int segs(float r) { return r > 80.0f ? 96 : (r > 40.0f ? 64 : 40); }
+
+//  A disc whose centre and edge colours differ, in ONE draw.
 //
-//  This is the client's recharge bar shaped to a round button: the engine draws
-//  a vertical progress bar over the square icon, dark, covering the fraction of
-//  the delay still to run. Rows of a triangle strip, each as wide as the circle
-//  is at that height, give the same wipe with a curved edge instead of a square
-//  one - and being rows rather than a rotating sweep, it reads the same way as
-//  the original at a glance.
+//  This is what drawTurned used to approximate with up to thirty stacked fans,
+//  and the steps between those fans were visible on anything large. It also
+//  carries a feather: a ring of fully transparent vertices just outside the
+//  rim, which is the only antialiasing available here and is what removes the
+//  polygon corners from every round control.
+void discGrad(float cx, float cy, float r, Col centre, Col edge) {
+    const int n = segs(r);
+    const float fe = 1.25f;                    //  feather width in pixels
+    begin();
+    vtx(cx, cy, centre);
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        vtx(cx + cosf(t) * r, cy + sinf(t) * r, edge);
+    }
+    flush(GL_TRIANGLE_FAN);
+
+    Col clear = edge; clear.a = 0.0f;
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        const float c = cosf(t), si = sinf(t);
+        vtx(cx + c * r, cy + si * r, edge);
+        vtx(cx + c * (r + fe), cy + si * (r + fe), clear);
+    }
+    flush(GL_TRIANGLE_STRIP);
+}
+
+void drawFan(float cx, float cy, float r, float r_, float g_, float b_, float a_) {
+    discGrad(cx, cy, r, rgba(r_, g_, b_, a_), rgba(r_, g_, b_, a_));
+}
+
+//  A ring, feathered on both edges.
+void drawRing(float cx, float cy, float rInner, float rOuter,
+              float r_, float g_, float b_, float a_) {
+    const int n = segs(rOuter);
+    const Col c = rgba(r_, g_, b_, a_);
+    Col clear = c; clear.a = 0.0f;
+    const float fe = 1.0f;
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        const float co = cosf(t), si = sinf(t);
+        vtx(cx + co * (rInner - fe), cy + si * (rInner - fe), clear);
+        vtx(cx + co * rInner,        cy + si * rInner,        c);
+    }
+    flush(GL_TRIANGLE_STRIP);
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        const float co = cosf(t), si = sinf(t);
+        vtx(cx + co * rInner, cy + si * rInner, c);
+        vtx(cx + co * rOuter, cy + si * rOuter, c);
+    }
+    flush(GL_TRIANGLE_STRIP);
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        const float co = cosf(t), si = sinf(t);
+        vtx(cx + co * rOuter,        cy + si * rOuter,        c);
+        vtx(cx + co * (rOuter + fe), cy + si * (rOuter + fe), clear);
+    }
+    flush(GL_TRIANGLE_STRIP);
+}
+
+//  The bottom `frac` of a disc, flat - the client's recharge wipe.
 void drawDiscBottom(float cx, float cy, float r, float frac,
                     float r_, float g_, float b_, float a_) {
     if (frac <= 0.0f || r <= 0.0f) return;
-    if (frac > 1.0f) frac = 1.0f;
-    const float top = cy + r - 2.0f * r * frac;   // the wipe's upper edge
+    const Col c = rgba(r_, g_, b_, a_);
     const int rows = 24;
-    int n = 0;
+    const float y0 = cy + r - 2.0f * r * frac;
+    begin();
     for (int i = 0; i <= rows; ++i) {
-        const float y = top + (cy + r - top) * ((float)i / (float)rows);
+        const float y = y0 + (cy + r - y0) * (float)i / (float)rows;
         const float dy = y - cy;
-        float half = r * r - dy * dy;
-        half = half > 0.0f ? sqrtf(half) : 0.0f;
-        g_verts[n++] = cx - half; g_verts[n++] = y;
-        g_verts[n++] = cx + half; g_verts[n++] = y;
+        float half = r * r - dy * dy; half = half > 0.0f ? sqrtf(half) : 0.0f;
+        vtx(cx - half, y, c);
+        vtx(cx + half, y, c);
     }
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, n / 2);
+    flush(GL_TRIANGLE_STRIP);
 }
 
-void drawRing(float cx, float cy, float rInner, float rOuter,
-              float r_, float g_, float b_, float a_) {
-    const int seg = rOuter > 80.0f ? 96 : (rOuter > 40.0f ? 64 : 40);
-    int n = 0;
-    for (int i = 0; i <= seg; ++i) {
-        const float t = (float)i / (float)seg * 6.2831853f;
-        const float c = cosf(t), s = sinf(t);
-        g_verts[n++] = cx + c * rOuter; g_verts[n++] = cy + s * rOuter;
-        g_verts[n++] = cx + c * rInner; g_verts[n++] = cy + s * rInner;
+void drawArc(float cx, float cy, float rInner, float rOuter,
+             float a0, float a1, float r_, float g_, float b_, float a_) {
+    const int n = 24;
+    const Col c = rgba(r_, g_, b_, a_);
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float t = a0 + (a1 - a0) * (float)i / (float)n;
+        const float co = cosf(t), si = sinf(t);
+        vtx(cx + co * rOuter, cy + si * rOuter, c);
+        vtx(cx + co * rInner, cy + si * rInner, c);
     }
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, n / 2);
+    flush(GL_TRIANGLE_STRIP);
 }
 
-//  A solid triangle for the page arrows. `dir` is -1 for up, +1 for down.
-//  An arbitrary quad, wound as a fan. The slash in "/ 4" is a rotated bar and
-//  the segment digits are all rectangles, so everything below is built on this.
+//  An arc whose alpha ramps up from nothing and back down again.
+//
+//  The bevel is a lit arc and a shadowed arc, and with a flat alpha each one
+//  stops dead where it meets the other - two hard notches on every control,
+//  visible on the stick as a step at two o'clock. Fading the ends is only
+//  possible now the colour is per vertex, and it is what makes the rim look
+//  turned rather than painted in two halves.
+void drawArcFade(float cx, float cy, float rInner, float rOuter,
+                 float a0, float a1, Col c) {
+    const int n = 28;
+    begin();
+    for (int i = 0; i <= n; ++i) {
+        const float u = (float)i / (float)n;
+        const float t = a0 + (a1 - a0) * u;
+        //  sin gives 0 at both ends and 1 in the middle.
+        Col k = c; k.a = c.a * sinf(u * 3.14159265f);
+        const float co = cosf(t), si = sinf(t);
+        vtx(cx + co * rOuter, cy + si * rOuter, k);
+        vtx(cx + co * rInner, cy + si * rInner, k);
+    }
+    flush(GL_TRIANGLE_STRIP);
+}
+
 void drawQuad4(float x0, float y0, float x1, float y1,
                float x2, float y2, float x3, float y3,
                float r_, float g_, float b_, float a_) {
-    int n = 0;
-    g_verts[n++] = x0; g_verts[n++] = y0;
-    g_verts[n++] = x1; g_verts[n++] = y1;
-    g_verts[n++] = x2; g_verts[n++] = y2;
-    g_verts[n++] = x3; g_verts[n++] = y3;
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, n / 2);
+    const Col c = rgba(r_, g_, b_, a_);
+    begin();
+    vtx(x0, y0, c); vtx(x1, y1, c); vtx(x2, y2, c); vtx(x3, y3, c);
+    flush(GL_TRIANGLE_FAN);
 }
 
 void drawRect(float x, float y, float w, float h,
@@ -295,34 +387,48 @@ void drawRect(float x, float y, float w, float h,
     drawQuad4(x, y, x + w, y, x + w, y + h, x, y + h, r_, g_, b_, a_);
 }
 
-//  A vertical band gradient, since a draw carries one flat colour.
-//
-//  RAN's readouts are a light-to-grey vertical ramp; at this size a handful of
-//  bands is indistinguishable from a smooth one, and it costs no shader work.
-void drawRamp(float x, float y, float w, float h,
-              float r0, float g0, float b0, float r1, float g1, float b1, float a_) {
-    const int kBands = 7;
-    for (int i = 0; i < kBands; ++i) {
-        const float t = (float)i / (float)(kBands - 1);
-        drawRect(x, y + h * (float)i / kBands, w, h / kBands + 1.0f,
-                 r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t, a_);
-    }
+//  A convex polygon, which is what every painted glyph is built from.
+void drawPoly(const float *xy, int count, Col c) {
+    if (count < 3) return;
+    begin();
+    for (int i = 0; i < count; ++i) vtx(xy[i * 2], xy[i * 2 + 1], c);
+    flush(GL_TRIANGLE_FAN);
 }
 
-//  The client's plate outline: a rectangle with its corners cut.
+//  A round-capped line, as one strip plus two fans. Used by the loot chevron
+//  and the grip wraps.
+void drawCapsule(float x0, float y0, float x1, float y1, float hw, Col c) {
+    float dx = x1 - x0, dy = y1 - y0;
+    const float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.0001f) { discGrad(x0, y0, hw, c, c); return; }
+    dx /= len; dy /= len;
+    const float nx = -dy * hw, ny = dx * hw;
+    drawQuad4(x0 + nx, y0 + ny, x1 + nx, y1 + ny,
+              x1 - nx, y1 - ny, x0 - nx, y0 - ny, c.r, c.g, c.b, c.a);
+    discGrad(x0, y0, hw, c, c);
+    discGrad(x1, y1, hw, c, c);
+}
+
+void drawRamp(float x, float y, float w, float h,
+              float r0, float g0, float b0, float r1, float g1, float b1, float a_) {
+    const Col top = rgba(r0, g0, b0, a_), bot = rgba(r1, g1, b1, a_);
+    begin();
+    vtx(x, y, top); vtx(x + w, y, top); vtx(x, y + h, bot); vtx(x + w, y + h, bot);
+    flush(GL_TRIANGLE_STRIP);
+}
+
 void drawChamfer(float x, float y, float w, float h, float cut,
                  float r_, float g_, float b_, float a_) {
-    int n = 0;
+    const Col c = rgba(r_, g_, b_, a_);
     const float pts[8][2] = {
-        { x + cut,     y         }, { x + w - cut, y         },
-        { x + w,       y + cut   }, { x + w,       y + h - cut },
-        { x + w - cut, y + h     }, { x + cut,     y + h     },
-        { x,           y + h - cut }, { x,         y + cut   },
+        { x + cut,     y           }, { x + w - cut, y           },
+        { x + w,       y + cut     }, { x + w,       y + h - cut },
+        { x + w - cut, y + h       }, { x + cut,     y + h       },
+        { x,           y + h - cut }, { x,           y + cut     },
     };
-    for (int i = 0; i < 8; ++i) { g_verts[n++] = pts[i][0]; g_verts[n++] = pts[i][1]; }
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, n / 2);
+    begin();
+    for (int i = 0; i < 8; ++i) vtx(pts[i][0], pts[i][1], c);
+    flush(GL_TRIANGLE_FAN);
 }
 
 //  Seven-segment digits. Only 1..4 are ever shown, but the whole set is here
@@ -332,79 +438,45 @@ void drawDigit(float x, float y, float w, float h, int d,
     const float t = w * 0.22f;                 // stroke
     const float midY = y + h * 0.5f - t * 0.5f;
     //                      a      b      c      d      e      f      g
-    static const int kSeg[10][7] = {
-        {1,1,1,1,1,1,0}, {0,1,1,0,0,0,0}, {1,1,0,1,1,0,1}, {1,1,1,1,0,0,1},
-        {0,1,1,0,0,1,1}, {1,0,1,1,0,1,1}, {1,0,1,1,1,1,1}, {1,1,1,0,0,0,0},
-        {1,1,1,1,1,1,1}, {1,1,1,1,0,1,1},
+    static const bool on[10][7] = {
+        {1,1,1,1,1,1,0},{0,1,1,0,0,0,0},{1,1,0,1,1,0,1},{1,1,1,1,0,0,1},
+        {0,1,1,0,0,1,1},{1,0,1,1,0,1,1},{1,0,1,1,1,1,1},{1,1,1,0,0,0,0},
+        {1,1,1,1,1,1,1},{1,1,1,1,0,1,1},
     };
     if (d < 0 || d > 9) return;
-    const int *S = kSeg[d];
-    if (S[0]) drawRect(x + t,         y,               w - 2*t, t, r_, g_, b_, a_);
-    //	The verticals meet in the middle rather than stopping short of it.
-    //
-    //	Leaving the classic seven-segment gap there made a 1 - which is only its
-    //	two right-hand bars - read as a colon.
-    if (S[1]) drawRect(x + w - t,     y + t,           t, h*0.5f - t*0.5f, r_, g_, b_, a_);
-    if (S[2]) drawRect(x + w - t,     midY,            t, h*0.5f - t*0.5f, r_, g_, b_, a_);
-    if (S[3]) drawRect(x + t,         y + h - t,       w - 2*t, t, r_, g_, b_, a_);
-    if (S[4]) drawRect(x,             midY,            t, h*0.5f - t*0.5f, r_, g_, b_, a_);
-    if (S[5]) drawRect(x,             y + t,           t, h*0.5f - t*0.5f, r_, g_, b_, a_);
-    if (S[6]) drawRect(x + t,         midY,            w - 2*t, t, r_, g_, b_, a_);
-}
-
-//  A slice of a ring. The sheen along the top of a machined face is an arc,
-//  not a full ring - a ring reads as a second rim.
-void drawArc(float cx, float cy, float rInner, float rOuter,
-             float a0, float a1,
-             float r_, float g_, float b_, float a_) {
-    const int seg = 24;
-    int n = 0;
-    for (int i = 0; i <= seg; ++i) {
-        const float t = a0 + (a1 - a0) * (float)i / (float)seg;
-        const float c = cosf(t), si = sinf(t);
-        g_verts[n++] = cx + c * rOuter; g_verts[n++] = cy + si * rOuter;
-        g_verts[n++] = cx + c * rInner; g_verts[n++] = cy + si * rInner;
-    }
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, n / 2);
-}
-
-//  A turned metal face: concentric bands, bright near the middle and falling
-//  away to the edge.
-//
-//  The overlay carries one flat colour per draw, so a gradient has to be built
-//  out of steps. On a disc the natural direction is radial - a handful of rings
-//  is smooth at these sizes, and it gives the face the domed look that separates
-//  a machined button from a flat sticker.
-void drawTurned(float cx, float cy, float r,
-                float rc, float gc, float bc,      // centre
-                float re, float ge, float be,      // edge
-                float a_) {
-    //  A domed face, stepped finely enough that the steps do not show.
-    //
-    //  The first version used a fixed nine bands regardless of size. On the
-    //  attack button that is a twelve pixel step and you see every ring, which
-    //  is what made these look wrong. Tying the count to the radius keeps a step
-    //  near a pixel whatever the control, so it reads as a gradient again.
-    const int bands = (int)(r * 0.35f) < 10 ? 10 : ((int)(r * 0.35f) > 30 ? 30 : (int)(r * 0.35f));
-    for (int i = bands; i >= 1; --i) {
-        const float t = (float)i / (float)bands;
-        const float k = 1.0f - t;
-        drawFan(cx, cy, r * t,
-                re + (rc - re) * k, ge + (gc - ge) * k, be + (bc - be) * k, a_);
-    }
+    const bool *S = on[d];
+    if (S[0]) drawRect(x + t,     y,              w - t * 2.0f, t, r_, g_, b_, a_);
+    if (S[1]) drawRect(x + w - t, y + t,          t, h * 0.5f - t * 1.5f, r_, g_, b_, a_);
+    if (S[2]) drawRect(x + w - t, midY + t,       t, h * 0.5f - t * 1.5f, r_, g_, b_, a_);
+    if (S[3]) drawRect(x + t,     y + h - t,      w - t * 2.0f, t, r_, g_, b_, a_);
+    if (S[4]) drawRect(x,         midY + t,       t, h * 0.5f - t * 1.5f, r_, g_, b_, a_);
+    if (S[5]) drawRect(x,         y + t,          t, h * 0.5f - t * 1.5f, r_, g_, b_, a_);
+    if (S[6]) drawRect(x + t,     midY,           w - t * 2.0f, t, r_, g_, b_, a_);
 }
 
 void drawTri(float cx, float cy, float r, float dir,
              float r_, float g_, float b_, float a_) {
-    int n = 0;
-    g_verts[n++] = cx;            g_verts[n++] = cy + r * dir;
-    g_verts[n++] = cx - r * 0.9f; g_verts[n++] = cy - r * dir * 0.7f;
-    g_verts[n++] = cx + r * 0.9f; g_verts[n++] = cy - r * dir * 0.7f;
-    glUniform4f(uColor, r_, g_, b_, a_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), g_verts);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    const Col c = rgba(r_, g_, b_, a_);
+    begin();
+    vtx(cx,            cy + r * dir,       c);
+    vtx(cx - r * 0.9f, cy - r * dir * 0.7f, c);
+    vtx(cx + r * 0.9f, cy - r * dir * 0.7f, c);
+    flush(GL_TRIANGLES);
+}
+
+//  A soft dark halo under a control, and a soft bloom over one. Both are a
+//  single feathered fan now the colour is per vertex, where before they were
+//  not possible at all.
+void drawHalo(float cx, float cy, float r, Col c, float spread) {
+    const int n = segs(r);
+    Col clear = c; clear.a = 0.0f;
+    begin();
+    vtx(cx, cy, c);
+    for (int i = 0; i <= n; ++i) {
+        const float t = (float)i / (float)n * 6.2831853f;
+        vtx(cx + cosf(t) * r * spread, cy + sinf(t) * r * spread, clear);
+    }
+    flush(GL_TRIANGLE_FAN);
 }
 
 // ------------------------------------------------------------------ layout
@@ -433,7 +505,26 @@ void layout() {
     //  The attack button mirrors the stick: same height, same inset from its
     //  own edge, so both thumbs rest level with each other. The skill arc the
     //  client lays out around it is derived from exactly these numbers.
-    const float attackX = (float)g_width  - g_unit * 1.35f;
+    //
+    //  Pulled in from the edge by a further third of a module. The arrows and
+    //  the mode toggles stack OUTBOARD of the attack button, so measuring the
+    //  inset from the screen edge to the attack button alone put the button
+    //  right of the middle of the cluster it belongs to - it read as shoved
+    //  into the corner. This centres it against the whole group.
+    //  1.45, and the ceiling is 1.48 - set by the skill arc, not by taste.
+    //
+    //  The client hangs the skill arc off this button. Measured off a running
+    //  build rather than assumed: a slot is 41 logical px, so the outer arc
+    //  radius is 232.6 and its rim another 26.7 - the arc reaches 259 px left
+    //  of the attack centre. The chat panel is centred at the bottom with its
+    //  right edge at x=862, so anything past 1.48 modules puts the outermost
+    //  skill slot over the chat.
+    //
+    //  This is most of the room there is. Moving the button further in means
+    //  narrowing the chat panel or tightening the arc, and the arc is already
+    //  near its minimum: neighbours need 1.6 slot widths between centres and
+    //  the inner radius only just provides it.
+    const float attackX = (float)g_width  - g_unit * 1.45f;
     const float attackY = (float)g_height - g_unit * 1.35f - bottomSafe;
 
     g_buttons[0].centre.x = attackX;
@@ -441,11 +532,17 @@ void layout() {
     g_buttons[0].radius   = g_unit * 0.52f;
     g_buttons[0].slot     = kSlotAttack;
 
-    //  The page arrows sit outboard of the attack button, between it and the
-    //  screen edge. Up pages back, down pages forward, and they stack so the
-    //  pair reads as one control.
+    //  The page arrows and the mode toggles form a column against the right
+    //  edge, anchored to the SCREEN rather than to the attack button.
+    //
+    //  They used to be placed relative to attackX, which meant that pulling
+    //  the attack button inboard dragged the whole column in with it - and
+    //  the page plate is wider than the arrows are (0.46 of a module against
+    //  0.34), so the plate is what reached back and overlapped the attack
+    //  ring by 5 device pixels. Anchoring here lets the action buttons move
+    //  without the column following them.
     const float arrowR = g_unit * 0.17f;
-    const float arrowX = attackX + g_unit * 0.52f + g_unit * 0.08f + arrowR;
+    const float arrowX = (float)g_width - g_unit * 0.42f;
 
     g_buttons[1].centre.x = arrowX;
     g_buttons[1].centre.y = attackY - g_unit * 0.40f;
@@ -533,6 +630,17 @@ int RanTouch_IsActive(void) { return g_active ? 1 : 0; }
 
 int RanTouch_PointerDown(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
+
+    //  A window on top gets the press, not the pad.
+    //
+    //  The pad is drawn over the world and used to claim any press landing on
+    //  one of its buttons whatever else was on screen. The client's windows are
+    //  movable and several open into the lower right - the options window does -
+    //  so their buttons sit under the pad and every press on them was eaten:
+    //  the options could be ticked but never applied, and the window could not
+    //  be dragged clear because the drag was eaten too.
+    if (RanUI_PointInControl && RanUI_PointInControl((int)x, (int)y)) return 0;
+
     Touch *t = addTouch(id, x, y);
 
     //  The stick takes a touch near its home and recentres itself there, rather
@@ -868,121 +976,246 @@ extern "C" void RanTouch_SetSkillIcons(int count, const unsigned *tex,
 //  same set as the MENU button and the window frames beside them.
 namespace {
 
-//  Warm paper rather than dark glass: a cream surface, a soft warm-grey rim, a
-//  single terracotta accent reserved for the one control that matters, and dark
-//  warm ink for the marks. Low contrast between neighbours, high contrast only
-//  where something is asking to be pressed.
-//  The dark half of the palette, not the light one. Cream surfaces are right on
-//  a page but not over arbitrary game footage - on pale pavement they washed out
-//  completely. The warm near-black reads against both a bright street and a dark
-//  interior, and cream becomes the rim and the ink instead, which is the same
-//  pairing the other way round.
-const float kFillR = 0.149f, kFillG = 0.145f, kFillB = 0.141f, kFillA = 0.66f; // warm black
-const float kRimR  = 0.925f, kRimG  = 0.910f, kRimB  = 0.878f;                 // cream rim
-const float kEdgeR = 0.086f, kEdgeG = 0.078f, kEdgeB = 0.071f;                 // warm shadow
-const float kInkR  = 0.941f, kInkG  = 0.929f, kInkB  = 0.902f;                 // cream ink
+//  Gunmetal.
+//
+//  The overlay used to be warm cream with a terracotta accent, which was the
+//  one pale warm thing on a screen full of the client's own dark steel windows
+//  - it read as bolted on. It is now the same gunmetal the client's frames are,
+//  lit from the top left, with colour reserved for state: amber when an action
+//  is available, cyan when a system is on, crimson for PK. A muted accent on a
+//  dark ground is just another grey, so those three are luminous rather than
+//  dusty.
+const Col kFace   = { 0.290f, 0.337f, 0.376f, 1.0f };   // face centre
+const Col kFaceE  = { 0.047f, 0.063f, 0.078f, 1.0f };   // face edge
+const Col kBevHi  = { 0.729f, 0.780f, 0.820f, 1.0f };   // lit rim, top left
+const Col kBevLo  = { 0.129f, 0.157f, 0.180f, 1.0f };   // shadowed rim
+const Col kSteel  = { 0.502f, 0.557f, 0.596f, 1.0f };
+const Col kInk    = { 0.949f, 0.969f, 0.984f, 1.0f };
+const Col kDark   = { 0.012f, 0.020f, 0.027f, 1.0f };
 
-//  The accent. One hue, used for the primary action and for a mode that is on -
-//  never for decoration, so its presence always means something.
-const float kAccR  = 0.851f, kAccG  = 0.467f, kAccB  = 0.341f;                 // terracotta
-const float kAccDR = 0.667f, kAccDG = 0.318f, kAccDB = 0.208f;                 // deep clay
-const float kCoolR = 0.361f, kCoolG = 0.478f, kCoolB = 0.600f;                 // muted slate
+const Col kAmber  = { 1.000f, 0.714f, 0.153f, 1.0f };
+const Col kAmberH = { 1.000f, 0.925f, 0.690f, 1.0f };
+const Col kCyan   = { 0.208f, 0.839f, 0.941f, 1.0f };
+const Col kCyanH  = { 0.769f, 0.965f, 1.000f, 1.0f };
+const Col kCrim   = { 1.000f, 0.243f, 0.345f, 1.0f };
 
-//  The rim occupies the outer tenth of the radius; kRimIn is where the fill
-//  stops so the two do not blend into each other at low alpha.
-const float kRimIn = 0.90f;
+//  The painted glyphs' own colours. These are art, not state - a crimson sword
+//  is not a sword - so state lives in the chrome around them and the art only
+//  ever dims.
+const Col kEdge   = { 0.949f, 0.969f, 0.980f, 1.0f };   // the lit edge of a blade
+const Col kBlade  = { 0.725f, 0.780f, 0.824f, 1.0f };
+const Col kBladeD = { 0.424f, 0.482f, 0.533f, 1.0f };
+const Col kBladeX = { 0.231f, 0.275f, 0.314f, 1.0f };
+const Col kGold   = { 0.953f, 0.761f, 0.290f, 1.0f };
+const Col kGoldH  = { 1.000f, 0.890f, 0.604f, 1.0f };
+const Col kGoldD  = { 0.541f, 0.384f, 0.086f, 1.0f };
+const Col kWood   = { 0.663f, 0.447f, 0.235f, 1.0f };
+const Col kWoodL  = { 0.784f, 0.565f, 0.337f, 1.0f };
+const Col kWoodD  = { 0.431f, 0.275f, 0.133f, 1.0f };
+const Col kIron   = { 0.349f, 0.388f, 0.431f, 1.0f };
+const Col kIronL  = { 0.541f, 0.588f, 0.635f, 1.0f };
+const Col kIronD  = { 0.200f, 0.231f, 0.267f, 1.0f };
 
-//  Forged: a face that is lighter towards the middle and falls to near black at
-//  the rim, with a bright arc along the top edge where the light would catch a
-//  turned surface.
-const float kFaceCR = 0.227f, kFaceCG = 0.208f, kFaceCB = 0.176f;   // centre
-const float kFaceER = 0.063f, kFaceEG = 0.059f, kFaceEB = 0.051f;   // edge
-//  No sheen: it belonged to the domed face and reads as a stray bright band
-//  on a flat one. Kept at zero rather than removed so the call sites still
-//  document where the light would fall if the faces ever gain depth again.
-const float kSheen  = 0.14f;
+const float kRimIn = 0.88f;
 
-//  A rim at radius r. The outer line is a warm shadow at low alpha rather than
-//  a hard black edge - enough to lift the control off a bright scene without
-//  drawing a line around it.
-void frame(float x, float y, float r, float a) {
-    drawRing(x, y, r * kRimIn, r,          kRimR,  kRimG,  kRimB,  0.90f * a);
-    drawRing(x, y, r,          r * 1.045f, kEdgeR, kEdgeG, kEdgeB, 0.30f * a);
-    //  There is no multisampling here, so the rim ends in a hard staircase.
-    //  A pair of fading rings just outside it softens that edge for the cost of
-    //  two more draws.
-    drawRing(x, y, r * 1.045f, r * 1.075f, kEdgeR, kEdgeG, kEdgeB, 0.16f * a);
-    drawRing(x, y, r * 1.075f, r * 1.105f, kEdgeR, kEdgeG, kEdgeB, 0.07f * a);
+//  A bevel: the rim lit from the top left and shadowed at the bottom right.
+//  Two arcs, and it is most of what separates a button from a flat circle.
+void bevel(float x, float y, float ri, float ro, float a) {
+    //  A steel base all the way round, then the light and the shadow faded in
+    //  over the top of it. Without the base the two arcs meet at a hard notch.
+    drawRing(x, y, ri, ro, kSteel.r, kSteel.g, kSteel.b, 0.55f * a);
+    drawArcFade(x, y, ri, ro, 3.1416f * 0.66f, 3.1416f * 1.84f, alpha(kBevHi, 0.95f * a));
+    drawArcFade(x, y, ri, ro, 3.1416f * 1.72f, 3.1416f * 2.78f, alpha(kBevLo, 0.95f * a));
 }
 
-//  Same rim, drawn in the accent - for the primary control and for a lit mode.
-void frameAcc(float x, float y, float r, float a, float cr, float cg, float cb) {
-    drawRing(x, y, r * kRimIn, r,          cr,     cg,     cb,     0.95f * a);
-    drawRing(x, y, r,          r * 1.045f, kEdgeR, kEdgeG, kEdgeB, 0.30f * a);
+//  A catchlight along the top outer edge. Two pixels of it, and the control
+//  stops looking printed on.
+void rimLight(float x, float y, float r, float a) {
+    drawArc(x, y, r * 0.985f, r * 1.045f, 3.1416f * 1.04f, 3.1416f * 1.96f, 1.0f, 1.0f, 1.0f, 0.30f * a);
 }
 
-//  What goes inside a button. Kept apart from the frame so the lit and unlit
-//  paths cannot drift into drawing different marks.
-//  Cut into the face rather than printed on it: the mark is drawn once in
-//  near-black a shade below where it belongs, then again in cream on top, so the
-//  edge catches light the way an engraving would.
-void glyphInk(const Button &b, float a, float dy, float r_, float g_, float b_);
-
-void glyph(const Button &b, float a) {
-    glyphInk(b, a * 0.75f, b.radius * 0.055f, 0.04f, 0.035f, 0.03f);
-    glyphInk(b, a, 0.0f, kInkR, kInkG, kInkB);
+//  The gloss: a soft white bloom up and left inside the face. Drawn as a
+//  feathered fan offset towards the light, which is the single thing that
+//  separates a glass button from a grey circle.
+void gloss(float x, float y, float r, float a) {
+    drawHalo(x - r * 0.26f, y - r * 0.44f, r * 0.42f, rgba(1.0f, 1.0f, 1.0f, 0.30f * a), 2.0f);
 }
 
-void glyphInk(const Button &b, float a, float dy, float ir, float ig, float ib) {
-    //  Screen y grows downward, so "up" is the negative direction.
+//  An additive bloom. The blend func changes for the duration and is put back,
+//  because everything after this expects straight alpha.
+void bloom(float x, float y, float r, Col c, float strength) {
+    if (strength <= 0.0f) return;
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    drawHalo(x, y, r * 0.55f, rgba(c.r, c.g, c.b, strength), 3.2f);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+//  The whole chrome stack: halo, face, inner shadow, bevel, gloss, catchlight.
+void chromeDisc(float x, float y, float r, float a, Col centre, Col edge) {
+    drawHalo(x, y + r * 0.12f, r * 0.86f, rgba(0.0f, 0.0f, 0.0f, 0.55f), 1.62f);
+    discGrad(x, y, r * kRimIn, alpha(centre, a), alpha(edge, a));
+    drawRing(x, y, r * 0.76f, r * kRimIn, kDark.r, kDark.g, kDark.b, 0.34f * a);
+    bevel(x, y, r * kRimIn, r, a);
+    gloss(x, y, r * kRimIn, a);
+    rimLight(x, y, r, a);
+}
+
+//  A segmented ring - the swing timer around the attack button.
+void segRing(float x, float y, float ri, float ro, int n, float frac,
+             Col on, Col off, float ao, float af) {
+    const float step = 6.2831853f / (float)n, gap = step * 0.20f;
+    for (int i = 0; i < n; ++i) {
+        const float a0 = -1.5707963f + (float)i * step + gap * 0.5f;
+        const float a1 = a0 + step - gap;
+        const bool lit = ((float)(i + 1) / (float)n) <= frac + 1e-6f;
+        const Col c = lit ? on : off;
+        drawArc(x, y, ri, ro, a0, a1, c.r, c.g, c.b, lit ? ao : af);
+    }
+}
+
+// ------------------------------------------------------- painted glyphs
+//
+//  Not tinted line drawings. A sword is steel with a lit edge and gold
+//  furniture; a chest is wood with iron straps. All three were measured off
+//  their references on game-icons.net rather than drawn from memory, which
+//  is what fixed them: the sword is -45 degrees with a length-to-width of
+//  2.46, and the chest's lid is a flat-topped trapezoid at 36% of the height
+//  rather than a dome.
+
+//  Rotate-and-scale a unit-space polygon into place, then fill it.
+void artPoly(float ox, float oy, float r, float si, float co,
+             const float *uv, int count, Col c, float a) {
+    float xy[32];
+    if (count > 16) count = 16;
+    for (int i = 0; i < count; ++i) {
+        const float u = uv[i * 2], v = uv[i * 2 + 1];
+        xy[i * 2]     = ox + r * (u * co - v * si);
+        xy[i * 2 + 1] = oy + r * (u * si + v * co);
+    }
+    drawPoly(xy, count, alpha(c, a));
+}
+void artDisc(float ox, float oy, float r, float si, float co,
+             float u, float v, float rr, Col c, float a) {
+    const float x = ox + r * (u * co - v * si), y = oy + r * (u * si + v * co);
+    const Col k = alpha(c, a);
+    discGrad(x, y, r * rr, k, k);
+}
+
+//  One sword, blade up before rotation.
+void artSword(float ox, float oy, float r, bool detail, float a, float tilt) {
+    const float si = sinf(tilt), co = cosf(tilt);
+    static const float blade[] = { 0,-1.06f, 0.060f,-0.80f, 0.068f,-0.10f, 0.062f,0.13f,
+                                  -0.062f,0.13f, -0.068f,-0.10f, -0.060f,-0.80f };
+    static const float lit[]   = { 0,-1.06f, -0.060f,-0.80f, -0.068f,-0.10f, -0.062f,0.13f,
+                                  -0.026f,0.13f, -0.028f,-0.76f };
+    static const float shade[] = { 0.026f,-0.74f, 0.060f,-0.80f, 0.068f,-0.10f, 0.062f,0.13f,
+                                   0.026f,0.13f };
+    static const float full[]  = { -0.017f,-0.72f, 0.017f,-0.72f, 0.017f,0.03f, -0.017f,0.03f };
+    static const float guard[] = { -0.39f,0.135f, 0.39f,0.135f, 0.39f,0.235f, -0.39f,0.235f };
+    static const float guardL[]= { -0.39f,0.135f, -0.16f,0.135f, -0.16f,0.235f, -0.39f,0.235f };
+    static const float capL[]  = { -0.44f,0.07f, -0.34f,0.07f, -0.34f,0.30f, -0.44f,0.30f };
+    static const float capR[]  = {  0.34f,0.07f,  0.44f,0.07f,  0.44f,0.30f,  0.34f,0.30f };
+    static const float grip[]  = { -0.038f,0.28f, 0.038f,0.28f, 0.033f,0.70f, -0.033f,0.70f };
+    static const float gripL[] = { -0.038f,0.28f, -0.008f,0.28f, -0.009f,0.70f, -0.033f,0.70f };
+    static const float pomA[]  = { -0.105f,0.695f, 0.105f,0.695f, 0.105f,0.775f, -0.105f,0.775f };
+    static const float pomB[]  = { -0.042f,0.655f, 0.042f,0.655f, 0.042f,0.865f, -0.042f,0.865f };
+
+    artPoly(ox, oy, r, si, co, blade, 7, kBlade,  a);
+    artPoly(ox, oy, r, si, co, lit,   6, kEdge,   a);
+    artPoly(ox, oy, r, si, co, shade, 5, kBladeD, a);
+    if (detail) artPoly(ox, oy, r, si, co, full, 4, kBladeX, a);
+    artPoly(ox, oy, r, si, co, guard,  4, kGold,  a);
+    artPoly(ox, oy, r, si, co, guardL, 4, kGoldH, a);
+    artPoly(ox, oy, r, si, co, capL,   4, kGold,  a);
+    artPoly(ox, oy, r, si, co, capR,   4, kGoldD, a);
+    artDisc(ox, oy, r, si, co, 0.0f,   0.185f, 0.105f, kGold, a);
+    artDisc(ox, oy, r, si, co, 0.0f,   0.185f, 0.055f, rgba(0.10f,0.07f,0.02f,1.0f), a);
+    artDisc(ox, oy, r, si, co, -0.025f,0.165f, 0.030f, kGoldH, a);
+    artPoly(ox, oy, r, si, co, grip,  4, kWoodD, a);
+    artPoly(ox, oy, r, si, co, gripL, 4, kWood,  a);
+    artPoly(ox, oy, r, si, co, pomA,  4, kGold,  a);
+    artPoly(ox, oy, r, si, co, pomB,  4, kGold,  a);
+    artDisc(ox, oy, r, si, co, -0.022f, 0.715f, 0.030f, kGoldH, a);
+}
+
+//  The crossed pair, for PK. Splayed wider than 45 degrees on purpose: at 45
+//  the two blades lie on top of each other and the whole thing is an X.
+void artCrossed(float ox, float oy, float r, bool detail, float a) {
+    for (int k = 0; k < 2; ++k) artSword(ox, oy, r, detail, a, (k ? -0.62f : 0.62f));
+}
+
+//  The chest.
+void artChest(float ox, float oy, float r, float a, bool chev) {
+    const float si = 0.0f, co = 1.0f;
+    if (chev) {
+        const Col g = alpha(kGold, a), gh = alpha(kGoldH, a);
+        drawCapsule(ox - r*0.40f, oy - r*1.42f, ox, oy - r*1.00f, r*0.115f, g);
+        drawCapsule(ox + r*0.40f, oy - r*1.42f, ox, oy - r*1.00f, r*0.115f, g);
+        drawCapsule(ox - r*0.40f, oy - r*1.42f, ox - r*0.12f, oy - r*1.13f, r*0.055f, gh);
+    }
+    const float LT = -0.74f, LB = -0.21f, SB = -0.16f, BB = 0.56f, FB = 0.74f;
+    const float lid[]  = { -0.88f,LT,  0.88f,LT,  0.95f,LB, -0.95f,LB };
+    const float lidL[] = { -0.88f,LT, -0.34f,LT, -0.36f,LB, -0.95f,LB };
+    const float lidD[] = {  0.44f,LT,  0.88f,LT,  0.95f,LB,  0.47f,LB };
+    const float bod[]  = { -0.95f,SB,  0.95f,SB,  0.95f,BB, -0.95f,BB };
+    const float bodL[] = { -0.95f,SB, -0.40f,SB, -0.40f,BB, -0.95f,BB };
+    const float bodD[] = {  0.48f,SB,  0.95f,SB,  0.95f,BB,  0.48f,BB };
+    const float seam[] = { -0.99f,LB,  0.99f,LB,  0.99f,SB, -0.99f,SB };
+    const float feet[] = { -0.95f,BB,  0.95f,BB,  1.02f,FB, -1.02f,FB };
+    const float feeL[] = { -0.95f,BB, -0.52f,BB, -0.56f,FB, -1.02f,FB };
+    const float lock[] = { -0.17f,-0.34f, 0.17f,-0.34f, 0.17f,0.30f, -0.17f,0.30f };
+    const float locL[] = { -0.17f,-0.34f,-0.06f,-0.34f,-0.06f,0.30f, -0.17f,0.30f };
+    const float locD[] = {  0.10f,-0.34f, 0.17f,-0.34f, 0.17f,0.30f,  0.10f,0.30f };
+    const float slot[] = { -0.032f,-0.09f, 0.032f,-0.09f, 0.022f,0.15f, -0.022f,0.15f };
+
+    artPoly(ox, oy, r, si, co, lid,  4, kWood,  a);
+    artPoly(ox, oy, r, si, co, lidL, 4, kWoodL, a);
+    artPoly(ox, oy, r, si, co, lidD, 4, kWoodD, a);
+    artPoly(ox, oy, r, si, co, bod,  4, kWood,  a);
+    artPoly(ox, oy, r, si, co, bodL, 4, kWoodL, a);
+    artPoly(ox, oy, r, si, co, bodD, 4, kWoodD, a);
+    artPoly(ox, oy, r, si, co, seam, 4, kIronD, a);
+    //  Four iron straps, at the reference's own gap positions.
+    static const float kStrap[4] = { -0.78f, -0.52f, 0.52f, 0.78f };
+    for (int i = 0; i < 4; ++i) {
+        const float u = kStrap[i];
+        const float bar[] = { u-0.055f,LT, u+0.055f,LT, u+0.055f,BB, u-0.055f,BB };
+        const float hi[]  = { u-0.055f,LT, u-0.016f,LT, u-0.016f,BB, u-0.055f,BB };
+        artPoly(ox, oy, r, si, co, bar, 4, kIron,  a);
+        artPoly(ox, oy, r, si, co, hi,  4, kIronL, a);
+    }
+    artPoly(ox, oy, r, si, co, feet, 4, kWoodD, a);
+    artPoly(ox, oy, r, si, co, feeL, 4, kWood,  a);
+    artPoly(ox, oy, r, si, co, lock, 4, kGold,  a);
+    artPoly(ox, oy, r, si, co, locL, 4, kGoldH, a);
+    artPoly(ox, oy, r, si, co, locD, 4, kGoldD, a);
+    artDisc(ox, oy, r, si, co, 0.0f, -0.09f, 0.068f, rgba(0.165f,0.106f,0.020f,1.0f), a);
+    artPoly(ox, oy, r, si, co, slot, 4, rgba(0.165f,0.106f,0.020f,1.0f), a);
+}
+
+//  The marks that are still marks rather than pictures: the reticle for
+//  auto-target and the eye for camera lock.
+void glyphMark(const Button &b, float a) {
+    const float R = b.radius;
+    const Col c = alpha(kInk, a);
     if (b.slot == kSlotPagePrev)
-        drawTri(b.centre.x, b.centre.y + dy, b.radius * 0.46f, -1.0f, ir, ig, ib, a);
+        drawTri(b.centre.x, b.centre.y, R * 0.46f, -1.0f, c.r, c.g, c.b, c.a);
     else if (b.slot == kSlotPageNext)
-        drawTri(b.centre.x, b.centre.y + dy, b.radius * 0.46f, +1.0f, ir, ig, ib, a);
-    else if (b.slot == kSlotPickup) {
-        //  An arrow into a line: down onto the ground, which is what the button
-        //  does. Distinct from the page arrows, which have no line.
-        //
-        //  Sized off the rim rather than guessed: the head is a third of the
-        //  radius and the whole mark sits inside 0.62r, so nothing crosses the
-        //  frame. The first version used a ring for the ground line and a head
-        //  half the button wide, which spilled over the edge.
-        const float stem = b.radius * 0.09f;
-        drawRect(b.centre.x - stem * 0.5f, b.centre.y + dy - b.radius * 0.46f,
-                 stem, b.radius * 0.44f, ir, ig, ib, a);
-        drawTri(b.centre.x, b.centre.y + dy + b.radius * 0.02f, b.radius * 0.30f,
-                +1.0f, ir, ig, ib, a);
-        drawRect(b.centre.x - b.radius * 0.42f, b.centre.y + dy + b.radius * 0.42f,
-                 b.radius * 0.84f, stem, ir, ig, ib, a);
-    }
+        drawTri(b.centre.x, b.centre.y, R * 0.46f, +1.0f, c.r, c.g, c.b, c.a);
     else if (b.slot == kSlotAuto) {
-        //  A reticle: what auto-target does is pick something out.
-        drawRing(b.centre.x, b.centre.y + dy, b.radius * 0.26f, b.radius * 0.34f, ir, ig, ib, a);
-        const float t = b.radius * 0.09f;
-        drawRect(b.centre.x - t*0.5f, b.centre.y + dy - b.radius*0.60f, t, b.radius*0.22f, ir, ig, ib, a);
-        drawRect(b.centre.x - t*0.5f, b.centre.y + dy + b.radius*0.38f, t, b.radius*0.22f, ir, ig, ib, a);
-        drawRect(b.centre.x - b.radius*0.60f, b.centre.y + dy - t*0.5f, b.radius*0.22f, t, ir, ig, ib, a);
-        drawRect(b.centre.x + b.radius*0.38f, b.centre.y + dy - t*0.5f, b.radius*0.22f, t, ir, ig, ib, a);
-    }
-    else if (b.slot == kSlotPK) {
-        //  Crossed blades.
-        const float d = b.radius * 0.42f, t = b.radius * 0.11f;
-        drawQuad4(b.centre.x - d - t, b.centre.y + dy - d + t,
-                  b.centre.x - d + t, b.centre.y + dy - d - t,
-                  b.centre.x + d + t, b.centre.y + dy + d - t,
-                  b.centre.x + d - t, b.centre.y + dy + d + t, ir, ig, ib, a);
-        drawQuad4(b.centre.x + d - t, b.centre.y + dy - d - t,
-                  b.centre.x + d + t, b.centre.y + dy - d + t,
-                  b.centre.x - d + t, b.centre.y + dy + d + t,
-                  b.centre.x - d - t, b.centre.y + dy + d - t, ir, ig, ib, a);
+        drawRing(b.centre.x, b.centre.y, R * 0.26f, R * 0.34f, c.r, c.g, c.b, c.a);
+        const float t = R * 0.09f;
+        drawRect(b.centre.x - t*0.5f, b.centre.y - R*0.60f, t, R*0.22f, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x - t*0.5f, b.centre.y + R*0.38f, t, R*0.22f, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x - R*0.60f, b.centre.y - t*0.5f, R*0.22f, t, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x + R*0.38f, b.centre.y - t*0.5f, R*0.22f, t, c.r, c.g, c.b, c.a);
     }
     else if (b.slot == kSlotCamLock) {
-        //  An eye: what the camera is doing, held.
-        drawRing(b.centre.x, b.centre.y + dy, b.radius * 0.13f, b.radius * 0.21f, ir, ig, ib, a);
-        drawArc(b.centre.x, b.centre.y + dy + b.radius * 0.30f,
-                b.radius * 0.40f, b.radius * 0.50f, 3.5343f, 5.8905f, ir, ig, ib, a);
-        drawArc(b.centre.x, b.centre.y + dy - b.radius * 0.30f,
-                b.radius * 0.40f, b.radius * 0.50f, 0.3927f, 2.7489f, ir, ig, ib, a);
+        drawRing(b.centre.x, b.centre.y, R * 0.13f, R * 0.21f, c.r, c.g, c.b, c.a);
+        drawArc(b.centre.x, b.centre.y + R * 0.30f, R * 0.40f, R * 0.50f,
+                3.5343f, 5.8905f, c.r, c.g, c.b, c.a);
+        drawArc(b.centre.x, b.centre.y - R * 0.30f, R * 0.40f, R * 0.50f,
+                0.3927f, 2.7489f, c.r, c.g, c.b, c.a);
     }
 }
 
@@ -1008,41 +1241,41 @@ void drawPageLabel(float cx, float cy, float w, float h) {
     const float cut = w * 0.055f;
     const float x = cx - w * 0.5f, y = cy - h * 0.5f;
 
-    //  Dark outline, then the light-to-grey face on top of it.
-    drawChamfer(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, cut, 0.09f, 0.085f, 0.075f, 0.95f);
-    drawChamfer(x, y, w, h, cut, 0.72f, 0.71f, 0.68f, 1.0f);
+    //  Gunmetal, like everything else on the pad.
+    //
+    //  This was the client's own cream readout, which was the right call while
+    //  the overlay was cream too - beside dark steel buttons it was the one
+    //  bright rectangle on the screen.
+    drawChamfer(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, cut,
+                kDark.r, kDark.g, kDark.b, 0.75f);
+    drawChamfer(x, y, w, h, cut, kSteel.r, kSteel.g, kSteel.b, 0.85f);
     drawRamp(x + cut, y + 1.0f, w - cut * 2.0f, h - 2.0f,
-             0.91f, 0.90f, 0.88f, 0.55f, 0.54f, 0.51f, 1.0f);
+             kFace.r, kFace.g, kFace.b, kFaceE.r, kFaceE.g, kFaceE.b, 1.0f);
 
     //  The sunken well.
     const float wx = x + w * 0.10f, wy = y + h * 0.11f;
     const float ww = w * 0.80f,     wh = h * 0.78f;
-    drawChamfer(wx - 1.5f, wy - 1.5f, ww + 3.0f, wh + 3.0f, cut * 0.7f, 0.03f, 0.028f, 0.024f, 1.0f);
-    drawRamp(wx, wy, ww, wh, 0.08f, 0.072f, 0.060f, 0.20f, 0.19f, 0.165f, 1.0f);
+    drawChamfer(wx - 1.5f, wy - 1.5f, ww + 3.0f, wh + 3.0f, cut * 0.7f,
+                kDark.r, kDark.g, kDark.b, 1.0f);
+    drawRamp(wx, wy, ww, wh, 0.055f, 0.070f, 0.082f, 0.020f, 0.027f, 0.033f, 1.0f);
 
-    //  The page, large, and the count under it in a quieter grey.
+    //  The page, alone.
+    //
+    //  The "/ 4" went: the total never changes, so it was a constant taking up
+    //  a third of the plate to say nothing, and it left the figure itself small.
+    //  Which page you are on is the whole content, so it gets the whole well.
     //
     //  Centred on its ink, not on its cell. A seven-segment 1 is only its two
     //  right-hand bars, so centring the cell leaves the figure sitting well
     //  right of the middle of the plate.
-    const float dh = wh * 0.52f, dw = dh * 0.62f;
+    const float dh = wh * 0.68f, dw = dh * 0.62f;
     //  The 1 lives in the cell's right-hand bars, so the cell moves LEFT by half
     //  its width less half a stroke to bring that ink onto the centre line.
     const float bias = (g_skillPage == 1) ? -(dw * 0.5f - dw * 0.11f) : 0.0f;
-    drawDigit(cx - dw * 0.5f + bias, wy + wh * 0.08f, dw, dh, g_skillPage,
-              0.95f, 0.93f, 0.88f, 1.0f);
-
-    //  " / 4 " - a leaning bar and a small four.
-    const float sh = wh * 0.24f, sw = sh * 0.58f;
-    const float sy = wy + wh * 0.70f;
-    const float lean = sw * 0.30f, bar = sw * 0.18f;
-    const float slashX = cx - sw * 0.80f;
-    drawQuad4(slashX + lean,       sy,
-              slashX + lean + bar, sy,
-              slashX - lean + bar, sy + sh,
-              slashX - lean,       sy + sh,
-              0.66f, 0.64f, 0.60f, 1.0f);
-    drawDigit(cx + sw * 0.10f, sy, sw, sh, 4, 0.66f, 0.64f, 0.60f, 1.0f);
+    //  Amber, because the page you are on is a state, and amber is what state
+    //  is drawn in everywhere else on the pad.
+    drawDigit(cx - dw * 0.5f + bias, wy + (wh - dh) * 0.5f, dw, dh, g_skillPage,
+              kAmber.r, kAmber.g, kAmber.b, 1.0f);
 }
 
 void RanTouch_Render(void) {
@@ -1073,27 +1306,52 @@ void RanTouch_Render(void) {
     //  control follows the thumb instead of the thumb hunting for the control.
     const Vec2 base = g_stick.held ? g_stick.origin : g_stick.centre;
     {
-        const float a = g_stick.held ? 1.0f : 0.68f;
+        const float a = g_stick.held ? 1.0f : 0.82f;
+        const float R = g_stick.radius;
 
-        //  The well is barely there when idle - a hint of where the thumb goes,
-        //  not a control competing with the game behind it.
-        drawTurned(base.x, base.y, g_stick.radius * kRimIn,
-                   kFaceCR, kFaceCG, kFaceCB, kFaceER, kFaceEG, kFaceEB, 0.78f * a);
-        frame(base.x, base.y, g_stick.radius, a * 0.90f);
+        //  The well is a hint, not a hole. It used to be a near-opaque black
+        //  disc that covered the world under the thumb; at 30% the ring still
+        //  reads and the ground shows through.
+        drawHalo(base.x, base.y + R * 0.12f, R * 0.86f, rgba(0.0f, 0.0f, 0.0f, 0.42f), 1.55f);
+        drawFan(base.x, base.y, R * 0.92f, kFaceE.r, kFaceE.g, kFaceE.b, 0.30f * a);
 
-        //  The knob is the solid part: it is what the thumb is holding, so it
-        //  is the one that reads at full strength, and it takes the accent
-        //  while it is actually being moved.
-        if (g_stick.held) {
-            drawTurned(g_stick.knob.x, g_stick.knob.y, g_stick.radius * 0.40f,
-                       0.94f, 0.60f, 0.45f, kAccDR, kAccDG, kAccDB, 0.96f);
-            frameAcc(g_stick.knob.x, g_stick.knob.y, g_stick.radius * 0.42f, 1.0f,
-                     kAccDR, kAccDG, kAccDB);
-        } else {
-            drawTurned(g_stick.knob.x, g_stick.knob.y, g_stick.radius * 0.40f,
-                       0.86f, 0.84f, 0.80f, 0.42f, 0.40f, 0.37f, 0.94f);
-            frame(g_stick.knob.x, g_stick.knob.y, g_stick.radius * 0.42f, 0.95f);
+        //  Eight ticks, which is what gives the ring a sense of direction even
+        //  before the thumb moves.
+        for (int i = 0; i < 8; ++i) {
+            const float t = -1.5707963f + (float)i * 6.2831853f / 8.0f;
+            const float c = cosf(t), si = sinf(t);
+            drawCapsule(base.x + c * R * 0.62f, base.y + si * R * 0.62f,
+                        base.x + c * R * 0.74f, base.y + si * R * 0.74f,
+                        R * 0.028f, alpha(kSteel, 0.55f * a));
         }
+        drawRing(base.x, base.y, R * 0.90f, R * 0.93f, kDark.r, kDark.g, kDark.b, 0.40f * a);
+        bevel(base.x, base.y, R * 0.92f, R, a);
+        rimLight(base.x, base.y, R, a);
+
+        //  A heading wedge on the rim, which the old stick gave no sign of at
+        //  all, and the whole rim goes amber at full deflection - which is how
+        //  you see you are running without having to look for it.
+        const float mag = g_stick.magnitude;
+        if (g_stick.held && mag > 0.02f) {
+            const float ang = atan2f(g_stick.dir.y, g_stick.dir.x);
+            if (mag > 0.94f) {
+                drawRing(base.x, base.y, R * 0.92f, R, kAmber.r, kAmber.g, kAmber.b, 0.95f);
+                bloom(base.x, base.y, R, kAmber, 0.24f);
+            } else {
+                drawArc(base.x, base.y, R * 0.92f, R, ang - 0.26f, ang + 0.26f,
+                        kAmber.r, kAmber.g, kAmber.b, 0.40f + 0.55f * mag);
+            }
+        }
+
+        //  The knob: the solid part, the thing the thumb is actually holding.
+        const float kr = R * 0.42f;
+        if (g_stick.held) bloom(g_stick.knob.x, g_stick.knob.y, kr, kAmber, 0.20f);
+        chromeDisc(g_stick.knob.x, g_stick.knob.y, kr, 1.0f,
+                   g_stick.held ? rgba(0.659f, 0.486f, 0.227f, 1.0f) : kFace,
+                   g_stick.held ? rgba(0.204f, 0.102f, 0.016f, 1.0f) : kFaceE);
+        if (g_stick.held)
+            drawRing(g_stick.knob.x, g_stick.knob.y, kr * kRimIn, kr,
+                     kAmberH.r, kAmberH.g, kAmberH.b, 0.90f);
     }
 
     //  The skill rims go down first, so a button that happens to overlap one is
@@ -1128,87 +1386,80 @@ void RanTouch_Render(void) {
         //  circle instead of floating in it with a ring of dead space.
         const float fr = c.r * 1.30f;
 
-        //  An empty slot is glass.
+        //  An empty slot keeps its frame, dimmed.
         //
-        //  A solid dark face on a slot with nothing in it is a button offering
-        //  something that is not there, and ten of them crowd the screen. Empty
-        //  slots keep only their rim, so the game shows through and the arc
-        //  reads as the few skills you actually have. They stay droppable - the
-        //  client's control is still underneath, this only changes the paint.
-        //
-        //  Not nothing at all: the key number beside each slot is a separate
-        //  control that goes on drawing either way, and with the disc gone those
-        //  digits float loose over the world.
+        //  An earlier pass reduced these to nothing at all, on the grounds that
+        //  eight of the ten are usually empty and the arc was cluttered. The
+        //  clutter was real; the cure was worse. Stripped bare they read as
+        //  holes where buttons should be. At about a third strength the arc
+        //  still reads as a row of slots.
         if (!c.filled) {
-            drawFan(c.x, c.y, fr * kRimIn, kFaceER, kFaceEG, kFaceEB, 0.16f);
-            drawRing(c.x, c.y, fr * kRimIn, fr, kRimR, kRimG, kRimB, 0.38f);
-            drawRing(c.x, c.y, fr, fr * 1.055f, kEdgeR, kEdgeG, kEdgeB, 0.20f);
+            discGrad(c.x, c.y, fr * kRimIn, alpha(kFace, 0.34f), alpha(kFaceE, 0.34f));
+            bevel(c.x, c.y, fr * kRimIn, fr, 0.34f);
+            for (int k = 0; k < 6; ++k) {
+                const float t = -1.5707963f + (float)k * 6.2831853f / 6.0f;
+                const float co = cosf(t), si = sinf(t);
+                drawCapsule(c.x + co * fr * 0.48f, c.y + si * fr * 0.48f,
+                            c.x + co * fr * 0.62f, c.y + si * fr * 0.62f,
+                            fr * 0.035f, alpha(kSteel, 0.30f));
+            }
             continue;
         }
 
-        drawTurned(c.x, c.y, fr, kFaceCR, kFaceCG, kFaceCB,
-                   kFaceER, kFaceEG, kFaceEB, 0.95f);
-        drawRing(c.x, c.y, fr * kRimIn, fr, kRimR, kRimG, kRimB, 0.95f);
-        drawRing(c.x, c.y, fr, fr * 1.055f, kEdgeR, kEdgeG, kEdgeB, 0.55f);
+        chromeDisc(c.x, c.y, fr, 1.0f, kFace, kFaceE);
     }
 
     for (int i = 0; i < kButtonCount; ++i) {
         const Button &b = g_buttons[i];
-        const float a = b.down ? 1.0f : 0.85f;
+        //  A press shrinks the button and brightens its rim. It used to change
+        //  alpha only, which is invisible against a moving scene.
+        const float press = b.down ? 0.94f : 1.0f;
+        const float R = b.radius * press;
 
-        //  A press shrinks the button and brightens its rim.
-        //
-        //  It used to change alpha only, which is invisible against a moving
-        //  scene - so the attack button gave no sign it had been hit. Scaling is
-        //  the cue a physical button gives, and it survives any backdrop.
-        const float press = b.down ? 0.92f : 1.0f;
-
-        //  Attack is the primary action, and the only control that wears the
-        //  accent by default. Everything else is quiet cream until it has
-        //  something to say.
         if (b.slot == kSlotAttack) {
-            const float ar = b.radius * press;
-            //  Pressed, the face darkens as well as shrinking - the accent going
-            //  duller is what a struck button looks like.
-            if (b.down)
-                drawTurned(b.centre.x, b.centre.y, ar * kRimIn,
-                           kAccDR, kAccDG, kAccDB, kAccDR * 0.8f, kAccDG * 0.8f, kAccDB * 0.8f, 1.0f);
-            else
-                drawTurned(b.centre.x, b.centre.y, ar * kRimIn,
-                           0.95f, 0.61f, 0.46f, kAccDR, kAccDG, kAccDB, 0.94f);
-            //  Cream, like every other rim.
-            //
-            //  It was drawn in deep clay, which is within a few percent of the
-            //  face colour - so the button lost its edge entirely and read as a
-            //  blob. The rim is what makes these look like controls.
-            frame(b.centre.x, b.centre.y, ar, 1.0f);
+            //  The hero control. A hot face rather than a neutral one: the
+            //  thing the thumb lives on has to look charged.
+            const bool dead = !b.toggled && false;      //  reserved: no-target dimming
+            const float a = 1.0f;
+            bloom(b.centre.x, b.centre.y, R, kAmber, b.down ? 0.42f : 0.20f);
+            //  Twelve segments: the swing timer. Full until the client feeds a
+            //  fraction in, so it reads as ready rather than as broken.
+            segRing(b.centre.x, b.centre.y, R * 1.00f, R * 1.09f, 12, 1.0f,
+                    kAmber, kSteel, 0.62f, 0.22f);
+            chromeDisc(b.centre.x, b.centre.y, R * 0.94f, a,
+                       rgba(0.196f, 0.137f, 0.067f, 1.0f),
+                       rgba(0.024f, 0.018f, 0.012f, 1.0f));
+            //  The heat is a bloom under the glyph, not a bright fill: a pale
+            //  face and a pale blade cancel each other out.
+            bloom(b.centre.x, b.centre.y, R * 0.40f, kAmber, 0.10f);
+            artSword(b.centre.x, b.centre.y, R * 0.62f, true, dead ? 0.45f : 1.0f, -0.785f);
+            drawRing(b.centre.x, b.centre.y, R * 0.80f, R * 0.88f,
+                     kAmberH.r, kAmberH.g, kAmberH.b, 0.16f + (b.down ? 0.55f : 0.0f));
             continue;
         }
 
-        //  A mode that is on fills with the accent and takes an accent rim; off,
-        //  it is the same cream as its neighbours. PK gets the deep clay, the
-        //  one colour that reads as "careful", and camera lock the muted slate,
-        //  because it is a view setting rather than a combat one.
+        //  A mode that is on fills with its own colour and takes a bloom, so
+        //  auto-target and PK are readable at the edge of vision instead of
+        //  being two near-identical dark discs.
+        const bool pk  = (b.slot == kSlotPK);
+        const bool loot = (b.slot == kSlotPickup);
+        const Col state = pk ? kCrim : kCyan;
+
         if (b.toggled) {
-            const bool pk  = (b.slot == kSlotPK);
-            const bool cam = (b.slot == kSlotCamLock);
-            const float cr = pk ? kAccDR : (cam ? kCoolR : kAccR);
-            const float cg = pk ? kAccDG : (cam ? kCoolG : kAccG);
-            const float cb = pk ? kAccDB : (cam ? kCoolB : kAccB);
-            drawTurned(b.centre.x, b.centre.y, b.radius * press * kRimIn,
-                       cr + 0.10f, cg + 0.10f, cb + 0.10f,
-                       cr * 0.80f, cg * 0.80f, cb * 0.80f, 0.94f);
-            frameAcc(b.centre.x, b.centre.y, b.radius * press, 1.0f,
-                     cr * 0.70f, cg * 0.70f, cb * 0.70f);
-            glyph(b, 1.0f);
-            continue;
+            bloom(b.centre.x, b.centre.y, R, state, 0.26f);
+            chromeDisc(b.centre.x, b.centre.y, R, 1.0f,
+                       mixc(state, rgba(0,0,0,1), 0.48f),
+                       mixc(state, rgba(0,0,0,1), 0.86f));
+            drawRing(b.centre.x, b.centre.y, R * kRimIn, R,
+                     state.r, state.g, state.b, 0.95f);
+        } else {
+            chromeDisc(b.centre.x, b.centre.y, R, b.down ? 1.0f : 0.94f, kFace, kFaceE);
         }
 
-        drawTurned(b.centre.x, b.centre.y, b.radius * press * kRimIn,
-                   kFaceCR, kFaceCG, kFaceCB, kFaceER, kFaceEG, kFaceEB,
-                   b.down ? 1.0f : 0.92f);
-        frame(b.centre.x, b.centre.y, b.radius * press, a);
-        glyph(b, a);
+        if (pk)        artCrossed(b.centre.x, b.centre.y, R * 0.60f, false, b.toggled ? 1.0f : 0.80f);
+        else if (loot) artChest(b.centre.x, b.centre.y + R * 0.30f, R * 0.46f,
+                                b.toggled ? 1.0f : 0.82f, true);
+        else           glyphMark(b, b.toggled ? 1.0f : 0.88f);
     }
 
     //  The icons go on top of their faces.

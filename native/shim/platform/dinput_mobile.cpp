@@ -59,22 +59,38 @@ DIMOUSESTATE2 g_mouseState;
 //  is seen by at least one poll, in the order it happened. A double click then
 //  takes four polls, about 130ms at 30fps, which is well inside the client's
 //  double-click window.
-struct BtnEvent { int button; int down; };
+//  A button event carries the pointer position it happened at.
+//
+//  Position is applied the moment it arrives; button events wait their turn,
+//  one per frame. On a quick drag that means the press was delivered after the
+//  finger had already moved on, so the control under the press point never saw
+//  the mouse over it - a window title got a press at a point outside itself and
+//  never started dragging. Travelling with its position, a press lands where it
+//  was made whatever the queue did in between.
+struct BtnEvent { int button; int down; int x; int y; };
 BtnEvent g_btnQueue[16];
 int      g_btnQueueCount = 0;
 
-void queueButton(int button, int down) {          // caller holds the lock
-    if (g_btnQueueCount >= (int)(sizeof(g_btnQueue) / sizeof(g_btnQueue[0]))) return;
-    g_btnQueue[g_btnQueueCount].button = button;
-    g_btnQueue[g_btnQueueCount].down   = down;
-    ++g_btnQueueCount;
-}
+void queueButton(int button, int down);           // defined below g_pointerX
 
 
 BYTE          g_keyState[256];
 
 int  g_pointerX = 0, g_pointerY = 0;
 DWORD g_sequence = 1;
+
+void queueButton(int button, int down) {          // caller holds the lock
+    if (g_btnQueueCount >= (int)(sizeof(g_btnQueue) / sizeof(g_btnQueue[0]))) return;
+    g_btnQueue[g_btnQueueCount].button = button;
+    g_btnQueue[g_btnQueueCount].down   = down;
+    g_btnQueue[g_btnQueueCount].x      = g_pointerX;
+    g_btnQueue[g_btnQueueCount].y      = g_pointerY;
+    ++g_btnQueueCount;
+}
+
+//  Where the pointer really is, while a queued event borrows it for one frame.
+bool g_posBorrowed = false;
+int  g_posRealX = 0, g_posRealY = 0;
 
 void pushMouse(DWORD ofs, DWORD data) {
     DIDEVICEOBJECTDATA e;
@@ -216,12 +232,18 @@ extern "C" void RanInput_PointerMove(int x, int y) {
     // motion through GetDeviceData  camera drag-rotate  saw the mouse as
     // perfectly still even while it moved. The accumulated lX/lY below was
     // right, which is why it went unnoticed.
-    const int dx = x - g_pointerX;
-    const int dy = y - g_pointerY;
+    //  While a queued button borrows the pointer for a frame, the real position
+    //  lives in g_posReal*; measure and write there, so the borrow neither eats
+    //  a movement nor invents one.
+    int& rX = g_posBorrowed ? g_posRealX : g_pointerX;
+    int& rY = g_posBorrowed ? g_posRealY : g_pointerY;
+
+    const int dx = x - rX;
+    const int dy = y - rY;
     g_mouseState.lX += dx;
     g_mouseState.lY += dy;
-    g_pointerX = x;
-    g_pointerY = y;
+    rX = x;
+    rY = y;
     if (dx) pushMouse(DIMOFS_X, (DWORD)dx);
     if (dy) pushMouse(DIMOFS_Y, (DWORD)dy);
 }
@@ -252,11 +274,29 @@ extern "C" void RanInput_PointerButton(int button, int down) {
 //  its input.
 extern "C" void RanInput_PumpButtons(void) {
     Lock lk;
+    //  Hand the pointer back before anything else: last frame's event may have
+    //  borrowed it. Straight assignment, no delta and no DIMOFS event - the
+    //  motion between the two points was accumulated when it arrived, and
+    //  counting it a second time here would spin the camera.
+    if (g_posBorrowed) {
+        g_pointerX = g_posRealX;
+        g_pointerY = g_posRealY;
+        g_posBorrowed = false;
+    }
+
     if (g_btnQueueCount <= 0) return;
 
     const BtnEvent ev = g_btnQueue[0];
     for (int i = 1; i < g_btnQueueCount; ++i) g_btnQueue[i - 1] = g_btnQueue[i];
     --g_btnQueueCount;
+
+    if (ev.x != g_pointerX || ev.y != g_pointerY) {
+        g_posRealX = g_pointerX;
+        g_posRealY = g_pointerY;
+        g_posBorrowed = true;
+        g_pointerX = ev.x;
+        g_pointerY = ev.y;
+    }
 
     g_mouseState.rgbButtons[ev.button] = ev.down ? 0x80 : 0x00;
     pushMouse(DIMOFS_BUTTON0 + ev.button, ev.down ? 0x80 : 0x00);
@@ -303,6 +343,8 @@ extern "C" void RanInput_Key(int scanCode, int down) {
 //  No DIMOFS events and no lX/lY accumulation: this is a teleport, not a move.
 extern "C" void RanInput_WarpPointer(int x, int y) {
     Lock lk;
+    //  A pin overrides a borrow: the client is placing the pointer itself.
+    g_posBorrowed = false;
     g_pointerX = x;
     g_pointerY = y;
 }

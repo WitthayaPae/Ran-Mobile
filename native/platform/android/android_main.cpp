@@ -52,6 +52,7 @@ extern "C" void RanInput_PointerMove(int x, int y);
 extern "C" void RanInput_PointerButton(int button, int down);
 extern "C" void RanInput_PumpButtons(void);
 extern "C" int  RanUI_MouseInControl(void);
+extern "C" int  RanUI_PointInControl(int x, int y);
 extern "C" void RanUI_EndEditIfOutside(int x, int y);
 extern "C" int  RanTouch_IsPinching(void);
 extern "C" void RanInput_Key(int scanCode, int down);
@@ -648,7 +649,15 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
                     if (g_gesture.active && !g_gesture.pressed) {
                         const int dx = mx - g_gesture.x, dy = my - g_gesture.y;
                         if (dx * dx + dy * dy > kDragSlop * kDragSlop) {
-                            gesturePress(RanUI_MouseInControl() ? 0 : 2);
+                            //  Ask where the finger IS, not where the pointer was.
+                            //
+                            //  RanUI_MouseInControl answers for the end of the last
+                            //  frame, and on touch that is wherever the previous tap
+                            //  left the pointer - so a drag starting on a window title
+                            //  read as "not on a control" and pressed the middle button,
+                            //  which turns the camera. That is why no window could be
+                            //  dragged unless something had already been tapped inside it.
+                            gesturePress(RanUI_PointInControl(g_gesture.x, g_gesture.y) ? 0 : 2);
                             RanInput_PointerMove(mx, my);
                         }
                     }

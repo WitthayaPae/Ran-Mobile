@@ -197,6 +197,9 @@ set(Lib_ClientUI_SOURCES
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemMixInventoryWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemMixWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemMove.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/MobileCountSheet.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/MobileEnhanceWindow.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/MobileItemSheet.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemPreviewWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemPreviewWindowRender.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemRebuild.cpp
