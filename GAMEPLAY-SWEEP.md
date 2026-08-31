@@ -8,63 +8,60 @@ Run on LDPlayer against `out/ran-phase3.apk`. One login per pass.
 
 ---
 
-## 2026-08-31 — pass 1: NPC dialogue, shop, quest list
+## 2026-08-31 / 09-01 — pass 1: NPC dialogue, shop, quest list, teleport
 
 | # | surface | result |
 |---|---------|--------|
 | 1 | NPC dialogue | **works** — tap the NPC, the reply window opens with its text and branch list, branches are tappable |
 | 2 | Shop, open | **works** — the shop branch opens `ร้านค้า` alongside the inventory, tabs and item tooltips render |
-| 3 | Shop, buy | **works, but the quantity prompt is unusable** — see F1 |
-| 4 | Shop, sell | **works, but undiscoverable** — see F2 |
+| 3 | Shop, buy | **works**, subject to the keyboard — see F1 |
+| 4 | Shop, sell | **works** — hold to lift, drag onto the shop grid, release, confirm. Paid correctly |
 | 5 | Quest list | **works** — `ภารกิจ` opens with the accepted-quest list, Thai renders correctly |
-| 6 | Trade | **not tested** — needs a second player on the same server |
-| 7 | Quest turn-in | **not tested** — needs a completable quest |
-| 8 | Death and resurrect | **not tested** |
-| 9 | Zone change | **not tested** |
+| 6 | Teleport (start-point card) | **works** — the sheet offers ใช้งาน, the card fires, position moved SG 64/9 → 61/7, world reloaded, no crash |
+| 7 | Trade | **not tested** — needs a second player on the same server |
+| 8 | Quest turn-in | **not tested** — needs a completable quest |
+| 9 | Death and resurrect | **not tested** |
+| 10 | Cross-map zone change | **not tested** — the start-point card stays on the same map |
 
-### F1 — buying asks for a quantity through a keyboard that does not exist
+### F1 — the buy quantity prompt, and why it stays as it is
 
-Tapping an item in the shop opens the client's number modal: *"โปรดใส่จำนวนที่คุณ
-ต้องการซื้อ"* with an empty text field and OK / Cancel. Nothing brings up a soft
-keyboard, and the client's own on-screen keypad was removed during the port, so
-**a player cannot type a number and cannot buy anything.**
+Tapping a stackable item in the shop opens the client's number modal:
+*"โปรดใส่จำนวนที่คุณต้องการซื้อ"* with a text field and OK / Cancel. On the
+emulator nothing appears to type with, so buying looks impossible.
 
-The transaction itself is fine. Injecting `3` with `adb shell input text` and
-pressing OK completed the purchase: money went 100,452,739 → 100,452,583, and
-three potions arrived in the bag. So only the input is missing.
+**Decision: keep the PC behaviour.** A mobile-specific stepper sheet was built
+and then reverted — buy and sell now follow the PC client exactly.
 
-This is the same problem `CMobileCountSheet` was built to solve for splitting a
-stack — steppers instead of a text field. `ITEM-TOUCH-PLAN.md` records buy and
-sell counts as still using "the client's own confirm path", which is true and is
-exactly the gap. Route the buy prompt through the count sheet.
+The keyboard path already exists and is wired correctly. Traced end to end:
 
-Severity: **blocking**. Shops are unusable.
+- `CModalWindow` calls `m_pEditBox->BeginEdit()` when a `MODAL_INPUT` opens.
+- `CUIEditBox::BeginEdit` calls `RanIME_Show()` under `RAN_MOBILE`.
+- `RanIME_Show` calls `imeCall(true)`, which goes at `InputMethodManager`
+  directly with `showSoftInput(decorView, SHOW_FORCED)` — the NDK workaround,
+  because a `NativeActivity` has no focusable `View` for the polite call.
 
-### F2 — selling works, but nothing tells you how
+Verified with a temporary probe: `editbox: BeginEdit accepted`, and
+`dumpsys input_method` reports **`mInputShown=true`**. The system believes the
+keyboard is up.
 
-With the shop open, tapping an inventory item opens the mobile action sheet with
-ใช้งาน / ลิงก์ในแชท / ทิ้ง / ปิด. **There is no sell row**, even though the item's own
-tooltip says `โยนร้านค้า:สามารถทำได้` — it can be sold.
+It does not draw, and that is an **emulator artifact**: LDPlayer's only
+installed IME is `com.android.inputmethod.pinyin`, which does not render over a
+fullscreen NativeActivity surface here. There is no other IME to switch to.
 
-Selling does work, by the carry gesture: hold the item for 450 ms to lift it,
-drag onto the shop grid, release. That raises the client's own confirmation
-("คุณต้องการขาย ขนมปัง หรือไม่ ?"), and confirming pays — money 100,452,583 →
-100,452,588 for one bread.
+So **this surface cannot be verified on the emulator** and has to be checked on
+the Tab S9. The evidence that it works on a real device is that the login ID and
+password fields take the Android keyboard there — the note in STATUS about taps
+hitting "the Android keyboard" during login is exactly that keyboard appearing.
 
-So the mechanism is sound and safely gated; it is simply invisible. A player who
-only ever taps will conclude they cannot sell. Add a sell row to the sheet when
-a shop is open, alongside the existing เอากลับ/ใส่ contextual rows.
+Probes removed; `SOURCE` is clean.
 
-Severity: **high** — a core loop is unreachable without guessing.
-
-### Note on testing this by hand
+### Note on testing the carry gesture by hand
 
 `input swipe` moves the pointer immediately, so it never crosses the 450 ms
 long-press threshold and never lifts the item — the first drag-to-sell attempt
 looked like a failure for that reason. The gesture has to be driven as
 `motionevent DOWN`, a real pause, then `MOVE`s and `UP`.
 
-Also: after the lift, the item leaves the inventory grid and there is no carried
-icon visible while a confirmation is pending, so a mid-drag screenshot looks
-exactly like item loss. It is not — the confirm dialog is on screen elsewhere.
-Check the whole frame before concluding anything is gone.
+Also: after the lift the item leaves the inventory grid, and a mid-drag
+screenshot looks exactly like item loss. It is not — the confirmation dialog is
+on screen elsewhere. Check the whole frame before concluding anything is gone.
