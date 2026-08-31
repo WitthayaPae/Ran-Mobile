@@ -106,6 +106,76 @@ the change was structural.
 
 ## Log
 
+- **2026-09-01** — **The frame rate drop was the new HUD rebuilding itself sixty times a second.**
+
+  Reported as "back to 35 fps on the tablet". Two things were true at once, and only
+  one of them was a regression.
+
+  **The 120 was never a tablet in-world number.** The 105-120 fps in this log is the
+  emulator; the only in-world Tab S9 measurements ever taken are the 20.6 ms
+  (~48 fps) in the character-shadow work below. So the honest comparison is
+  ~48 fps against the reported 31, not 120 against 31.
+
+  **The regression was real, and it was mine.** On the tablet the frame was 30.3 ms
+  with GPU sections at 0.0 and swap at 0.5 - CPU-bound, not fill-bound - and the
+  named sections only accounted for 9.3 ms of the 26.5 ms of engine CPU. Fifteen
+  milliseconds a frame had no timer on them.
+
+  It hid from both of the usual instruments. `/sdcard/ran/nulldraw` removes every GL
+  call a draw makes and took the frame from 30.3 ms only to 25.0; the shim's
+  `submit` timer reported 3.3 ms. Both only see draws issued through the renderer,
+  and the touch overlay has its own program, VAO and buffer - so both reported a
+  frame that was cheap while it was not. Five calls in `DxGameStage::Render` had no
+  `RAN_SECTION` at all, `RanTouch_Render` among them; they have one now.
+
+  With a timer on it, on LDPlayer:
+
+  | | frame | of which submit | engine cpu |
+  |---|---|---|---|
+  | overlay drawn | 46.5 ms (21.5 fps) | 24 ms | 20.5 ms |
+  | `/sdcard/ran/nohud` | 28.4 ms (35.2 fps) | 25 ms | 2.4 ms |
+
+  The controls cost **18 ms a frame**, and were generating **94,086 vertices** to do
+  it. Almost none of that changes between frames: the buttons do not move, and
+  their faces, bevels, glosses and glyphs are identical. It was rebuilt every
+  frame because there was nowhere to keep it.
+
+  **Two fixes, and the first one alone made it worse.** Batching every shape into one
+  draw took the overlay from a few hundred `glBufferSubData`+`glDrawArrays` pairs to
+  7 a frame - and `touch-hud` went *up*, 8 ms to 18 ms, because expanding fans and
+  strips to triangle lists tripled the vertex traffic. That is the measurement worth
+  keeping: **the draw calls were never the cost.** Building the geometry was.
+
+  So the static half is now built once into its own buffer and replayed from there,
+  and rebuilt only when something it depends on changes - a button going down, a
+  toggle lighting, the skill arc being rearranged, the window resizing. A 64-bit
+  signature over exactly those inputs decides. The stick and the recharge wipes
+  genuinely move every frame and are still built live; they are small. The segment
+  list carries the blend mode, because that is the one piece of state the vertices
+  cannot.
+
+  **Result**, same scene, same build, toggled with `/sdcard/ran/nohud`:
+
+  | | frame | of which submit | engine cpu |
+  |---|---|---|---|
+  | overlay drawn | 34.1 ms (29.3 fps) | 24.3 ms | 7.9 ms |
+  | `/sdcard/ran/nohud` | 28.0 ms (35.9 fps) | 18.4 ms | 7.7 ms |
+
+  **18 ms to 6 ms**, and the engine CPU is now identical with the overlay on and off -
+  what remains is the driver drawing 94k cached vertices, which is LDPlayer being
+  slow at vertex processing and should be a fraction of that on the tablet. The
+  report says `0 rebuilds/s`; tapping PK produces exactly 2 (down, then toggled) and
+  the lit state adds its bloom segment, 7 draws to 9.
+
+  The tablet's missing 15 ms was CPU, and the CPU rebuild is what has been removed,
+  so this should land there too - **but it has not been measured on the Tab S9**,
+  which went offline mid-session. That is the one thing left to confirm.
+
+  New: `/sdcard/ran/nohud` (live, re-read once a second) and a `touch-hud:` line
+  reporting draws, vertices, rebuilds and cache size. Both join the list of debug
+  switches to compile out for release.
+
+
 - **2026-08-25 (evening)** — **The frame was being spent re-uploading vertex buffers, not drawing.**
 
   13 fps on the tablet reproduced exactly on the emulator, so the cause was not device-specific.

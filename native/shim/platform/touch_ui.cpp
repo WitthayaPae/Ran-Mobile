@@ -16,6 +16,8 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
 extern "C" void RanGLR_InvalidateStateCache(void);
 extern "C" void RanInput_PointerWheel(int dz);
@@ -135,6 +137,55 @@ GLuint g_prog = 0, g_vbo = 0, g_vao = 0;
 //  96-segment feathered disc: (1 + 97 + 97) vertices.
 const int   kFloatsPerVert = 6;
 float g_verts[1600 * kFloatsPerVert];
+
+//  One draw for the whole overlay.
+//
+//  Every shape used to end in its own glBufferSubData + glDrawArrays. There are
+//  a few hundred shapes in a frame - each control is a halo, a graded face, an
+//  inner ring, a bevel, a gloss, a catchlight and a glyph - and the frame report
+//  measured that as `touch-hud` 7.7-8.8 ms, about a quarter of the whole frame,
+//  for geometry that fits comfortably in a single draw.
+//
+//  It did not show up in either of the obvious places. The shim's `submit`
+//  timer only covers draws issued through the renderer, and /sdcard/ran/nulldraw
+//  only suppresses those - the overlay has its own program, VAO and buffer, so
+//  both reported the frame as cheap while it was not.
+//
+//  Shapes are now converted to triangles as they are built and accumulated
+//  here. The real draw happens at emit(), which runs when the blend mode
+//  changes, when the program changes, and once at the end of the frame.
+const int kBatchVerts  = 160000;
+const int kBatchFloats = kBatchVerts * kFloatsPerVert;
+float    g_batch[kBatchFloats];
+int      g_bn = 0;          //  floats queued
+unsigned g_batchDraws = 0;  //  real draws issued this frame
+unsigned g_vertsThisFrame = 0;
+
+//  The static half of the overlay, built once and kept.
+//
+//  Measured on LDPlayer: with the overlay drawn the frame was 46.5 ms and with
+//  /sdcard/ran/nohud it was 28.4 - the controls cost 18 ms a frame, and were
+//  generating 94,086 vertices to do it. Almost none of that geometry changes:
+//  the buttons do not move, and their faces, bevels, glosses and glyphs are
+//  identical from one frame to the next. It was being rebuilt sixty times a
+//  second because there was nowhere to keep it.
+//
+//  So it is built into its own buffer and redrawn from there, and only rebuilt
+//  when something it depends on actually changes - a button going down, a
+//  toggle lighting, the skill arc being rearranged, the window resizing. The
+//  parts that genuinely move each frame (the stick, the recharge wipes) are
+//  still built live, and they are small.
+GLuint   g_vboCache = 0;
+GLuint   g_vaoCache = 0;
+struct Seg { int first, count; bool add; };
+Seg      g_segs[32];
+int      g_segCount = 0;
+bool     g_capturing = false;
+bool     g_additive  = false;
+int      g_capFirst  = 0;           //  first vertex of the segment being built
+unsigned long long g_sig = 0;       //  what the cached geometry was built from
+int      g_cacheVerts = 0;
+unsigned g_rebuilds = 0;            //  captures this second, for the report
 GLint uViewport = -1;
 
 //  One colour, passed around as four floats, so a helper can take "a colour"
@@ -184,6 +235,13 @@ GLuint compile(GLenum type, const char *src) {
 }
 
 bool buildProgram() {
+    //  A rebuilt program means a rebuilt context, and the cached geometry died
+    //  with it. Without this the signature would still match the state the old
+    //  buffer was built from, and the overlay would replay from an empty one.
+    g_cacheVerts = 0;
+    g_sig = 0;
+    g_segCount = 0;
+
     GLuint vs = compile(GL_VERTEX_SHADER, kVS);
     GLuint fs = compile(GL_FRAGMENT_SHADER, kFS);
     if (!vs || !fs) return false;
@@ -220,8 +278,21 @@ bool buildProgram() {
     //  Sized once and refilled with glBufferSubData rather than orphaned per
     //  shape: forty glBufferData calls a frame is forty allocations, and this
     //  driver charges real time for them.
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(g_verts), NULL, GL_STREAM_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof(g_batch), NULL, GL_STREAM_DRAW);
     const GLsizei stride = kFloatsPerVert * sizeof(float);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (const void *)(2 * sizeof(float)));
+    glBindVertexArray(0);
+
+    //  The cache needs its own pair. A VAO records which buffer each attribute
+    //  reads from, so the cached geometry cannot be drawn through the VAO that
+    //  points at the streaming buffer.
+    glGenBuffers(1, &g_vboCache);
+    glGenVertexArrays(1, &g_vaoCache);
+    glBindVertexArray(g_vaoCache);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vboCache);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void *)0);
     glEnableVertexAttribArray(1);
@@ -241,10 +312,80 @@ inline void vtx(float x, float y, Col c) {
     g_verts[g_n++] = c.r; g_verts[g_n++] = c.g; g_verts[g_n++] = c.b; g_verts[g_n++] = c.a;
 }
 inline void begin() { g_n = 0; }
+
+//  Draw everything queued so far. Must be called before anything changes state
+//  the queued geometry depends on - the blend mode or the program - because a
+//  deferred draw would then be issued under the new state rather than its own.
+void emit() {
+    if (g_bn <= 0) return;
+
+    //  Capturing: close a segment and keep accumulating. The batch is uploaded
+    //  once, at the end of the capture, and the segments say where the blend
+    //  mode changes inside it - which is the one piece of state the geometry
+    //  cannot carry itself.
+    if (g_capturing) {
+        const int end = g_bn / kFloatsPerVert;
+        if (end > g_capFirst && g_segCount < (int)(sizeof(g_segs) / sizeof(g_segs[0]))) {
+            g_segs[g_segCount].first = g_capFirst;
+            g_segs[g_segCount].count = end - g_capFirst;
+            g_segs[g_segCount].add   = g_additive;
+            ++g_segCount;
+        }
+        g_capFirst = end;
+        return;
+    }
+
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(g_bn * sizeof(float)), g_batch);
+    glDrawArrays(GL_TRIANGLES, 0, g_bn / kFloatsPerVert);
+    g_vertsThisFrame += (unsigned)(g_bn / kFloatsPerVert);
+    g_bn = 0;
+    ++g_batchDraws;
+}
+
+inline void putVert(const float *v) {
+    for (int i = 0; i < kFloatsPerVert; ++i) g_batch[g_bn++] = v[i];
+}
+inline void putTri(int a, int b, int c) {
+    putVert(g_verts + a * kFloatsPerVert);
+    putVert(g_verts + b * kFloatsPerVert);
+    putVert(g_verts + c * kFloatsPerVert);
+}
+
+//  Ends a shape: expand it to a triangle list and queue it. Fans and strips
+//  cost nothing to expand - it is index arithmetic over a handful of vertices -
+//  and once every shape is GL_TRIANGLES there is no primitive mode left to
+//  break the batch on.
 inline void flush(GLenum mode) {
     if (g_n <= 0) return;
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(g_n * sizeof(float)), g_verts);
-    glDrawArrays(mode, 0, g_n / kFloatsPerVert);
+    const int nv   = g_n / kFloatsPerVert;
+    const int tris = (mode == GL_TRIANGLES) ? nv / 3 : (nv >= 3 ? nv - 2 : 0);
+    const int need = tris * 3 * kFloatsPerVert;
+
+    //  Out of room: draw what is queued and carry on into an empty batch. The
+    //  result is identical, it just costs one more draw.
+    if (g_bn + need > kBatchFloats) emit();
+
+    if (need > 0 && g_bn + need > kBatchFloats) {
+        //  Only reachable while capturing, where emit() cannot make room.
+        //  Dropping a shape would be an invisible corruption, so say it.
+        static bool s_warned = false;
+        if (!s_warned) { LOGE("touch-hud: batch full at %d verts, geometry dropped", g_bn / kFloatsPerVert); s_warned = true; }
+    }
+    if (need > 0 && g_bn + need <= kBatchFloats) {
+        if (mode == GL_TRIANGLE_FAN) {
+            for (int i = 1; i <= tris; ++i) putTri(0, i, i + 1);
+        } else if (mode == GL_TRIANGLE_STRIP) {
+            //  Every other triangle is wound the other way in a strip, and the
+            //  overlay draws with culling off - but keep the winding correct
+            //  anyway, so this geometry stays valid if that ever changes.
+            for (int i = 0; i < tris; ++i) {
+                if (i & 1) putTri(i + 1, i, i + 2);
+                else       putTri(i, i + 1, i + 2);
+            }
+        } else {
+            for (int i = 0; i < tris; ++i) putTri(i * 3, i * 3 + 1, i * 3 + 2);
+        }
+    }
     g_n = 0;
 }
 
@@ -1045,9 +1186,13 @@ void gloss(float x, float y, float r, float a) {
 //  because everything after this expects straight alpha.
 void bloom(float x, float y, float r, Col c, float strength) {
     if (strength <= 0.0f) return;
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    emit();                                     //  queued work is straight alpha
+    g_additive = true;
+    if (!g_capturing) glBlendFunc(GL_SRC_ALPHA, GL_ONE);
     drawHalo(x, y, r * 0.55f, rgba(c.r, c.g, c.b, strength), 3.2f);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    emit();                                     //  ...and this much is additive
+    g_additive = false;
+    if (!g_capturing) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 //  The whole chrome stack: halo, face, inner shadow, bevel, gloss, catchlight.
@@ -1278,9 +1423,53 @@ void drawPageLabel(float cx, float cy, float w, float h) {
               kAmber.r, kAmber.g, kAmber.b, 1.0f);
 }
 
+//  Everything the cached geometry is built from, in one number.
+//
+//  Deliberately does NOT include the stick or the recharge wipes: those change
+//  every frame while the player is moving or a skill is cooling, and they are
+//  drawn live instead. Including them would rebuild the whole overlay on almost
+//  every frame, which is the situation this exists to avoid.
+static unsigned long long staticSignature() {
+    unsigned long long h = 1469598103934665603ULL;   //  FNV-1a
+    const unsigned char *p; int n;
+    #define MIX(v) do { const unsigned char *q = (const unsigned char *)&(v);                         for (int k = 0; k < (int)sizeof(v); ++k) { h ^= q[k]; h *= 1099511628211ULL; } } while (0)
+    MIX(g_width); MIX(g_height); MIX(g_unit);
+    MIX(g_skillCircleCount); MIX(g_iconCount);
+    for (int i = 0; i < g_skillCircleCount && i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+        const SkillCircle &c = g_skillCircles[i];
+        MIX(c.x); MIX(c.y); MIX(c.r); MIX(c.filled);   //  c.cool is drawn live
+    }
+    for (int i = 0; i < kButtonCount; ++i) {
+        const Button &b = g_buttons[i];
+        MIX(b.centre.x); MIX(b.centre.y); MIX(b.radius);
+        MIX(b.down); MIX(b.toggled); MIX(b.slot);
+    }
+    #undef MIX
+    (void)p; (void)n;
+    return h;
+}
+
 void RanTouch_Render(void) {
     ageActivity();
     if (!g_inited || !g_active || !g_prog) return;
+
+    //  Diagnostic: draw no overlay at all. Re-read once a second so it can be
+    //  switched while the game runs.
+    //
+    //  What this separates is the cost of building this geometry from the cost
+    //  of filling it. The section timer cannot tell those apart, and the fix is
+    //  different for each: caching the geometry, or drawing less of it.
+    {
+        static double s_check = 0.0;
+        static bool   s_off = false;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        if (now - s_check >= 1.0) {
+            s_check = now;
+            s_off = (access("/sdcard/ran/nohud", F_OK) == 0);
+        }
+        if (s_off) return;
+    }
 
     //  Save nothing, restore nothing: tell the renderer afterwards that its
     //  cache is stale and let it re-establish what it needs.
@@ -1353,6 +1542,16 @@ void RanTouch_Render(void) {
             drawRing(g_stick.knob.x, g_stick.knob.y, kr * kRimIn, kr,
                      kAmberH.r, kAmberH.g, kAmberH.b, 0.90f);
     }
+
+    //  The stick moves with the thumb, so it is built live - and it has to be
+    //  drawn before the cached half, not queued behind it.
+    emit();
+
+    //  ---- the static half: built only when it changes ---------------------
+    const unsigned long long sig = staticSignature();
+    if (sig != g_sig || g_cacheVerts == 0) {
+        g_capturing = true;
+        g_bn = 0; g_capFirst = 0; g_segCount = 0; g_additive = false;
 
     //  The skill rims go down first, so a button that happens to overlap one is
     //  drawn over it rather than under.
@@ -1462,7 +1661,35 @@ void RanTouch_Render(void) {
         else           glyphMark(b, b.toggled ? 1.0f : 0.88f);
     }
 
+        emit();                             //  closes the last segment
+        g_capturing = false;
+        g_cacheVerts = g_bn / kFloatsPerVert;
+        glBindBuffer(GL_ARRAY_BUFFER, g_vboCache);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_bn * sizeof(float)),
+                     g_batch, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        g_bn = 0;
+        g_sig = sig;
+        ++g_rebuilds;
+    }
+
+    //  ...and drawn from the buffer it was built into. The segment list carries
+    //  the blend mode, because that is the only state the vertices cannot.
+    if (g_cacheVerts > 0) {
+        glBindVertexArray(g_vaoCache);
+        for (int i = 0; i < g_segCount; ++i) {
+            glBlendFunc(GL_SRC_ALPHA, g_segs[i].add ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+            glDrawArrays(GL_TRIANGLES, g_segs[i].first, g_segs[i].count);
+            ++g_batchDraws;
+            g_vertsThisFrame += (unsigned)g_segs[i].count;
+        }
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindVertexArray(g_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    }
+
     //  The icons go on top of their faces.
+    emit();                                     //  before the program changes
     drawIcons((float)g_width, (float)g_height);
     //  Back to flat colour for the recharge wipe, which goes over the icon.
     glUseProgram(g_prog);
@@ -1490,6 +1717,26 @@ void RanTouch_Render(void) {
             drawPageLabel((bUp.centre.x + bDn.centre.x) * 0.5f,
                           (bUp.centre.y + bDn.centre.y) * 0.5f,
                           g_unit * 0.46f, gap - 6.0f);
+    }
+
+    emit();
+
+    //  What the batching actually bought, once a second.
+    {
+        static double s_last = 0.0;
+        static unsigned s_frames = 0, s_draws = 0; static double s_verts = 0.0;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        ++s_frames; s_draws += g_batchDraws; s_verts += (double)g_vertsThisFrame;
+        if (s_last == 0.0) s_last = now;
+        else if (now - s_last >= 1.0) {
+            LOGI("touch-hud: %.1f draws/frame, %.0f verts/frame, %u rebuilds/s (cache %d verts)",
+                 (double)s_draws / (double)s_frames, s_verts / (double)s_frames,
+                 g_rebuilds, g_cacheVerts);
+            g_rebuilds = 0;
+            s_last = now; s_frames = 0; s_draws = 0; s_verts = 0.0;
+        }
+        g_batchDraws = 0; g_vertsThisFrame = 0;
     }
 
     glBindVertexArray(0);

@@ -403,7 +403,7 @@ public class RanLauncher extends Activity {
         //  ComponentName from the class immediately, so passing null there
         //  throws before setComponent can replace it.
         Intent i = new Intent();
-        i.setComponent(new ComponentName(getPackageName(), "android.app.NativeActivity"));
+        i.setComponent(new ComponentName(getPackageName(), "com.ran.launcher.RanActivity"));
         i.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
         startActivity(i);
         finish();

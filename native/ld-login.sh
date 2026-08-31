@@ -31,7 +31,7 @@ done
 "$A" -s "$D" logcat -c
 
 for i in 1 2 3 4 5; do
-  "$A" -s "$D" shell am start -n com.ran.native/android.app.NativeActivity >/dev/null 2>&1
+  "$A" -s "$D" shell am start -n com.ran.native/com.ran.launcher.RanActivity >/dev/null 2>&1
   sleep 4
   [ -n "$("$A" -s "$D" shell pidof com.ran.native | tr -d '\r\n')" ] && break
 done

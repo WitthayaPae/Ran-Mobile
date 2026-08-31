@@ -215,7 +215,23 @@ void gestureTick() {
 //  possible without the client drawing a keyboard of its own.
 android_app *g_app = NULL;
 
-//  Raise and lower the keyboard through InputMethodManager.
+//  Raise and lower the keyboard through RanActivity.
+//
+//  This used to call InputMethodManager.showSoftInput() on the window's decor
+//  view directly. That stopped working: the IME binds and the system reports it
+//  as shown, but a decor view is not an editor, so
+//
+//      mHaveConnection=true  mBoundToMethod=true  mServedInputConnection=null
+//
+//  - there is nothing for the keyboard to type into and nothing is drawn.
+//  SHOW_FORCED, which used to paper over it, was deprecated at API 33 and no
+//  longer forces anything. On Android 14 the keyboard is "shown" and invisible.
+//
+//  RanActivity carries a one-pixel focusable view that answers
+//  onCheckIsTextEditor and returns an InputConnection, so the IME has a real
+//  target; committed text comes back through nativeCommitText below.
+//
+//  The old decor-view path, kept for reference:
 //
 //  ANativeActivity_showSoftInput is the obvious call and it does nothing here -
 //  verified, not assumed: the request was logged three times with a live
@@ -224,6 +240,10 @@ android_app *g_app = NULL;
 //  focus, only a surface.
 //
 //  Going at the manager directly and forcing it is what NDK apps have to do.
+//  Digits-only hint for the next RanIME_Show. Defined here rather than beside
+//  g_imeActive because imeCall reads it and imeCall comes first.
+bool g_imeNumeric = false;
+
 void imeCall(bool show) {
     if (!g_app) return;
 
@@ -232,6 +252,21 @@ void imeCall(bool show) {
 
     jobject act = g_app->activity->clazz;
     jclass  cAct = env->GetObjectClass(act);
+
+    //  RanActivity's own methods. If the activity is the plain NativeActivity
+    //  for some reason, these are absent and the old path below still runs.
+    {
+        jmethodID m = env->GetMethodID(cAct, show ? "ranShowKeyboard" : "ranHideKeyboard",
+                                       show ? "(Z)V" : "()V");
+        if (m) {
+            if (show) env->CallVoidMethod(act, m, (jboolean)(g_imeNumeric ? JNI_TRUE : JNI_FALSE));
+            else      env->CallVoidMethod(act, m);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            g_app->activity->vm->DetachCurrentThread();
+            return;
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
 
     //  getSystemService(Context.INPUT_METHOD_SERVICE)
     jmethodID mGetSvc = env->GetMethodID(cAct, "getSystemService",
@@ -285,11 +320,33 @@ void imeCall(bool show) {
 //  otherwise every movement key would type itself into the last field touched.
 bool g_imeActive = false;
 
+
 extern "C" void RanIME_InsertUtf8(const char *sz);
 extern "C" void RanIME_Backspace(void);
 
 extern "C" void RanIME_Show(void) { g_imeActive = true;  imeCall(true); }
 extern "C" void RanIME_Hide(void) { g_imeActive = false; imeCall(false); }
+extern "C" void RanIME_SetNumeric(int numeric) { g_imeNumeric = (numeric != 0); }
+
+//  What the soft keyboard produced, on its way to the client's edit buffer.
+//
+//  Deliberately the same two calls the hardware-key path uses, so there is one
+//  place where text enters the client and soft and hard keyboards cannot drift
+//  apart.
+extern "C" JNIEXPORT void JNICALL
+Java_com_ran_launcher_RanActivity_nativeCommitText(JNIEnv *env, jclass, jstring text) {
+    if (!text) return;
+    const char *sz = env->GetStringUTFChars(text, NULL);
+    if (sz) {
+        RanIME_InsertUtf8(sz);
+        env->ReleaseStringUTFChars(text, sz);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ran_launcher_RanActivity_nativeBackspace(JNIEnv *, jclass) {
+    RanIME_Backspace();
+}
 
 //  How much of the bottom of the window the soft keyboard covers, in
 //  thousandths of the window height.
