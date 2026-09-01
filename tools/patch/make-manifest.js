@@ -3,6 +3,7 @@
     blob store, ready to upload to /launcher_mobile/ on the patch host.
 
         node make-manifest.js --version 366 --min-apk 1
+        node make-manifest.js --version 366 --verify --prune
 
     Output lands in MOBILE/native/out/launcher_mobile/ :
 
@@ -195,6 +196,39 @@ console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size
 console.log('');
 console.log('upload the contents of ' + OUT);
 console.log('to http://<host>/launcher_mobile/');
+
+/* -------------------------------------------------------------------- prune
+   Blobs left behind by an earlier run: the previous content of a file that has
+   since changed, or one dropped from the allowlist. No client asks for them -
+   nothing in this manifest names them - but they are not junk either. They are
+   what makes a rollback possible: republishing an older manifest works only for
+   as long as the blobs it points at are still on the host.
+
+   So this is opt-in, and it reports what it would remove before doing it. Prune
+   when you are certain no manifest you might want to serve again refers to
+   them; leave them alone otherwise, at 1.7 GB of store the space is rarely the
+   binding constraint.                                                         */
+{
+  const blobDir = path.join(OUT, 'blobs');
+  const need = new Set(files.map(f => f.sha256));
+  let stale = [], staleBytes = 0;
+  for (const name of fs.readdirSync(blobDir)) {
+    if (need.has(name)) continue;
+    stale.push(name);
+    try { staleBytes += fs.statSync(path.join(blobDir, name)).size; } catch (e) {}
+  }
+  if (stale.length) {
+    console.log('');
+    if (argv.includes('--prune')) {
+      for (const name of stale) fs.unlinkSync(path.join(blobDir, name));
+      console.log('pruned   : ' + stale.length + ' blob(s), ' + mb(staleBytes) +
+                  ' - rollback to any manifest naming them is no longer possible');
+    } else {
+      console.log('stale    : ' + stale.length + ' blob(s), ' + mb(staleBytes) +
+                  ' not named by this manifest (kept for rollback; --prune removes them)');
+    }
+  }
+}
 
 /* ------------------------------------------------------------------- verify
    Walk the shipped PC client and report anything it has that this manifest
