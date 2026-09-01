@@ -26,7 +26,7 @@
 
 namespace {
 
-enum ObjKind { KIND_FONT = 0x464F4E54, KIND_BITMAP = 0x424D4150 };
+enum ObjKind { KIND_FONT = 0x464F4E54, KIND_BITMAP = 0x424D4150, KIND_BRUSH = 0x42525348 };
 
 struct GdiObj { int kind; };
 
@@ -53,6 +53,10 @@ struct GdiFont : GdiObj {
         const float sc = (float)pixelSize / (float)face->UnitsPerEm();
         return face->Ascender(sc) + face->Descender(sc);
     }
+};
+
+struct GdiBrush : GdiObj {
+    COLORREF colour = 0;
 };
 
 struct GdiBitmap : GdiObj {
@@ -320,6 +324,7 @@ BOOL RanGdi_DeleteObject(HGDIOBJ obj) {
     // The face itself is cached and shared, so only the wrapper goes.
     if (o->kind == KIND_FONT)   { delete (GdiFont *)o;   return TRUE; }
     if (o->kind == KIND_BITMAP) { delete (GdiBitmap *)o; return TRUE; }
+    if (o->kind == KIND_BRUSH)  { delete (GdiBrush *)o;  return TRUE; }
     return TRUE;
 }
 
@@ -440,6 +445,96 @@ BOOL RanGdi_ExtTextOutA(HDC hdc, int x, int y, UINT options, const RECT *rc,
         if (!face->IsMark(gid)) pen += gb.advance;
     }
     return TRUE;
+}
+
+//  UTF-16 (widened into 32-bit wchar_t) to UTF-8.
+//
+//  MultiByteToWideChar in this port writes UTF-16 code units and widens them on
+//  the way out, so a wchar_t here is one UTF-16 unit, not a code point. Surrogate
+//  pairs therefore have to be joined back up before encoding.
+static void wideToUtf8(LPCWSTR src, int count, std::string &out) {
+    out.clear();
+    if (!src) return;
+    if (count < 0) { count = 0; while (src[count]) ++count; }
+    for (int i = 0; i < count; ++i) {
+        unsigned cp = (unsigned)src[i] & 0xFFFF;
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < count) {
+            const unsigned lo = (unsigned)src[i + 1] & 0xFFFF;
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                ++i;
+            }
+        }
+        if (cp < 0x80) out.push_back((char)cp);
+        else if (cp < 0x800) {
+            out.push_back((char)(0xC0 | (cp >> 6)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back((char)(0xE0 | (cp >> 12)));
+            out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back((char)(0xF0 | (cp >> 18)));
+            out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back((char)(0x80 | (cp & 0x3F)));
+        }
+    }
+}
+
+//  The wide draw and measure, which the text-texture cache is written against.
+//
+//  Both were stubs that returned success and did nothing, which is why enabling
+//  CTextUtil produced blank strings: it builds every cached string with
+//  ExtTextOutW over a FillRect'd cell, and measures it with
+//  GetTextExtentPoint32W. Nothing reported an error, so the textures simply came
+//  out empty.
+BOOL RanGdi_ExtTextOutW(HDC hdc, int x, int y, UINT options, const RECT *rc,
+                        LPCWSTR str, UINT count, const INT *dx) {
+    std::string utf8;
+    wideToUtf8(str, (int)count, utf8);
+    return RanGdi_ExtTextOutA(hdc, x, y, options, rc, utf8.c_str(), (UINT)utf8.size(), dx);
+}
+
+BOOL RanGdi_GetTextExtentPoint32W(HDC hdc, LPCWSTR str, int len, LPSIZE size) {
+    std::string utf8;
+    wideToUtf8(str, len, utf8);
+    return RanGdi_GetTextExtentPoint32A(hdc, utf8.c_str(), (int)utf8.size(), size);
+}
+
+HBRUSH RanGdi_CreateSolidBrush(COLORREF c) {
+    GdiBrush *b = new GdiBrush();
+    b->kind = KIND_BRUSH;
+    b->colour = c;
+    return (HBRUSH)b;
+}
+
+//  Flat fill of a rectangle, clipped to the bitmap.
+//
+//  The cache uses this to clear the cell before drawing the string into it;
+//  without it every cached string was drawn over whatever the last one left.
+int RanGdi_FillRect(HDC hdc, const RECT *rc, HBRUSH brush) {
+    GdiDC *dc = asDC(hdc);
+    if (!dc || !dc->target || !rc) return 0;
+
+    COLORREF c = 0;
+    if (brush) {
+        GdiObj *o = (GdiObj *)brush;
+        if (o->kind == KIND_BRUSH) c = ((GdiBrush *)o)->colour;
+    }
+    //  COLORREF is 0x00BBGGRR; the bitmap holds 0x00RRGGBB.
+    const DWORD px = (DWORD)((((c) & 0xFF) << 16) | (((c) >> 8 & 0xFF) << 8) | ((c) >> 16 & 0xFF));
+
+    GdiBitmap *bmp = dc->target;
+    for (int py = rc->top; py < rc->bottom; ++py) {
+        if (py < 0 || py >= bmp->height) continue;
+        DWORD *row = &bmp->bits[(size_t)py * bmp->width];
+        for (int pxx = rc->left; pxx < rc->right; ++pxx) {
+            if (pxx < 0 || pxx >= bmp->width) continue;
+            row[pxx] = px;
+        }
+    }
+    return 1;
 }
 
 BOOL RanGdi_TextOutA(HDC hdc, int x, int y, LPCSTR str, int count) {

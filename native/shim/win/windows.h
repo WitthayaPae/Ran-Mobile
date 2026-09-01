@@ -994,7 +994,8 @@ typedef void *LPDISPATCH;
 inline void VariantClear(VARIANT *) {}
 inline void VariantInit(VARIANT *) {}
 inline BOOL InflateRect(LPRECT r, int dx, int dy) { r->left -= dx; r->right += dx; r->top -= dy; r->bottom += dy; return TRUE; }
-inline int  FillRect(HDC, const RECT *, HBRUSH) { return 1; }
+int  RanGdi_FillRect(HDC, const RECT *, HBRUSH);
+inline int  FillRect(HDC hdc, const RECT *rc, HBRUSH b) { return RanGdi_FillRect(hdc, rc, b); }
 inline BOOL SystemParametersInfoA(UINT, UINT, void *, UINT) { return FALSE; }
 #define SystemParametersInfo SystemParametersInfoA
 int RanGdi_GetDeviceCaps(HDC, int);
@@ -1018,7 +1019,9 @@ extern "C" char *strrev_shim(char *s);
 #ifdef __cplusplus
 BOOL RanGdi_ExtTextOutA(HDC, int, int, UINT, const RECT *, LPCSTR, UINT, const INT *);
 inline BOOL ExtTextOutA(HDC hdc, int x, int y, UINT o, const RECT *rc, LPCSTR s, UINT n, const INT *dx) { return RanGdi_ExtTextOutA(hdc, x, y, o, rc, s, n, dx); }
-inline BOOL ExtTextOutW(HDC, int, int, UINT, const RECT *, LPCWSTR, UINT, const INT *) { return TRUE; }
+BOOL RanGdi_ExtTextOutW(HDC, int, int, UINT, const RECT *, LPCWSTR, UINT, const INT *);
+inline BOOL ExtTextOutW(HDC hdc, int x, int y, UINT o, const RECT *rc, LPCWSTR s, UINT n, const INT *dx)
+    { return RanGdi_ExtTextOutW(hdc, x, y, o, rc, s, n, dx); }
 #define ExtTextOut ExtTextOutA
 HFONT RanGdi_CreateFontA(int,int,int,int,int,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,DWORD,LPCSTR);
 inline HFONT CreateFontA(int h,int w,int e,int o,int wt,DWORD it,DWORD u,DWORD s,DWORD cs,DWORD op,DWORD cp,DWORD q,DWORD pf,LPCSTR face) { return RanGdi_CreateFontA(h,w,e,o,wt,it,u,s,cs,op,cp,q,pf,face); }
@@ -1068,7 +1071,8 @@ inline BOOL ClipCursor(const RECT *) { return TRUE; }
 inline HRESULT CoInitialize(void *) { return S_OK; }
 inline HRESULT CoInitializeEx(void *, DWORD) { return S_OK; }
 inline void CoUninitialize() {}
-inline HBRUSH CreateSolidBrush(COLORREF) { return 0; }
+HBRUSH RanGdi_CreateSolidBrush(COLORREF);
+inline HBRUSH CreateSolidBrush(COLORREF c) { return RanGdi_CreateSolidBrush(c); }
 inline BOOL CryptDestroyKey(ULONG_PTR) { return TRUE; }
 inline LONG GetWindowLongA(HWND, int) { return 0; }
 inline LONG SetWindowLongA(HWND, int, LONG) { return 0; }
@@ -1244,7 +1248,9 @@ inline BOOL IsDBCSLeadByteEx(UINT cp, BYTE b) {
     }
 }
 inline BOOL IsDBCSLeadByte(BYTE b) { return b >= 0x81 && b <= 0xFE; }
-inline BOOL GetTextExtentPoint32W(HDC, LPCWSTR, int, LPSIZE) { return TRUE; }
+BOOL RanGdi_GetTextExtentPoint32W(HDC, LPCWSTR, int, LPSIZE);
+inline BOOL GetTextExtentPoint32W(HDC hdc, LPCWSTR s, int n, LPSIZE sz)
+    { return RanGdi_GetTextExtentPoint32W(hdc, s, n, sz); }
 inline BOOL GetComputerNameA(LPSTR b, LPDWORD n) { if (b && n && *n) { strncpy(b, "android", *n); b[*n-1]=0; *n=(DWORD)strlen(b); } return TRUE; }
 #define GetComputerName GetComputerNameA
 #endif
