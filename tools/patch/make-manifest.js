@@ -26,8 +26,29 @@ const path = require('path');
 const crypto = require('crypto');
 
 const HERE = __dirname;
-const CLIENT = path.resolve(HERE, '../../../CLIENT');
-const OUT = path.resolve(HERE, '../../native/out/launcher_mobile');
+
+/*  The development root - the "DEV EP9" directory - found by walking up from
+    this script until a directory holds the trees that define it. Everything
+    else hangs off that, so the checkout can live anywhere on any machine and
+    the script can be moved without recounting ../ hops.                       */
+function findRoot(from) {
+  let dir = from;
+  for (;;) {
+    const has = n => fs.existsSync(path.join(dir, n));
+    if (has('MOBILE') && (has('CLIENT') || has('Ran'))) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) {
+      console.error('cannot find the development root above ' + from);
+      console.error('expected an ancestor directory containing MOBILE/ and CLIENT/ or Ran/');
+      process.exit(2);
+    }
+    dir = up;
+  }
+}
+
+const ROOT = findRoot(HERE);
+const CLIENT = path.join(ROOT, 'CLIENT');
+const OUT = path.join(ROOT, 'MOBILE/native/out/launcher_mobile');
 
 /* ------------------------------------------------------------------ what ships
    Paths are relative to the device root, /sdcard/ran, so the patcher never has
@@ -86,7 +107,7 @@ const NEVER = [
 /*  The shipped PC client, used only to check this list - never as a source of
     files. It is a real working install, so anything under its data/ that the
     manifest does not carry is a gap.                                          */
-const REFERENCE = path.resolve(HERE, '../../../Ran');
+const REFERENCE = path.join(ROOT, 'Ran');
 const REF_SKIP = [
   /^editor$/i, /^RanMapZipTemp$/i, /^RccAniBinTemp$/i,
 ];
@@ -97,12 +118,16 @@ const arg = (name, fallback) => {
   const i = argv.indexOf('--' + name);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
-const version = parseInt(arg('version', ''), 10);
+const versionArg = parseInt(arg('version', ''), 10);
 const minApk = parseInt(arg('min-apk', '1'), 10);
-if (!Number.isFinite(version)) {
-  console.error('usage: node make-manifest.js --version <n> [--min-apk <n>]');
-  process.exit(2);
-}
+
+/*  The previous manifest, if this store has been built before. It is what the
+    new version number is derived from, and what decides whether anything
+    actually changed.                                                          */
+const PREV = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(OUT, 'manifest.json'), 'utf8')); }
+  catch (e) { return null; }
+})();
 
 /* ------------------------------------------------------------------- helpers */
 const excluded = name => NEVER.some(re => re.test(name));
@@ -135,18 +160,39 @@ function sha256(abs) {
   return h.digest('hex');
 }
 
-/*  Hardlink where the filesystem allows it, copy where it does not. The blob
-    store is 1.7 GB; linking makes rebuilding it free.                         */
+/*  Copy, deliberately, even though hardlinking is free.
+ *
+ *  The store used to hardlink into CLIENT/ to save 1.7 GB. That makes a blob
+ *  and its source the same inode, so editing a client file in place rewrites
+ *  the blob holding its PREVIOUS content - the blob is still named for the old
+ *  bytes and no longer hashes to its own name. Nothing reports it: the next
+ *  build hashes the source, sees new content, and writes a new blob, while the
+ *  old one sits there corrupt. A client that asks for it downloads it, fails
+ *  the sha check, and retries forever.
+ *
+ *  Observed exactly that way: one appended byte to CLIENT/config.ini turned
+ *  blob 56b39b16ce9f... from 1156 bytes into 1157.
+ *
+ *  A content-addressed store has to be immutable to be worth anything, so it
+ *  gets its own copy of the bytes. --link restores the old behaviour for a
+ *  throwaway store where the disk matters more than the guarantee.            */
 function place(abs, dest) {
   if (fs.existsSync(dest)) return 'kept';
-  try { fs.linkSync(abs, dest); return 'linked'; }
-  catch (e) { fs.copyFileSync(abs, dest); return 'copied'; }
+  if (argv.includes('--link')) {
+    try { fs.linkSync(abs, dest); return 'linked'; } catch (e) {}
+  }
+  //  Write beside and rename, so an interrupted run cannot leave a short blob
+  //  sitting under a name that says it is complete.
+  const tmp = dest + '.tmp';
+  fs.copyFileSync(abs, tmp);
+  fs.renameSync(tmp, dest);
+  return 'copied';
 }
 
 /* ---------------------------------------------------------------------- run */
+console.log('root   : ' + ROOT);
 console.log('client : ' + CLIENT);
 console.log('output : ' + OUT);
-console.log('version: ' + version + '   minApk: ' + minApk);
 console.log('');
 
 const wanted = [];
@@ -183,6 +229,45 @@ for (const rel of wanted) {
 
 files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
+/* ------------------------------------------------------------------ version
+   The version number is the switch that makes an already-patched client look
+   at anything: it returns "up to date" the moment its local number matches,
+   without inspecting a single file. Typing it by hand means one forgotten
+   argument publishes an update nobody receives - so it is derived from the
+   content instead.
+
+   Same files and same hashes as the last build: keep the number, and say that
+   nothing needs uploading. Anything different: one past the last. An explicit
+   --version still wins, for republishing an old manifest or forcing a number. */
+const changes = (() => {
+  if (!PREV || !Array.isArray(PREV.files)) return null;   //  first ever build
+  const was = new Map(PREV.files.map(f => [f.path, f.sha256]));
+  const now = new Map(files.map(f => [f.path, f.sha256]));
+  const added = [], changed = [], removed = [];
+  for (const [p, sha] of now) {
+    if (!was.has(p)) added.push(p);
+    else if (was.get(p) !== sha) changed.push(p);
+  }
+  for (const p of was.keys()) if (!now.has(p)) removed.push(p);
+  return { added, changed, removed,
+           total: added.length + changed.length + removed.length };
+})();
+
+let version, versionWhy;
+if (Number.isFinite(versionArg)) {
+  version = versionArg;
+  versionWhy = 'given on the command line';
+} else if (!PREV) {
+  version = 1;
+  versionWhy = 'first build of this store';
+} else if (changes && changes.total === 0) {
+  version = PREV.version;
+  versionWhy = 'unchanged - nothing to publish';
+} else {
+  version = (PREV.version || 0) + 1;
+  versionWhy = 'bumped from ' + PREV.version;
+}
+
 const manifest = { version: version, minApk: minApk, files: files };
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
 
@@ -193,9 +278,92 @@ console.log('files    : ' + files.length + '  (' + uniq + ' unique blobs)');
 console.log('payload  : ' + mb(bytes));
 console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept + ' already present');
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size));
+console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
+if (changes) {
+  const show = (label, list) => {
+    if (!list.length) return;
+    console.log('  ' + label + ' ' + list.length);
+    for (const p of list.slice(0, 8)) console.log('      ' + p);
+    if (list.length > 8) console.log('      ... and ' + (list.length - 8) + ' more');
+  };
+  show('added  ', changes.added);
+  show('changed', changes.changed);
+  show('removed', changes.removed);
+  if (changes.total === 0)
+    console.log('  nothing changed since version ' + PREV.version + ' - no upload needed');
+}
 console.log('');
 console.log('upload the contents of ' + OUT);
 console.log('to http://<host>/launcher_mobile/');
+
+/* --------------------------------------------------------------------- fsck
+   Every blob re-hashed and checked against its own name. Slow - it reads the
+   whole 1.7 GB store - so it is opt-in, but it is the only thing that catches a
+   blob that was corrupted after it was written. A blob that fails cannot be
+   rebuilt from CLIENT/ (the source has moved on, which is how it broke), so it
+   is deleted: an absent blob makes a client fail loudly on a manifest that
+   names it, where a corrupt one makes it retry forever.                       */
+if (argv.includes('--fsck')) {
+  const blobDir = path.join(OUT, 'blobs');
+  const names = fs.readdirSync(blobDir).filter(n => !n.endsWith('.tmp'));
+  const live = new Set(files.map(f => f.sha256));
+  let bad = [], seen = 0;
+  console.log('');
+  console.log('fsck     : verifying ' + names.length + ' blobs');
+  for (const name of names) {
+    if (sha256(path.join(blobDir, name)) !== name) bad.push(name);
+    if (++seen % 500 === 0) process.stdout.write('  checked ' + seen + '/' + names.length + '\r');
+  }
+  process.stdout.write('                                        \r');
+  if (!bad.length) {
+    console.log('fsck     : all ' + names.length + ' blobs hash to their names');
+  } else {
+    for (const name of bad) {
+      const inUse = live.has(name);
+      fs.unlinkSync(path.join(blobDir, name));
+      console.log('  CORRUPT ' + name + (inUse ? '  (named by THIS manifest - rebuild now)' : '  (old version, rollback point lost)'));
+    }
+    console.log('fsck     : ' + bad.length + ' corrupt blob(s) deleted');
+  }
+}
+
+/* ----------------------------------------------------------------- unshare
+   A store built by an earlier version of this script hardlinks into CLIENT/,
+   so every blob is the same inode as the file it came from and an in-place
+   edit rewrites it. Copying is the default now, but that only protects blobs
+   written from here on - the ones already in the store stay shared until they
+   are re-materialised, which is what this does. Reported free (the stat is one
+   syscall), fixed only when asked, because it rewrites the whole 1.7 GB.      */
+{
+  const blobDir = path.join(OUT, 'blobs');
+  const doIt = argv.includes('--unshare');
+  let shared = [], sharedBytes = 0;
+  for (const name of fs.readdirSync(blobDir)) {
+    if (name.endsWith('.tmp')) continue;
+    let st;
+    try { st = fs.statSync(path.join(blobDir, name)); } catch (e) { continue; }
+    if (st.nlink > 1) { shared.push(name); sharedBytes += st.size; }
+  }
+  if (shared.length) {
+    console.log('');
+    if (!doIt) {
+      console.log('shared   : ' + shared.length + ' blob(s), ' + mb(sharedBytes) +
+                  ' share an inode with CLIENT/ - an in-place edit there will');
+      console.log('           corrupt them silently. --unshare rewrites them as copies.');
+    } else {
+      let n = 0;
+      for (const name of shared) {
+        const dest = path.join(blobDir, name), tmp = dest + '.tmp';
+        fs.copyFileSync(dest, tmp);          //  a copy has its own inode
+        fs.renameSync(tmp, dest);            //  and replaces the shared one
+        if (++n % 500 === 0) process.stdout.write('  unshared ' + n + '/' + shared.length + '\r');
+      }
+      process.stdout.write('                                        \r');
+      console.log('unshared : ' + shared.length + ' blob(s), ' + mb(sharedBytes) +
+                  ' - the store no longer shares storage with CLIENT/');
+    }
+  }
+}
 
 /* -------------------------------------------------------------------- prune
    Blobs left behind by an earlier run: the previous content of a file that has
