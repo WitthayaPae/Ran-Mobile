@@ -62,7 +62,16 @@ Never edit it to "point at" anything. The server address lives in one place only
 
 ## Publishing a data update
 
-Two jobs.
+**Double-click `MAKE-PATCH.bat` in the development root.** It runs the build
+below, works the version out for itself, and prints what to upload. Deploying
+`launcher_mobile/` is the only step left by hand.
+
+It refuses rather than half-working: no Node on PATH, or the file moved out of
+the root, and it says so and stops. If the build fails it says
+**do not upload anything** - nothing on the server has changed at that point, so
+players are unaffected.
+
+What it runs, if you prefer a terminal:
 
     1.  edit the file in  CLIENT/
     2.  node MOBILE/tools/patch/make-manifest.js --verify
