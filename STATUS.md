@@ -85,6 +85,7 @@ also compile under MSVC, so the PC build stays intact.
 |---|---|---|
 | `MOBILE/STATUS.md` | **this file** — current state, updated every session | live |
 | `MOBILE/NATIVE-PORT-PLAN.md` | the port plan: audit numbers, architecture, phases, status log | live |
+| `MOBILE/PATCHING.md` | how to publish an update: the two jobs, server layout, store maintenance, traps | live |
 | `MOBILE/native/PHASE1-LINK-REPORT.md` | the 173-symbol work-list for phases 3–4 | live |
 | `MOBILE/native/PHASE2-BOOT.md` | how to install/run the headless boot APK and what its log means | live |
 | `MOBILE/native/layout/LAYOUT-REPORT.md` | packet-layout gate: method, findings, how to re-run | live |
