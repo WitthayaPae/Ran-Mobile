@@ -74,3 +74,4 @@ tools/layout-probe/structs.gen.inc
 
 # Compiler error logs from the layout probe
 *.err
+tools/patch/keys/

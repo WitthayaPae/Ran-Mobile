@@ -268,8 +268,44 @@ if (Number.isFinite(versionArg)) {
   versionWhy = 'bumped from ' + PREV.version;
 }
 
+let signed = 0;   //  signature length, 0 when the payload is unsigned
 const manifest = { version: version, minApk: minApk, files: files };
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
+
+/* ------------------------------------------------------------------- sign
+   The manifest is the only thing a client trusts. Every blob is checked
+   against a hash that comes out of it, so whoever writes the manifest decides
+   what lands on the device - and it travels over plain HTTP to a bare IP,
+   which means anyone on the network path can write it. The SHA-256 check
+   catches corruption and nothing else.
+
+   So the manifest carries a signature, and the client refuses one it cannot
+   verify against a key compiled into the APK. That holds even if the transport
+   is plain HTTP, and even if the host itself is taken: an attacker who cannot
+   sign cannot publish.
+
+   The private key lives in tools/patch/keys/ and is gitignored. Lose it and
+   you cannot publish another update without shipping a new APK - back it up
+   the same way as the release keystore.                                      */
+{
+  const keyPath = path.join(HERE, 'keys', 'manifest-signing-key.pem');
+  if (!fs.existsSync(keyPath)) {
+    console.log('');
+    console.log('  ******  NO SIGNING KEY  ******');
+    console.log('  ' + keyPath);
+    console.log('  is missing, so manifest.sig cannot be written. Every client will');
+    console.log('  refuse this payload. Restore the key from your backup before');
+    console.log('  uploading anything.');
+    process.exitCode = 1;
+  } else {
+    const body = fs.readFileSync(path.join(OUT, 'manifest.json'));
+    const sig = crypto.createSign('SHA256')
+                      .update(body)
+                      .sign(crypto.createPrivateKey(fs.readFileSync(keyPath)));
+    fs.writeFileSync(path.join(OUT, 'manifest.sig'), sig.toString('base64') + '\n');
+    signed = sig.length;
+  }
+}
 
 const uniq = new Set(files.map(f => f.sha256)).size;
 const mb = x => (x / 1048576).toFixed(1) + ' MB';
@@ -277,7 +313,8 @@ console.log('                                        ');
 console.log('files    : ' + files.length + '  (' + uniq + ' unique blobs)');
 console.log('payload  : ' + mb(bytes));
 console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept + ' already present');
-console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size));
+console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
+            (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
 if (changes) {
   const show = (label, list) => {

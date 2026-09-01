@@ -30,11 +30,13 @@ Serve one directory. Nothing else goes in it.
 
     launcher_mobile/            ->  http://<host>:<port>/launcher_mobile/
     manifest.json               1.2 MB   version, minApk, one entry per file
+    manifest.sig                97 B     signature over manifest.json - REQUIRED
     blobs/                      1.7 GB   8017 files, named by SHA-256, no extensions
 
-The client only ever builds two URLs:
+The client only ever builds three URLs:
 
     GET  <base>manifest.json
+    GET  <base>manifest.sig
     GET  <base>blobs/<sha256>          (resumed with Range on a dropped connection)
 
 **`manifest.json` is not a map of your server.** Its `path` field is where a file
@@ -111,6 +113,9 @@ the first allowlist.
 * **Never enable delete-on-sync** (`rsync --delete` and friends). The store is
   append-only on purpose: republishing an older manifest is how you roll back,
   and that only works while the blobs it names are still on the host.
+* **`manifest.sig` must go up with `manifest.json`.** They are checked as a
+  pair, so a client that catches one without the other fails - safely, but it
+  fails. Upload them together, after the blobs.
 * Re-uploading the whole folder is fine, just wasteful. Any tool that skips
   identical files moves only the new blobs.
 
@@ -164,6 +169,64 @@ For a permanent change, edit `BASE_DEFAULT` in
 device — it overrides `BASE_DEFAULT` at runtime. Include the trailing slash.
 
     adb shell "echo -n 'http://10.0.0.5:8080/launcher_mobile/' > /sdcard/ran/.patchbase"
+
+---
+
+## The manifest is signed, and that is what makes this safe
+
+Every blob is checked against a SHA-256 that comes **out of the manifest**. So
+whoever writes the manifest decides what lands on the device. That check catches
+corruption; on its own it stops no attacker at all, because the manifest arrives
+over the same plain HTTP connection as everything else.
+
+So the manifest is signed with a P-256 key, and the client refuses one it cannot
+verify against the public half compiled into the APK. An attacker who cannot
+sign cannot publish - whatever they do to the network, and even if they take the
+patch host itself.
+
+It **fails closed**. A missing, malformed or wrong signature is a hard stop:
+
+    manifest signature does not verify - refusing this update
+    no manifest signature on the server
+
+Deleting `manifest.sig` does not disable the check, it stops the update. Verified
+on the emulator against a manifest with one byte changed and against a store with
+no signature at all.
+
+The client also refuses to go **backwards**. A signature cannot stop an old
+manifest you signed yourself from being replayed, and an attacker who can answer
+for the host could otherwise pin clients to a version whose bugs they know. To
+publish old content deliberately, republish it under a **higher** number.
+
+### The signing key
+
+    MOBILE/tools/patch/keys/manifest-signing-key.pem      private - gitignored
+    MOBILE/tools/patch/keys/manifest-signing-key.pub.b64  public - compiled into the APK
+
+**Back the private key up the way you back up the release keystore.** Lose it and
+you cannot publish another update without shipping a new APK to every player,
+because the key they check against is baked into the one they have.
+
+Do not commit it, and do not put it on the patch host - the host never needs it.
+Signing happens on your machine, at build time. If it is missing the build says
+so and refuses to pretend:
+
+    ******  NO SIGNING KEY  ******
+    ...is missing, so manifest.sig cannot be written. Every client will
+    refuse this payload.
+
+### What is still not protected
+
+* **The transport is still plain HTTP.** Signing means nobody can *change* what
+  you publish, but anyone on the path can still see it. There is nothing secret
+  in the payload, so this is a privacy question, not an integrity one. HTTPS is
+  still worth doing.
+* **`/sdcard/ran` is readable and writable by any app with storage permission.**
+  The patcher will repair anything it is asked to check, but a file tampered with
+  between patches is only caught when its manifest entry is next verified.
+* **`.patchbase` can still redirect the patcher**, and that is now much less
+  interesting: a redirected server has to serve a manifest signed with your key,
+  or nothing happens.
 
 ---
 

@@ -34,6 +34,10 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -198,7 +202,19 @@ public class RanLauncher extends Activity {
     private void patch() throws Exception {
         say("Checking for updates", base(), -1);
 
-        JSONObject m = new JSONObject(new String(httpGet(base() + "manifest.json"), "UTF-8"));
+        /*  Fetched as bytes and checked before being parsed: a JSON parser is
+         *  the first thing an attacker reaches, so it must not run on anything
+         *  unverified.                                                        */
+        byte[] body = httpGet(base() + "manifest.json");
+        byte[] sig;
+        try {
+            sig = httpGet(base() + "manifest.sig");
+        } catch (Exception e) {
+            throw new Exception("no manifest signature on the server (" + e.getMessage() + ")");
+        }
+        verifyManifest(body, sig);
+
+        JSONObject m = new JSONObject(new String(body, "UTF-8"));
         int version = m.getInt("version");
         int minApk = m.optInt("minApk", 0);
 
@@ -218,6 +234,17 @@ public class RanLauncher extends Activity {
 
         int localVersion = readVersion();
         if (localVersion == version) { say("Up to date", "version " + version, 1000); return; }
+
+        /*  Never go backwards.
+         *
+         *  A signature stops an attacker writing a manifest, but not replaying
+         *  one you signed yourself - an old manifest is still validly signed
+         *  forever. Without this, anyone able to answer for the host could pin
+         *  clients to a version whose bugs they know. To publish old content
+         *  deliberately, republish it under a higher number.                  */
+        if (localVersion >= 0 && version < localVersion)
+            throw new Exception("server offers version " + version +
+                                ", older than the installed " + localVersion);
 
         JSONArray arr = m.getJSONArray("files");
         Map<String, String> index = readIndex();          //  path -> "size:mtime:sha"
@@ -279,6 +306,44 @@ public class RanLauncher extends Activity {
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
         say("Updated", "version " + version, 1000);
+    }
+
+    /*  The key the manifest must be signed with.
+     *
+     *  P-256 public key, X.509 SubjectPublicKeyInfo, base64. The private half
+     *  lives in MOBILE/tools/patch/keys/ and is gitignored; make-manifest.js
+     *  signs manifest.json with it and writes manifest.sig beside it.
+     *
+     *  This is what makes the patcher safe over plain HTTP. Every blob is
+     *  verified against a hash out of the manifest, so whoever writes the
+     *  manifest decides what lands on the device - and until now that was
+     *  anyone on the network path, because the manifest arrived unauthenticated
+     *  and the SHA-256 check only ever caught corruption. An attacker who
+     *  cannot sign now cannot publish, whatever they do to the transport or the
+     *  host.                                                                  */
+    private static final String MANIFEST_PUBKEY =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/kqyu7XQLuP/WlBSpgnfKrN91qevUOtyVEMA3nL6hMX+lBTv9K7PHs/tQ1t1BZgpb9ugHasRVkTOk8b1F93jUQ==";
+
+    /*  Fails closed: a missing, malformed or wrong signature is a hard stop,
+     *  never a warning. A check that can be skipped by deleting a file is not a
+     *  check.                                                                 */
+    private void verifyManifest(byte[] body, byte[] sigText) throws Exception {
+        byte[] der;
+        try {
+            der = android.util.Base64.decode(new String(sigText, "UTF-8").trim(),
+                                             android.util.Base64.DEFAULT);
+        } catch (Throwable t) {
+            throw new Exception("manifest signature is not valid base64");
+        }
+
+        PublicKey pk = KeyFactory.getInstance("EC").generatePublic(
+            new X509EncodedKeySpec(android.util.Base64.decode(MANIFEST_PUBKEY,
+                                                              android.util.Base64.DEFAULT)));
+        Signature v = Signature.getInstance("SHA256withECDSA");
+        v.initVerify(pk);
+        v.update(body);
+        if (!v.verify(der))
+            throw new Exception("manifest signature does not verify - refusing this update");
     }
 
     /*  Where a manifest entry is allowed to land.
