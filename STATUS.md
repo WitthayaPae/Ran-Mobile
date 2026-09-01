@@ -165,6 +165,35 @@ the change was structural.
   than the `STARGETID` (whose position is the one it had when selected). With nothing
   selected the camera is left alone.
 
+### Dead targets, measured (2026-09-02)
+
+Killing something now drops it everywhere at once. Instrumented across a kill:
+
+    find: 4 candidates, 0 dead, best=27.4 chose=one
+    attack: auto-selected a target
+    live: target at 0/180 - dropping
+    find: 3 candidates, 0 dead, best=37.1 chose=one
+
+* the zero-health drop fires on the killing blow, before the death action
+  arrives - that was the window in which the corpse was still attackable
+* the corpse is not offered again; the next search picks a different live mob
+* auto-select works. The earlier note claiming the corpse filter had broken it
+  was **wrong**
+
+**The pad button map was read backwards, and it invalidated several results.**
+The right column is laid out upward from the attack button, so top to bottom it
+is CAMLOCK (eye), PK (blades), AUTO (crosshair) - not the reverse. Every
+"camlock" test before this was toggling AUTO instead. That also retires the
+"button lit while its flag reads 0" item below: there is no divergence, it was
+the wrong button being read.
+
+**The camera lock maths is right.** `DxViewPort::CameraRotation` (bFrom=FALSE)
+was simulated offline against the easing: from 90 degrees off, the shipped sign
+converges (-1.5708 to -0.146 over twelve frames) and the opposite sign diverges
+to 180. The lock does nothing without a live target, which is by design and is
+what the probe kept showing. Still unconfirmed on a device - the emulator would
+not boot again after this session.
+
 ### Still open from this session
 
 * **The camera lock is not verified end to end.** The path executes and correctly
