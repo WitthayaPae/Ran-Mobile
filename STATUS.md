@@ -107,6 +107,79 @@ the change was structural.
 
 ## Log
 
+- **2026-09-01 (later)** — **The patcher audited, and six of seven findings closed.**
+
+  The client verified every blob against a SHA-256 that came **out of the manifest**,
+  and fetched the manifest over plain HTTP to a bare IP. So the check caught
+  corruption and stopped no attacker at all: whoever writes the manifest decides
+  what lands on the device, and that was anyone on the network path.
+
+  | # | Finding | State |
+  |---|---|---|
+  | 1 | `manifest.json`'s `path` used as a destination with no validation | **fixed** |
+  | 2 | Response bodies written until EOF, no size cap | **fixed** |
+  | 3 | `REQUEST_INSTALL_PACKAGES` declared but never used | **removed** |
+  | 4 | Manifest unauthenticated | **signed**; transport still cleartext |
+  | 5 | `.patchbase` redirect readable by any app | **fixed** |
+  | 6 | Version compared with `!=`, so downgrades accepted | **fixed** |
+  | 7 | Data root readable/writable by any app with storage permission | **fixed** |
+
+  **Path traversal (1).** `new File(rootDir, e.getString("path"))` with nothing
+  checking it: `../../../../x` wrote outside the data root, and this app holds
+  `MANAGE_EXTERNAL_STORAGE`. The download path also deletes the destination before
+  renaming over it, so a hostile manifest could delete as well as create. Now
+  rejected on both passes, and proven with a hostile manifest served over an adb
+  reverse tunnel: `path escapes the data root: ../../../../sdcard/Download/...`,
+  no file written, and the server log shows it never even asked for the blob.
+
+  **Signing (4).** `manifest.json` is signed with a P-256 key; the client verifies it
+  against the public half compiled into the APK, **before parsing the JSON** — a
+  parser is the first thing an attacker reaches, so it must not run on unverified
+  bytes. Fails closed, all three cases measured:
+
+      valid signature                    Up to date  |  version 366
+      one byte changed, sig kept         manifest signature does not verify
+      manifest.sig removed from server   no manifest signature on the server
+
+  An attacker who cannot sign cannot publish, whatever they do to the transport
+  or to the host. **The private key is gitignored and must be backed up like the
+  release keystore** — the public half is baked into every installed APK, so
+  losing it means no further patch can reach existing installs at all.
+
+  **Rollback (6).** A signature cannot stop an old manifest being replayed; it stays
+  validly signed forever. Any version below the installed one is now refused. To
+  ship old content deliberately, republish it under a higher number.
+
+  **The data root (7).** `/sdcard/ran` is shared storage, and the client's C++ loaders
+  are not hardened against hostile input — another app editing a `.rcc` in place
+  was a route into this process. The root is now the app's own external files
+  directory, unreachable by other apps on Android 11+, needing no permission, and
+  still visible over adb. The native loader already tried that location; it just
+  tried shared storage first, so the order is flipped and the old path stays as a
+  fallback for adb-pushed test trees. That also moved `.patchbase` out of reach,
+  which closes (5).
+
+  Migration is the awkward part. Renaming would be instant and is tried first, but
+  **Android refuses a rename from shared storage into `Android/data/<package>`
+  whatever permissions are held** — measured with `MANAGE_EXTERNAL_STORAGE` granted,
+  0 of 33 entries moved. So it copies, which took about five minutes for a real
+  9.2 GB install on the emulator. `config.ini` is copied last and marks the tree
+  complete, so an interrupt restarts rather than leaving half a tree; the old files
+  go only once the new tree is good; any failure leaves the old root in charge.
+  Verified end to end: migrated, booted from the private root, logged in, rendered.
+
+  **What is left.** The transport is still cleartext HTTP. With the manifest signed
+  that costs confidentiality, not integrity — nobody can change what is published,
+  they can only watch it go past, and there is nothing secret in the payload. HTTPS
+  needs a certificate on the patch host, which is not something this side can do:
+  the client already speaks it, so it is `BASE_DEFAULT` plus removing the cleartext
+  exception from `network_security_config.xml`. `MANAGE_EXTERNAL_STORAGE` is also
+  still requested — needed now only to migrate an old install and to read the debug
+  switches, and droppable once both are gone.
+
+  Written up in `MOBILE/PATCHING.md`.
+
+
 - **2026-09-01** — **The frame rate drop was the new HUD rebuilding itself sixty times a second.**
 
   Reported as "back to 35 fps on the tablet". Two things were true at once, and only
