@@ -108,6 +108,78 @@ the change was structural.
 
 ## Log
 
+- **2026-09-01 (evening)** — **Four interface faults, each traced to the PC mechanism first.**
+
+  **NPCs showed a health bar.** `MobileTargetTick` called `SetTargetInfo` for whatever
+  was latched, which is the *mob* panel - it shows health and floats a bar over the
+  target's head. The client never does that for an NPC, and the reason is a gate
+  rather than a branch: `SetTargetInfo` is only reached when
+
+      (emCrow==CROW_PC && emACTAR==EMACTAR_PC_PVP) || emACTAR==EMACTAR_MOB
+      || (bBRIGHTEVENT && emACTAR!=EMACTAR_NPC)
+      || (emCrow==CROW_SUMMON && emACTAR==EMACTAR_SUMMON_ATTACK)
+
+  which excludes `EMACTAR_NPC` outright; NPCs reach `SetTargetInfoNpc`, handed a name
+  and nothing else. The tick makes the same three-way split now.
+
+  It also had **two owners**. The PC dispatch runs off `m_sACTAR`, the pick under the
+  pointer: a mouse re-picks every frame so there is only ever one panel, but a
+  finger leaves the pointer where it last touched, so that code showed a panel for
+  whatever was last passed over while the tick showed one for the latched target -
+  two panels stacked. Those calls are `#ifndef RAN_MOBILE` now.
+
+  **No black outline on any text.** The outline needs `CTextUtil::m_bUsage &&
+  m_iOutLine`, and both were off because the client believed it was on Windows 98.
+  `GetWinVer` asks with a ZeroMemory'd `OSVERSIONINFOEX`; its 6.1 arm switches on
+  `wProductType` with no else, the shim never filled that field, so the zero matched
+  neither arm and `nVersion` kept `WUNKNOWN` (0) - below `WNTFIRST` (101), the test
+  everything downstream reads as "9x". The shim reports `VER_NT_WORKSTATION` now.
+
+  Fixing that alone **deleted every glyph in the interface**: `m_bUsage` also routes
+  text through `CTextUtil`'s texture cache, which builds textures with `FillRect` and
+  `ExtTextOutW` - stubs in the port that report success and draw nothing. Mobile
+  takes the immediate font path unconditionally now: outline kept, cache skipped.
+  Measured cost, `interface` **0.7 ms -> 2.3 ms** a frame, being eight extra passes
+  per string. Implementing those GDI calls would buy it back.
+
+  **Presses fell through open windows** to the pad underneath. This hit test has now
+  been wrong three ways, and the third is the one to remember:
+
+  | test | fails on |
+  |---|---|
+  | `IsVisible()` | GENDER_CHANGE_WINDOW - visible flag set, nothing drawn, killed the pad's toggles |
+  | `IsNoRender()` on the top control | a window is a CUIGroup that paints nothing itself; whole windows became click-through |
+  | tree walk without pruning | a closed window's children keep their own visible flags; blocked the world and the pad |
+
+  It is now a virtual that recurses and stops dead at a hidden group. Verified with
+  the settings window dragged over the camera-lock button, using the HUD cache as the
+  detector - a press changes a button's `down` state, forcing a rebuild:
+
+      PK button, nothing over it     82128 -> 82968 verts, 7 -> 9 draws   toggles
+      world drag                     83.5% of sampled world pixels changed
+      settings window over the lock  82128 verts, 7 draws                 blocked
+
+  **Camera lock followed the walk direction.** It used `GetDirectionVector()`, so the
+  view swung round on every course change and the target slid off screen. It now
+  aims at `m_sMobileTarget`, reading the position fresh from the copy list rather
+  than the `STARGETID` (whose position is the one it had when selected). With nothing
+  selected the camera is left alone.
+
+### Still open from this session
+
+* **The camera lock is not verified end to end.** The path executes and correctly
+  no-ops without a target (instrumented: `camlock=1, emACTAR=0, len2=0.000`), but
+  holding the lock on *and* a live target together long enough to measure the camera
+  returning was not achievable with scripted taps - mobs wander off and the tick
+  clears the target. Needs a hand on the device.
+* **The lock button was once observed lit while the flag driving it read 0.**
+  Unexplained. If the overlay's toggle and `bCAMLOCK` can diverge, the button looks
+  on and does nothing. First suspect if the lock misbehaves.
+* Text costs 1.6 ms a frame more than it did. `ExtTextOutW`, `GetTextExtentPoint32W`,
+  `FillRect` and `CreateSolidBrush` are the four stubs standing between the port and
+  the text-texture cache that would remove it.
+
+
 - **2026-09-01 (cleanup)** — **The Unity path is gone, and the port is the only client.**
 
   17.1 GB removed. `MOBILE/` was 23.6 GB and is now 6.5 GB, effectively all of it
