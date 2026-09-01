@@ -92,7 +92,7 @@ also compile under MSVC, so the PC build stays intact.
 | `MOBILE/reference/` | decoded PC file formats and asset pipeline — **still true**, engine-independent | reference |
 | `MOBILE/archive-unity/` | superseded Unity-rewrite docs, kept only as history | dead |
 | `MOBILE/client/`, `MOBILE/spike/` | the JS protocol spike that preceded the port | **deleted 2026-09-01** |
-| `MOBILE/unity/` | the frozen Unity project (fallback / asset source) | frozen |
+| `MOBILE/unity/`, `MOBILE/assets/`, `MOBILE/build/` | the Unity project and its extracted assets | **deleted 2026-09-01** |
 | `SOURCE/SOURCE_*.md` | maps of the original C++ codebase | reference |
 
 Root-level `*.md` (EP1/EP7 ports, GM_COMMANDS, plan.md …) are the **server/content**
@@ -107,6 +107,42 @@ and add an entry to the log below. Then update the status log in `NATIVE-PORT-PL
 the change was structural.
 
 ## Log
+
+- **2026-09-01 (cleanup)** — **The Unity path is gone, and the port is the only client.**
+
+  17.1 GB removed. `MOBILE/` was 23.6 GB and is now 6.5 GB, effectively all of it
+  `native/`.
+
+  | Removed | Size |
+  |---|---|
+  | `unity/` — the Unity project and its 7.6 GB of imported art | 8.9 GB |
+  | `assets/` — rcc-extract staging, 16,072 textures | 3.7 GB |
+  | 1,089 test screenshots in `native/out/` | 3.7 GB |
+  | `ran-phase2.apk` and its idsig, superseded | 339 MB |
+  | `build/mapobj` — extracted map objects | 29 MB |
+  | `client/`, `spike/` — the JS protocol spike that preceded the port | 166 KB |
+  | stray logs, a pulled `simpleperf`, `orphan-ui-atlases.txt` | — |
+
+  None of it was in git: `unity/`, `assets/` and `build/` are all gitignored, so this
+  is not recoverable, and it was chosen deliberately. Nothing had been touched
+  since the native-port decision on 2026-08-24.
+
+  **43 screenshots were kept** — the ones cited by name in this file and the other
+  docs as evidence for past findings. Deleting those would have left the write-ups
+  pointing at nothing; the list was built by scanning all 20 markdown files rather
+  than guessing.
+
+  Two things that looked like findings and were not, both checked before acting:
+  every `.cpp` under `shim/` appears unlisted in `CMakeLists.txt` because it uses
+  `file(GLOB_RECURSE SHIM_SRC ...)` — there is no dead source there; and `unity/`
+  refused to delete with "Device or resource busy" from a transient handle, not an
+  open Editor.
+
+  `reference/` stays: the decoded file formats are engine-independent and still
+  true. `archive-unity/` stays as history, 228 KB.
+
+  Verified after: the payload signature still verifies, 8,017/8,017 blobs present,
+  the release APK intact.
 
 - **2026-09-01 (later)** — **The patcher audited, and six of seven findings closed.**
 
