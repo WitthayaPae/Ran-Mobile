@@ -466,9 +466,43 @@ void GlobalMemoryStatus(LPMEMORYSTATUS ms) {
     ms->dwTotalPhys = (SIZE_T)pages * (SIZE_T)ps;
     ms->dwAvailPhys = (SIZE_T)sysconf(_SC_AVPHYS_PAGES) * (SIZE_T)ps;
 }
+//  Windows 7 Professional, and the product type matters.
+//
+//  This used to fill the five base fields and stop. GetWinVer() asks with an
+//  OSVERSIONINFOEX, which it ZeroMemorys first, and its 6.1 arm is
+//
+//      if      ( wProductType == VER_NT_WORKSTATION )        *nVersion = W7;
+//      else if ( wProductType == VER_NT_SERVER || ... )      *nVersion = WSVR2008R2;
+//
+//  with no else. Leaving wProductType at the zero it was cleared to matched
+//  neither, so nVersion kept its initial WUNKNOWN (0) - below WNTFIRST (101),
+//  which is the test everything downstream uses to mean "Windows 9x".
+//
+//  Two things read that, and both are about text:
+//
+//      CTextUtil::OneTimeSceneInit   nVersion < WNTFIRST -> m_bUsage = FALSE
+//      CD3DFontX::InitDeviceObjects  nVersion < WNTFIRST -> m_iOutLine = 0
+//
+//  and the black outline behind every glyph is drawn only when
+//  CTextUtil::m_bUsage && m_iOutLine. So the client had been told it was
+//  running on Windows 98 and had quietly turned the outline off - text still
+//  rendered, which is why it read as a missing feature rather than a fault.
+//
+//  Filling the EX fields is the fix; the size field says whether the caller
+//  passed room for them, exactly as the real GetVersionEx decides.
 BOOL GetVersionExA(LPOSVERSIONINFOA v) {
+    if (!v) return FALSE;
     v->dwMajorVersion = 6; v->dwMinorVersion = 1; v->dwBuildNumber = 7601;
     v->dwPlatformId = VER_PLATFORM_WIN32_NT; v->szCSDVersion[0] = 0;
+
+    if (v->dwOSVersionInfoSize >= sizeof(OSVERSIONINFOEXA)) {
+        OSVERSIONINFOEXA *ex = (OSVERSIONINFOEXA *)v;
+        ex->wServicePackMajor = 1;
+        ex->wServicePackMinor = 0;
+        ex->wSuiteMask = 0;
+        ex->wProductType = VER_NT_WORKSTATION;
+        ex->wReserved = 0;
+    }
     return TRUE;
 }
 DWORD GetVersion(void) { return 0x0A280106; }
