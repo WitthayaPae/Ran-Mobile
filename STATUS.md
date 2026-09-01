@@ -196,14 +196,9 @@ not boot again after this session.
 
 ### Still open from this session
 
-* **The camera lock is not verified end to end.** The path executes and correctly
-  no-ops without a target (instrumented: `camlock=1, emACTAR=0, len2=0.000`), but
-  holding the lock on *and* a live target together long enough to measure the camera
-  returning was not achievable with scripted taps - mobs wander off and the tick
-  clears the target. Needs a hand on the device.
-* **The lock button was once observed lit while the flag driving it read 0.**
-  Unexplained. If the overlay's toggle and `bCAMLOCK` can diverge, the button looks
-  on and does nothing. First suspect if the lock misbehaves.
+* **The camera lock is not verified on a device.** Maths checked offline (see
+  above); it no-ops without a live target by design. Needs one run on hardware:
+  target a mob, lock (TOP icon), circle it - the mob should stay in front.
 * Text costs 1.6 ms a frame more than it did. `ExtTextOutW`, `GetTextExtentPoint32W`,
   `FillRect` and `CreateSolidBrush` are the four stubs standing between the port and
   the text-texture cache that would remove it.
