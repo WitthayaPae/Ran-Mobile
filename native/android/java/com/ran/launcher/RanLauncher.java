@@ -231,7 +231,7 @@ public class RanLauncher extends Activity {
             String sha = e.getString("sha256");
             long size = e.getLong("size");
 
-            File f = new File(rootDir, p);
+            File f = safeDest(rootDir, p);
             boolean ok = false;
             if (f.exists() && f.length() == size) {
                 String key = index.get(p);
@@ -254,12 +254,12 @@ public class RanLauncher extends Activity {
         long done = 0;
         for (int i = 0; i < todo.size(); i++) {
             String[] t = todo.get(i);
-            File dest = new File(rootDir, t[0]);
+            File dest = safeDest(rootDir, t[0]);
             File parent = dest.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
 
             File tmp = new File(dest.getPath() + ".tmp");
-            httpToFile(base() + "blobs/" + t[1], tmp);
+            httpToFile(base() + "blobs/" + t[1], tmp, Long.parseLong(t[2]));
 
             String got = sha256(tmp);
             if (!got.equalsIgnoreCase(t[1])) {
@@ -279,6 +279,43 @@ public class RanLauncher extends Activity {
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
         say("Updated", "version " + version, 1000);
+    }
+
+    /*  Where a manifest entry is allowed to land.
+     *
+     *  "path" is used directly as a destination under /sdcard/ran, and it comes
+     *  off the network. Nothing checked it: an entry of "../../../../x" wrote
+     *  outside the data root, and this app holds MANAGE_EXTERNAL_STORAGE, so
+     *  "outside" means anywhere on shared storage. The download path also
+     *  deletes the destination before renaming over it, so a hostile manifest
+     *  could remove files as well as create them.
+     *
+     *  Reaching that needs a manifest an attacker controls, which plain HTTP
+     *  hands to anyone on the network path - so this is not theoretical, it is
+     *  one hop away. Checked here rather than at the call sites so there is one
+     *  place that decides, and it is applied on both passes.                  */
+    private File safeDest(File root, String rel) throws Exception {
+        if (rel == null || rel.length() == 0)
+            throw new Exception("empty path in manifest");
+        final char first = rel.charAt(0);
+        if (first == '/' || first == '\\')
+            throw new Exception("absolute path in manifest: " + rel);
+        if (rel.length() > 1 && rel.charAt(1) == ':')
+            throw new Exception("drive-qualified path in manifest: " + rel);
+        if (rel.indexOf('\\') >= 0)
+            throw new Exception("backslash in manifest path: " + rel);
+        for (String seg : rel.split("/"))
+            if (seg.equals(".."))
+                throw new Exception("path escapes the data root: " + rel);
+
+        /*  Belt and braces: symlinks and anything the checks above did not
+         *  anticipate still have to resolve to somewhere under the root.      */
+        File f = new File(root, rel);
+        String base = root.getCanonicalPath();
+        String got = f.getCanonicalPath();
+        if (!got.equals(base) && !got.startsWith(base + File.separator))
+            throw new Exception("path escapes the data root: " + rel);
+        return f;
     }
 
     /* --------------------------------------------------------------- state */
@@ -322,17 +359,29 @@ public class RanLauncher extends Activity {
 
     /* ---------------------------------------------------------------- http */
 
+    /*  The manifest is read whole into memory, so it needs a ceiling: without
+     *  one, a server that streams forever is an out-of-memory kill rather than
+     *  an error message. The real manifest is 1.2 MB.                         */
+    private static final int MANIFEST_MAX = 64 << 20;
+
     private byte[] httpGet(String url) throws Exception {
         HttpURLConnection c = open(url);
-        try { return readAll(c.getInputStream()); } finally { c.disconnect(); }
+        try {
+            byte[] b = readAll(c.getInputStream(), MANIFEST_MAX);
+            return b;
+        } finally { c.disconnect(); }
     }
 
     /*  Resumable: a 574 MB pack over mobile data will be interrupted, and
      *  starting again from zero each time never finishes. */
-    private void httpToFile(String url, File tmp) throws Exception {
+    private void httpToFile(String url, File tmp, long expected) throws Exception {
         long have = tmp.exists() ? tmp.length() : 0;
+        /*  A part-file bigger than the whole is not a resume point.           */
+        if (expected >= 0 && have > expected) { tmp.delete(); have = 0; }
+
         HttpURLConnection c = open(url);
         if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
+        boolean bad = false;
         try {
             int code = c.getResponseCode();
             boolean append = (code == 206);
@@ -341,11 +390,26 @@ public class RanLauncher extends Activity {
 
             InputStream in = c.getInputStream();
             OutputStream out = new FileOutputStream(tmp, append);
+            long written = have;
             try {
                 byte[] buf = new byte[1 << 16];
                 int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                while ((n = in.read(buf)) > 0) {
+                    /*  Stop at the size the manifest promised. The checksum
+                     *  would reject the result anyway, but only after the whole
+                     *  body had been written - and a body with no end fills the
+                     *  device long before that.                               */
+                    written += n;
+                    if (expected >= 0 && written > expected) {
+                        bad = true;
+                        throw new Exception("oversize body for " + url);
+                    }
+                    out.write(buf, 0, n);
+                }
             } finally { out.close(); in.close(); }
+        } catch (Exception e) {
+            if (bad) tmp.delete();
+            throw e;
         } finally { c.disconnect(); }
     }
 
@@ -360,10 +424,21 @@ public class RanLauncher extends Activity {
     /* --------------------------------------------------------------- utils */
 
     private static byte[] readAll(InputStream in) throws Exception {
+        return readAll(in, Integer.MAX_VALUE);
+    }
+
+    private static byte[] readAll(InputStream in, int max) throws Exception {
         java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
         byte[] buf = new byte[1 << 16];
         int n;
-        try { while ((n = in.read(buf)) > 0) o.write(buf, 0, n); } finally { in.close(); }
+        long total = 0;
+        try {
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > max) throw new Exception("response larger than " + max + " bytes");
+                o.write(buf, 0, n);
+            }
+        } finally { in.close(); }
         return o.toByteArray();
     }
 
