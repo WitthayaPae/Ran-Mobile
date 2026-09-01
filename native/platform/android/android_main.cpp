@@ -8,9 +8,14 @@
 //
 // The data root is NOT inside the APK: the shipped game data is several GB, so
 // it is pushed to external storage and pointed at here. Order of preference:
-//   1. /sdcard/ran            (adb push target — what testing uses)
-//   2. the app's own external files dir
+//   1. the app's own external files dir  (where the launcher puts it)
+//   2. /sdcard/ran                       (adb push target — test trees)
 //   3. the app's internal files dir
+//
+// The private directory comes first deliberately. Shared storage is writable by
+// any app with a storage permission, and these loaders are not hardened against
+// hostile input, so the copy nobody else can edit is the one to prefer when
+// both exist.
 
 #include <android_native_app_glue.h>
 #include <android/log.h>
@@ -82,8 +87,8 @@ bool dirHas(const char *root, const char *rel) {
 // instead of here, where the cause is obvious.
 const char *pickDataRoot(android_app *app) {
     static char chosen[1024];
-    const char *candidates[3] = { "/sdcard/ran", NULL, NULL };
-    if (app->activity->externalDataPath) candidates[1] = app->activity->externalDataPath;
+    const char *candidates[3] = { NULL, "/sdcard/ran", NULL };
+    if (app->activity->externalDataPath) candidates[0] = app->activity->externalDataPath;
     if (app->activity->internalDataPath) candidates[2] = app->activity->internalDataPath;
 
     for (int i = 0; i < 3; ++i) {
@@ -95,7 +100,7 @@ const char *pickDataRoot(android_app *app) {
         }
         LOGI("data root candidate has no client data: %s", candidates[i]);
     }
-    snprintf(chosen, sizeof(chosen), "%s/", candidates[0]);
+    snprintf(chosen, sizeof(chosen), "%s/", candidates[0] ? candidates[0] : "/sdcard/ran");
     LOGE("NO CLIENT DATA FOUND. Push it first, e.g.:");
     LOGE("  adb push \"CLIENT/config.ini\" /sdcard/ran/");
     LOGE("  adb push \"CLIENT/data\"       /sdcard/ran/");

@@ -76,7 +76,22 @@ public class RanLauncher extends Activity {
 
     /*  Where the game reads its data. The manifest's paths are relative to
      *  this, so an entry's "path" is literally where it lands - no mapping. */
-    private static final String ROOT = "/sdcard/ran";
+    /*  Where the game data lives.
+     *
+     *  This used to be /sdcard/ran, which is shared storage: readable and
+     *  writable by any app holding a storage permission. Game data is parsed by
+     *  the C++ client, whose loaders are not hardened against hostile input, so
+     *  another app editing a .rcc in place was a way into this process - and
+     *  .patchbase sitting there meant any app could also redirect the patcher.
+     *
+     *  The app's own external files directory is not reachable by other apps on
+     *  Android 11 and later, needs no permission for us to use, and is still
+     *  visible over adb, which is why the data lives here now. The old location
+     *  is migrated on first run and kept as a fallback the native loader still
+     *  recognises, so an adb-pushed test tree keeps working.                  */
+    private static String ROOT = "/sdcard/ran";        //  replaced in onCreate
+
+    private static final String LEGACY_ROOT = "/sdcard/ran";
 
     /*  Written only after every file in a manifest has been verified. If we
      *  are killed part way through, this still names the OLD version, so the
@@ -182,6 +197,7 @@ public class RanLauncher extends Activity {
 
     private void patchThenPlay() {
         try {
+            adoptPrivateRoot();
             patch();
         } catch (Throwable t) {
             /*  A patch failure must not be fatal when the game is already
@@ -197,6 +213,127 @@ public class RanLauncher extends Activity {
             }
         }
         play();
+    }
+
+    /*  Choose the private root, and move an old install into it.
+     *
+     *  The move is a rename per top-level entry, which is a metadata operation
+     *  on the same volume - 1.7 GB arrives instantly rather than being
+     *  re-downloaded. If it cannot be done (a different volume, or the
+     *  permission is gone) nothing is lost: the data stays where it is and the
+     *  native loader still accepts the old location.                          */
+    private void adoptPrivateRoot() {
+        File priv = getExternalFilesDir(null);
+        if (priv == null) priv = getFilesDir();          //  no external storage
+        if (priv == null) return;                        //  keep the old root
+        if (!priv.exists() && !priv.mkdirs()) return;
+
+        final String target = priv.getAbsolutePath();
+
+        File legacy = new File(LEGACY_ROOT);
+        boolean privHasData = new File(priv, "config.ini").exists();
+        boolean legacyHasData = new File(legacy, "config.ini").exists();
+
+        if (!privHasData && legacyHasData) {
+            if (!migrate(legacy, priv)) {
+                /*  Half a data tree is worse than the old one. Leave the legacy
+                 *  root in charge; the native loader still accepts it.        */
+                Log.w(TAG, "migration incomplete, staying on " + LEGACY_ROOT);
+                return;
+            }
+        }
+
+        ROOT = target;
+        Log.i(TAG, "data root: " + ROOT);
+    }
+
+    /*  Move an existing install into the private root.
+     *
+     *  Renaming would be instant, and is tried first, but Android does not
+     *  allow a rename from shared storage into Android/data/<package> whatever
+     *  permissions are held - measured, with MANAGE_EXTERNAL_STORAGE granted:
+     *  0 of 33 entries moved. So it falls back to copying, which for this data
+     *  is over a gigabyte and takes minutes. It happens once.
+     *
+     *  config.ini is copied LAST and is what marks the tree complete: an
+     *  interrupted migration leaves the private root without it, so the next
+     *  run starts again rather than running against half a tree.             */
+    private boolean migrate(File legacy, File priv) {
+        say("Moving game data", "one-off, into private storage", -1);
+
+        String[] names = legacy.list();
+        if (names == null) return false;
+
+        /*  Everything except the marker, and the marker after it. */
+        List<String> order = new ArrayList<String>();
+        for (String n : names) if (!n.equals("config.ini")) order.add(n);
+        for (String n : names) if (n.equals("config.ini")) order.add(n);
+
+        long need = 0;
+        for (String n : names) need += sizeOf(new File(legacy, n));
+        long free = priv.getUsableSpace();
+        if (free < need + (64L << 20)) {
+            Log.w(TAG, "migration needs " + mb(need) + ", only " + mb(free) + " free");
+            say("Not enough free space", "need " + mb(need) + ", have " + mb(free), 1000);
+            sleep(2500);
+            return false;
+        }
+
+        int done = 0;
+        for (String n : order) {
+            File from = new File(legacy, n), to = new File(priv, n);
+            if (from.renameTo(to)) { done++; continue; }      //  instant, when allowed
+            try {
+                copyTree(from, to);
+            } catch (Throwable t) {
+                Log.e(TAG, "migration failed on " + n, t);
+                return false;
+            }
+            done++;
+            say(null, done + " / " + order.size() + "   " + n, done * 1000 / order.size());
+        }
+
+        if (!new File(priv, "config.ini").exists()) return false;
+
+        /*  Only once the new tree is known good. */
+        for (String n : names) deleteTree(new File(legacy, n));
+        Log.i(TAG, "data root migration complete: " + done + " entries");
+        return true;
+    }
+
+    private static long sizeOf(File f) {
+        if (f.isFile()) return f.length();
+        File[] kids = f.listFiles();
+        long n = 0;
+        if (kids != null) for (File k : kids) n += sizeOf(k);
+        return n;
+    }
+
+    private static void copyTree(File from, File to) throws Exception {
+        if (from.isDirectory()) {
+            if (!to.exists() && !to.mkdirs()) throw new Exception("cannot create " + to);
+            File[] kids = from.listFiles();
+            if (kids != null) for (File k : kids) copyTree(k, new File(to, k.getName()));
+            return;
+        }
+        File tmp = new File(to.getPath() + ".part");
+        InputStream in = new FileInputStream(from);
+        OutputStream out = new FileOutputStream(tmp);
+        try {
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } finally { out.close(); in.close(); }
+        if (to.exists() && !to.delete()) throw new Exception("cannot replace " + to);
+        if (!tmp.renameTo(to)) throw new Exception("cannot rename " + tmp);
+    }
+
+    private static void deleteTree(File f) {
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteTree(k);
+        }
+        f.delete();
     }
 
     private void patch() throws Exception {

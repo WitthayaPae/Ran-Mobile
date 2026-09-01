@@ -16,7 +16,10 @@ win() { cygpath -w "$1"; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLIENT="$HERE/../../CLIENT"
 ADB="${ADB:-/c/LDPlayer/LDPlayer14/adb.exe}"
-DEST=/sdcard/ran
+#  The launcher keeps the data in the app-private external dir, which other
+#  apps cannot reach. Overridable, because an adb-pushed tree at /sdcard/ran is
+#  still accepted by the native loader as a fallback.
+DEST=${DEST:-/sdcard/Android/data/com.ran.native/files}
 MODE="${1:-full}"
 
 command -v "$ADB" >/dev/null || { echo "[!] adb not found at $ADB (set ADB=...)"; exit 1; }

@@ -42,7 +42,8 @@ The client only ever builds three URLs:
 **`manifest.json` is not a map of your server.** Its `path` field is where a file
 lands *on the device*:
 
-    { "path": "data/glogic/GLogic.rcc", ... }   ->  /sdcard/ran/data/glogic/GLogic.rcc
+    { "path": "data/glogic/GLogic.rcc", ... }
+        ->  /sdcard/Android/data/com.ran.native/files/data/glogic/GLogic.rcc
 
 Never edit it to "point at" anything. The server address lives in one place only:
 `BASE_DEFAULT` in `RanLauncher.java`.
@@ -154,8 +155,33 @@ argument used to mean an update nobody received.
 
 Measured: ~10 s for a full reconcile, ~35 ms for the fast path.
 
-Device state lives in `/sdcard/ran/`: `.patchver`, `.patchindex`, and optionally
-`.patchbase`.
+### Where the data lives
+
+    /sdcard/Android/data/com.ran.native/files/     the data root, and .patchver,
+                                                  .patchindex, .patchbase
+    /sdcard/ran/                                  debug switches only
+
+The data used to sit in `/sdcard/ran`, which is shared storage - readable and
+writable by any app holding a storage permission. The client's C++ loaders are
+not hardened against hostile input, so another app editing a `.rcc` in place was
+a route into this process, and `.patchbase` sitting there let any app redirect
+the patcher. The app's own external directory is unreachable by other apps on
+Android 11 and later, needs no permission for us to use, and is still visible
+over `adb`.
+
+An existing install migrates itself on first run. Renaming would be instant and
+is tried first, but Android refuses a rename from shared storage into
+`Android/data/<package>` whatever permissions are held - measured with
+`MANAGE_EXTERNAL_STORAGE` granted, 0 of 33 entries moved - so it falls back to
+copying, which takes a few minutes for this data. It happens once. `config.ini`
+is copied last and marks the tree complete, so an interrupted migration starts
+again rather than leaving half a data tree. The old files are deleted only after
+the new tree is known good, and if anything fails the old root stays in charge -
+the native loader still accepts it.
+
+The debug switches (`nohud`, `nulldraw`, `drawlimit`, ...) stay in `/sdcard/ran`.
+They are control files, not data, and they are meant to be compiled out of a
+release build anyway.
 
 ---
 
@@ -168,7 +194,8 @@ For a permanent change, edit `BASE_DEFAULT` in
 **To test without rebuilding**, write the URL into `/sdcard/ran/.patchbase` on one
 device — it overrides `BASE_DEFAULT` at runtime. Include the trailing slash.
 
-    adb shell "echo -n 'http://10.0.0.5:8080/launcher_mobile/' > /sdcard/ran/.patchbase"
+    adb shell "echo -n 'http://10.0.0.5:8080/launcher_mobile/' \
+        > /sdcard/Android/data/com.ran.native/files/.patchbase"
 
 ---
 
@@ -221,12 +248,16 @@ so and refuses to pretend:
   you publish, but anyone on the path can still see it. There is nothing secret
   in the payload, so this is a privacy question, not an integrity one. HTTPS is
   still worth doing.
-* **`/sdcard/ran` is readable and writable by any app with storage permission.**
-  The patcher will repair anything it is asked to check, but a file tampered with
-  between patches is only caught when its manifest entry is next verified.
-* **`.patchbase` can still redirect the patcher**, and that is now much less
-  interesting: a redirected server has to serve a manifest signed with your key,
-  or nothing happens.
+* **A file tampered with between patches** is only caught when its manifest entry
+  is next verified, and the version check returns early when the client is up to
+  date. The data root is no longer reachable by other apps, so this now needs
+  `adb` or root rather than any installed app.
+* **`.patchbase` can still redirect the patcher**, and that is now doubly
+  uninteresting: it lives in the private root, and a redirected server would
+  still have to serve a manifest signed with your key.
+* **`MANAGE_EXTERNAL_STORAGE` is still requested.** It is no longer needed for the
+  data - only to migrate an old install and to read the debug switches. It can be
+  dropped once both of those are gone.
 
 ---
 
