@@ -91,6 +91,7 @@ also compile under MSVC, so the PC build stays intact.
 | `MOBILE/native/layout/LAYOUT-REPORT.md` | packet-layout gate: method, findings, how to re-run | live |
 | `MOBILE/reference/` | decoded PC file formats and asset pipeline — **still true**, engine-independent | reference |
 | `MOBILE/archive-unity/` | superseded Unity-rewrite docs, kept only as history | dead |
+| `MOBILE/client/`, `MOBILE/spike/` | the JS protocol spike that preceded the port | **deleted 2026-09-01** |
 | `MOBILE/unity/` | the frozen Unity project (fallback / asset source) | frozen |
 | `SOURCE/SOURCE_*.md` | maps of the original C++ codebase | reference |
 
