@@ -27,6 +27,108 @@ publish the same directory.
 
 ---
 
+## What to do when something changes
+
+Find what you changed. Every recipe ends the same way, and that ending is always
+these two lines:
+
+    double-click MAKE-PATCH.bat
+    upload MOBILE\native\out\launcher_mobile\  to  http://<host>/launcher_mobile/
+
+| You changed | Do this | Player gets it |
+|---|---|---|
+| a `.rcc` pack (GUI, quests, effects…) | repack, drop in `CLIENT\`, publish | next launch |
+| a loose data file (quest, npctalk, map, skin…) | copy into `CLIENT\`, publish | next launch |
+| `config.ini` / `param.ini` | replace the encrypted file in `CLIENT\`, publish | next launch |
+| `option.ini` | nothing — see below | never (by design) |
+| C++ in `SOURCE\` or `MOBILE\native\` | publish | next launch, as an APK install |
+| launcher Java, `AndroidManifest.xml`, resources | publish | next launch, as an APK install |
+| the patch server's address | **new APK by hand** — see below | only by re-installing |
+
+---
+
+### A `.rcc` pack — GUI, strings, quests, effects
+
+The client reads the packs, never the loose files beside them: the zip path is
+armed unconditionally, so a loose XML edit is invisible on the device. The edit
+has to go back into the archive.
+
+    node MOBILE\tools\rcc-extract\rcc-pack.js ^
+         CLIENT\data\gui\Gui.rcc  CLIENT\data\gui\Gui.rcc.new ^
+         basicgamemenu.xml=path\to\edited.xml
+
+then replace `Gui.rcc` with `Gui.rcc.new` and publish. Entry names are flat,
+bare and lowercase. `rcc-pack.js` re-encrypts only the entries you replace and
+copies the rest through as stored bytes, so nothing gains or loses an XOR pass.
+
+### A loose data file
+
+Quests, NPC dialogue, maps, skins, effects, help. Copy it into the matching
+place under `CLIENT\` and publish. The manifest picks up whole directories, so a
+new file is included without touching any list.
+
+### `config.ini` or `param.ini`
+
+These are Rijndael-encrypted, and the client **refuses a plaintext one** —
+`CStringFile::Open` returns FALSE if the leading version int is not a key it
+knows, rather than falling back to reading it as text. So you cannot edit them
+in Notepad.
+
+Produce the new file the way you always have (the PC-side editor that writes
+them), drop it into `CLIENT\`, and publish. Read one back to check before you
+publish — the tooling decodes, even though it cannot encode:
+
+    node -e "const g=require('./MOBILE/tools/rcc-extract/gamecrypt.js'),f=require('fs');console.log(g.decode(f.readFileSync('CLIENT/config.ini')).toString())"
+
+`config.ini` is where the `[GAME_FEATURE]` flags live. `param.ini` is where the
+**game** server address lives — which is not the patch server address; see below.
+
+### `option.ini`
+
+Do not try to ship one. It is seeded: installed only when a player has none, and
+never overwritten afterwards, because it is where their own settings live. A
+change here reaches new installs only. If you need to force a setting on
+everybody, it has to be a code change or a `config.ini` flag.
+
+### C++, or anything under `MOBILE\native\`
+
+Just publish. `MAKE-PATCH.bat` compiles both ABIs, sees the library is newer
+than the APK, bumps `versionCode` and the `V001` label, repackages
+`RanOnlineV<nnn>.apk` and puts it in the store. The launcher offers it and
+Android installs it after the player confirms.
+
+The same applies to launcher Java, `AndroidManifest.xml` and resources — they
+are all inside the APK, and the staleness check watches the whole `android\`
+tree, not just the libraries.
+
+**One exception, once.** A player whose installed APK predates the self-updater
+has no code to offer them anything, so it ignores the manifest's `apk` block
+entirely. That group needs one APK by hand — `RanOnlineV001.apk`. Everyone after
+that is a patch away.
+
+### The patch server's own address
+
+`BASE_DEFAULT` in `RanLauncher.java` is compiled into the APK. Moving the patch
+host is therefore the one change that **cannot be patched**: a client pointed at
+the old address will never see the new one. Change it, publish, and hand out the
+APK the same way as the first time.
+
+Also add the new host to `android\res\xml\network_security_config.xml` if it is
+plain HTTP — cleartext is allowed per host, and a missing entry fails as "could
+not reach the patch server".
+
+For testing only, `.patchbase` in the data root overrides the address without a
+rebuild.
+
+### Nothing changed
+
+Publishing is safe to repeat. If nothing moved, the version number does not
+either, and it says so:
+
+    nothing changed since version 377 - no upload needed
+
+---
+
 ## The server layout
 
 Serve one directory. Nothing else goes in it.
