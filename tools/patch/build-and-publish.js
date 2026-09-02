@@ -132,8 +132,47 @@ function bumpVersionCode() {
   return { was: was, now: now };
 }
 
+/*  Anything in the store that is not the manifest, its signature, or the blob
+    directory. Nothing puts files there, so whatever turns up is left over -
+    an old archive, a half-finished upload, a stray copy - and it would be
+    published along with the rest.
+
+    The manifest and its signature are deliberately spared: make-manifest.js
+    reads the old manifest to work out the next version number, and deleting it
+    here would silently reset the store to version 1.                          */
+function sweepStore() {
+  const OUT = path.join(NATIVE, 'out/launcher_mobile');
+  if (!fs.existsSync(OUT)) return { n: 0, bytes: 0 };
+  const keep = new Set(['blobs', 'manifest.json', 'manifest.sig']);
+  let n = 0, bytes = 0;
+  for (const e of fs.readdirSync(OUT, { withFileTypes: true })) {
+    if (keep.has(e.name)) continue;
+    const p = path.join(OUT, e.name);
+    try {
+      const st = fs.statSync(p);
+      bytes += st.isDirectory() ? 0 : st.size;
+      fs.rmSync(p, { recursive: true, force: true });
+      n++;
+      console.log('      removed ' + e.name);
+    } catch (err) { /* leave anything that will not go */ }
+  }
+  return { n: n, bytes: bytes };
+}
+
 /* ------------------------------------------------------------------- run it */
-const passthrough = process.argv.slice(2);
+let passthrough = process.argv.slice(2);
+
+/*  Stale blobs go by default: the previous content of a file that has since
+    changed, and every superseded APK, which is 320 MB apiece. They are only
+    worth keeping to republish an older manifest, and that is not what this
+    script is for. --keep-stale opts out.
+
+    Pruning happens after the manifest is written, not before - "stale" means
+    "not named by the manifest we just built", so the new manifest has to exist
+    before anything can be judged against it.                                  */
+const keepStale = passthrough.includes('--keep-stale');
+passthrough = passthrough.filter(a => a !== '--keep-stale');
+if (!keepStale && !passthrough.includes('--prune')) passthrough.push('--prune');
 
 console.log('');
 console.log('[1/3] building libran.so');
@@ -161,7 +200,9 @@ if (input.at > apkAt) {
 }
 
 console.log('');
-console.log('[3/3] building the payload');
+console.log('[3/3] building the payload' + (keepStale ? '  (keeping stale blobs)' : ''));
+const swept = sweepStore();
+if (swept.n) console.log('      swept ' + swept.n + ' stray item(s) out of the store');
 console.log('');
 const mk = spawnSync(process.execPath,
                      [path.join(ROOT, 'MOBILE/tools/patch/make-manifest.js')].concat(passthrough),

@@ -99,6 +99,38 @@ That matters beyond tidiness. Bumping `versionCode` for a data-only patch would
 offer every player a 321 MB reinstall of a binary identical to the one they are
 running.
 
+**The store is cleaned before it is published.** Two kinds of leftover go:
+
+* **Stray files.** Anything in `launcher_mobile/` that is not `blobs/`,
+  `manifest.json` or `manifest.sig`. Nothing puts files there, so whatever turns
+  up is left over - an old archive, a half-finished upload - and it would be
+  published with the rest. `manifest.json` is spared deliberately:
+  `make-manifest.js` reads it to work out the next version number, and deleting
+  it early would silently reset the store to version 1.
+
+* **Stale blobs**, via `--prune`: the previous content of any file that has since
+  changed, and every superseded APK, which is 320 MB apiece. Pruning runs
+  *after* the manifest is written, because "stale" means "not named by the
+  manifest we just built" - the new one has to exist before anything can be
+  judged against it.
+
+    [3/3] building the payload
+          removed leftover.rar
+          swept 1 stray item(s) out of the store
+          ...
+    pruned   : 1 blob(s), 321.2 MB - rollback to any manifest naming them is no
+               longer possible
+
+That last line is the trade, and it is real: republishing an older manifest works
+only while the blobs it names still exist. If you want that safety net, pass
+`--keep-stale` and prune by hand when you are sure.
+
+**This cleans your machine, not the server.** The upload rule is still "never
+delete-on-sync", so the host keeps every blob it has ever been given. That is
+deliberate - a client part-way through an update is still asking for blobs from
+the manifest it started with. To reclaim space there, delete server-side blobs
+by hand, and only ones no manifest you might serve again names.
+
 **`versionCode` is bumped for you**, in
 `MOBILE/native/android/AndroidManifest.xml`, and the file is edited in place -
 so the number in git always matches what was published. `versionName` is left
