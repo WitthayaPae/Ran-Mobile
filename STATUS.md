@@ -278,6 +278,33 @@ to 180. The lock does nothing without a live target, which is by design and is
 what the probe kept showing. Still unconfirmed on a device - the emulator would
 not boot again after this session.
 
+### Settings never persisted — same root cause, no new fix (2026-09-02)
+
+Reported as: uncheck **Classic Name** in ตัวเลือก, press ตกลง, and it is back
+next session.
+
+Not a separate bug. `RANPARAM::SAVE_GAMEOPTION` was always working — it goes
+through `CFile::Open`, which resolves paths correctly. The **load** was the
+broken half: `LOAD_GAMEOPTION` gates on
+`PathFileExists( <root>\option.ini )` before it reads a single key, and that
+check was answering "missing" (see the entry above). So every option in
+`[GAME OPTION]`, `[SCREEN OPTION]`, `[SOUND OPTION]` and `[GRAPHIC OPTION]` was
+written to disk correctly and then ignored at every start, leaving the whole
+settings window on compiled-in defaults.
+
+Verified end to end on device, decoding the file each time
+(`node tools/rcc-extract/gamecrypt.js` decodes option.ini):
+
+| step | file | UI after restart |
+|---|---|---|
+| start | `bClassicNameDisplay = 1` | checked |
+| uncheck + ตกลง | `= 0` | unchecked |
+| check + ตกลง, restart | `= 1` | **checked** |
+
+The last row is the one that proves it: the flag's compiled-in default is
+`FALSE`, so it can only come back checked by being read out of `option.ini`.
+Left at `0` (off), which is what was asked for.
+
 ### PathFileExists bypassed the path resolver, and it cost the whole GAME_FEATURE block (2026-09-02)
 
 Reported as: long-press another player, choose **ดูข้อมูลส่วนตัว** (view personal
