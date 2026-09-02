@@ -132,31 +132,53 @@ function bumpVersionCode() {
   return { was: was, now: now };
 }
 
+/*  Remove everything in a directory except a named keep-set, and say what went.
+    Used on both out/ and the store: in each, anything not on the list is a
+    leftover, and out/ is build output, so nothing there is precious.          */
+function sweep(dir, keep, label) {
+  if (!fs.existsSync(dir)) return 0;
+  let n = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (keep.has(e.name)) continue;
+    try {
+      fs.rmSync(path.join(dir, e.name), { recursive: true, force: true });
+      console.log('      removed ' + label + e.name);
+      n++;
+    } catch (err) { /* leave anything that will not go */ }
+  }
+  return n;
+}
+
 /*  Anything in the store that is not the manifest, its signature, or the blob
-    directory. Nothing puts files there, so whatever turns up is left over -
-    an old archive, a half-finished upload, a stray copy - and it would be
+    directory. Nothing puts files there, so whatever turns up is left over - an
+    old archive, a half-finished upload, a stray copy - and it would be
     published along with the rest.
 
     The manifest and its signature are deliberately spared: make-manifest.js
     reads the old manifest to work out the next version number, and deleting it
     here would silently reset the store to version 1.                          */
 function sweepStore() {
-  const OUT = path.join(NATIVE, 'out/launcher_mobile');
-  if (!fs.existsSync(OUT)) return { n: 0, bytes: 0 };
-  const keep = new Set(['blobs', 'manifest.json', 'manifest.sig']);
-  let n = 0, bytes = 0;
-  for (const e of fs.readdirSync(OUT, { withFileTypes: true })) {
-    if (keep.has(e.name)) continue;
-    const p = path.join(OUT, e.name);
-    try {
-      const st = fs.statSync(p);
-      bytes += st.isDirectory() ? 0 : st.size;
-      fs.rmSync(p, { recursive: true, force: true });
-      n++;
-      console.log('      removed ' + e.name);
-    } catch (err) { /* leave anything that will not go */ }
-  }
-  return { n: n, bytes: bytes };
+  return sweep(path.join(NATIVE, 'out/launcher_mobile'),
+               new Set(['blobs', 'manifest.json', 'manifest.sig']),
+               'launcher_mobile/');
+}
+
+/*  out/ holds two things worth keeping and a lot that is not.
+ *
+ *  The two ABI directories stay, and that is deliberate rather than an
+ *  oversight: they are ninja's build trees. Delete them and the next run
+ *  recompiles the whole client from scratch, which also makes libran.so newer
+ *  than the APK - so it would bump versionCode and hand every player a 320 MB
+ *  reinstall of a binary that did not change.
+ *
+ *  Everything else goes. out/apk is build-apk.sh's staging area, which it wipes
+ *  and recreates on every run anyway; the rest is screenshots, logs and pulled
+ *  files from testing.                                                        */
+function sweepOut() {
+  return sweep(path.join(NATIVE, 'out'),
+               new Set(['launcher_mobile', 'ran-phase3.apk', 'ran-phase3.apk.idsig',
+                        'arm64-v8a', 'x86_64', 'ref']),
+               'out/');
 }
 
 /* ------------------------------------------------------------------- run it */
@@ -201,8 +223,8 @@ if (input.at > apkAt) {
 
 console.log('');
 console.log('[3/3] building the payload' + (keepStale ? '  (keeping stale blobs)' : ''));
-const swept = sweepStore();
-if (swept.n) console.log('      swept ' + swept.n + ' stray item(s) out of the store');
+const swept = sweepOut() + sweepStore();
+if (swept) console.log('      swept ' + swept + ' leftover(s)');
 console.log('');
 const mk = spawnSync(process.execPath,
                      [path.join(ROOT, 'MOBILE/tools/patch/make-manifest.js')].concat(passthrough),

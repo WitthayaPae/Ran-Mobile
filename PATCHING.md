@@ -99,7 +99,18 @@ That matters beyond tidiness. Bumping `versionCode` for a data-only patch would
 offer every player a 321 MB reinstall of a binary identical to the one they are
 running.
 
-**The store is cleaned before it is published.** Two kinds of leftover go:
+**out/ and the store are cleaned before publishing.** Three kinds of leftover go:
+
+* **Everything in `native/out/` that is not needed.** After a run that directory
+  holds exactly six things: `launcher_mobile/`, `ran-phase3.apk` and its
+  `.idsig`, the two ABI build trees, and `ref/`. `out/apk` is build-apk.sh's
+  staging area - it wipes and recreates it on every run anyway - and screenshots,
+  logs and files pulled off a device are swept with it.
+
+  The two ABI directories stay, and that is deliberate. They are ninja's build
+  trees: delete them and the next run recompiles the whole client, which also
+  makes `libran.so` newer than the APK - so it would bump `versionCode` and hand
+  every player a 320 MB reinstall of a binary that did not change.
 
 * **Stray files.** Anything in `launcher_mobile/` that is not `blobs/`,
   `manifest.json` or `manifest.sig`. Nothing puts files there, so whatever turns
