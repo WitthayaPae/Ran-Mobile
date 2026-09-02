@@ -435,6 +435,60 @@ now; the global only sizes the next atlas.
   that triggers the bug. Using the pack proves nothing.
 
 
+### Shipping: code now travels by patch too (2026-09-02)
+
+Detail in `PATCHING.md`; this is the shape of it.
+
+Native code cannot ride the data payload — since Android 10 an app targeting
+API 29+ may not `dlopen` a library out of its own writable storage, and this one
+targets 34. So there is no equivalent of dropping a new `MiniA.exe` in. Instead
+the APK goes into the store as a blob, the manifest names it, and the launcher
+installs it after the player confirms. The hash comes from the signed manifest
+and the bytes stream straight into a `PackageInstaller` session, so they are
+never a file anything could swap between the check and the install. Proven by
+flipping one byte on the server: `checksum failed for the apk`, session
+abandoned, player left on the working build.
+
+`MAKE-PATCH.bat` is now the whole job. It compiles both ABIs, and only if
+something the APK carries actually changed does it bump the version and
+repackage — so a data-only patch never offers anyone a 320 MB reinstall of an
+identical binary. Then it sweeps `out/` and the store down to what ships and
+writes the manifest. Publishing an APK nobody would receive is a hard error, not
+a warning, in both of the ways that happen silently: `versionCode` not bumped,
+and code rebuilt without repackaging.
+
+The APK is `RanOnlineV001.apk` now. `versionCode` stays a private counter that
+only goes up, because Android compares it and refuses to install over a higher
+one; `versionName` is the release label, and the file is named after it.
+
+`option.ini` is seeded rather than shipped — installed when a player has none,
+never overwritten after. It is the one file in the list the client writes, so
+shipping it normally reset everyone's settings on every patch, silently undoing
+the settings fix above.
+
+**One-time:** the APK players hold has no updater in it, so it ignores the
+manifest's `apk` block. That group needs `RanOnlineV001.apk` by hand once.
+Everything after is a patch.
+
+**Both keys are single points of failure and are gitignored.**
+`native/android/debug.keystore` is the app's identity — a different key means no
+player can ever upgrade, only uninstall and re-download 1.7 GB.
+`tools/patch/keys/manifest-signing-key.pem` signs the manifest — without it no
+patch can ship at all. Back both up off the build machine.
+
+### Not a bug: the loose `data/glogic/*.ini` (2026-09-02)
+
+`ERROR : GLCONST_CHAR::LOADRANK(), Rank.ini` in every run is normal, and the PC
+client logs it too. Those loaders read through `GLogic.rcc`, `gltexfile::open`
+has no loose fallback, and the pack contains no `.ini` at all — 377 entries,
+zero, in our copy and in the shipped `Ran/` copy alike. The shipped PC client
+carries exactly one loose `.ini` under `data/` (`data/skin/desktop.ini`); the 63
+in `CLIENT/` are server-side data, which is what that tree is.
+
+`make-manifest.js --verify` confirms it: every file under `Ran/data` is in the
+manifest. Packing those files in would make mobile behave differently from PC,
+which is the opposite of the point.
+
 ### Still open from this session
 
 * **The camera lock is not verified on a device.** Maths checked offline (see
