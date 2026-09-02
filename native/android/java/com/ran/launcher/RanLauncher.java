@@ -397,7 +397,17 @@ public class RanLauncher extends Activity {
 
             File f = safeDest(rootDir, p);
             boolean ok = false;
-            if (f.exists() && f.length() == size) {
+            /*  A seeded file belongs to the player once it exists.
+             *
+             *  option.ini is written by the client every time settings are
+             *  saved, so its hash stops matching the manifest immediately and
+             *  the normal path would replace it - resetting graphics, sound
+             *  and gameplay options on every patch. Seeding installs it when
+             *  absent, which is what gives a fresh install sane defaults, and
+             *  leaves it alone forever after. Content is never compared: any
+             *  existing file, whatever is in it, is the player's.            */
+            if (e.optBoolean("seed", false) && f.exists()) ok = true;
+            else if (f.exists() && f.length() == size) {
                 String key = index.get(p);
                 String want = size + ":" + f.lastModified() + ":" + sha;
                 if (key != null && key.equals(want)) ok = true;      //  trusted
@@ -551,6 +561,10 @@ public class RanLauncher extends Activity {
         for (int i = 0; i < arr.length(); i++) {
             JSONObject e = arr.getJSONObject(i);
             String p = e.getString("path");
+            //  A seeded file's local content is the player's and will not match
+            //  the manifest hash, so recording it here would only produce an
+            //  entry that never validates. It is skipped on every run anyway.
+            if (e.optBoolean("seed", false)) continue;
             File f = new File(rootDir, p);
             sb.append(p).append('\t').append(f.length()).append(':')
               .append(f.lastModified()).append(':').append(e.getString("sha256")).append('\n');

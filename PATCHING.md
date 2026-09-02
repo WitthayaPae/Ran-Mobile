@@ -122,6 +122,45 @@ the first allowlist.
 
 ---
 
+## Files the player owns: seeding
+
+One file in the ship list is written by the *client*, not by you: `option.ini`,
+where a player's graphics, sound and gameplay settings live. The launcher
+replaces any file whose hash does not match the manifest, so shipping it the
+normal way reset everyone's settings on every patch — including options they had
+just set.
+
+It is marked in `SHIP` instead:
+
+    { file: 'option.ini', seed: true },
+
+which puts `"seed": true` on that entry in the manifest. The launcher then:
+
+* **installs it when it is absent** — a fresh install still starts on sane
+  defaults, the way the PC client ships an `option.ini`;
+* **never touches it again**, whatever it contains. Content is not compared; any
+  existing file is the player's.
+
+Seeded entries are also left out of `.patchindex`, since their local hash is
+expected not to match and an entry that never validates is only noise.
+
+The flag counts as a content change for versioning, so flipping `seed` on a file
+bumps the version like an edit would — otherwise the new rule would sit in a
+manifest no client ever fetches.
+
+Verified end to end against a local store, version 366 -> 367:
+
+| device state before | result |
+|---|---|
+| `option.ini` present, 916 B, differs from the manifest's 932 B | untouched — same md5, same mtime; **zero blobs downloaded** |
+| `option.ini` deleted | `GET blobs/80d955…` — reinstalled at 932 B |
+
+Add `seed: true` to anything else the client writes into the data root. Right now
+`option.ini` is the only one: `config.ini`, `param.ini` and `comment.ini` are
+read-only content.
+
+---
+
 ## Why the version number matters more than it looks
 
 `RanLauncher.java:220`:

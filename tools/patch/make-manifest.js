@@ -57,7 +57,14 @@ const SHIP = [
   /*  Root config. Small, and the only place server addresses live.            */
   { file: 'config.ini'  },
   { file: 'param.ini'   },
-  { file: 'option.ini'  },
+  /*  Seeded, not shipped. option.ini is the one file in this list the CLIENT
+      writes: it is where a player's settings live, and the launcher replaces
+      any file whose hash does not match the manifest. Shipping it normally
+      reset everyone's graphics, sound and gameplay options on every patch.
+      With seed:true it is installed when absent - so a fresh install still
+      starts on sane defaults, the way the PC client ships one - and never
+      touched again.                                                          */
+  { file: 'option.ini', seed: true },
   { file: 'comment.ini' },
 
   /*  The packs. These ARE the game data - the client reads them, not the
@@ -196,6 +203,10 @@ console.log('output : ' + OUT);
 console.log('');
 
 const wanted = [];
+//  Paths the client owns once installed; see the seed note in SHIP. SHIP is
+//  authored with forward slashes, which is also the form manifest paths take,
+//  so these compare directly.
+const seeded = new Set();
 for (const item of SHIP) {
   if (item.file) {
     if (excluded(path.basename(item.file))) continue;
@@ -203,6 +214,7 @@ for (const item of SHIP) {
       console.error('  ! missing file: ' + item.file);
       continue;
     }
+    if (item.seed) seeded.add(item.file);
     wanted.push(item.file);
   } else {
     const before = wanted.length;
@@ -223,6 +235,7 @@ for (const rel of wanted) {
   const how = place(abs, path.join(OUT, 'blobs', hash));
   if (how === 'linked') linked++; else if (how === 'copied') copied++; else kept++;
   files.push({ path: rel.replace(/\\/g, '/'), size: st.size, sha256: hash });
+  if (seeded.has(files[files.length - 1].path)) files[files.length - 1].seed = true;
   bytes += st.size;
   if (++n % 500 === 0) process.stdout.write('  hashed ' + n + '/' + wanted.length + '\r');
 }
@@ -241,8 +254,12 @@ files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
    --version still wins, for republishing an old manifest or forcing a number. */
 const changes = (() => {
   if (!PREV || !Array.isArray(PREV.files)) return null;   //  first ever build
-  const was = new Map(PREV.files.map(f => [f.path, f.sha256]));
-  const now = new Map(files.map(f => [f.path, f.sha256]));
+  //  The seed flag is part of what a client is told to do with a file, so a
+  //  change to it has to bump the version like a content change would -
+  //  otherwise the new rule sits in a manifest nobody ever fetches.
+  const key = f => f.sha256 + (f.seed ? ':seed' : '');
+  const was = new Map(PREV.files.map(f => [f.path, key(f)]));
+  const now = new Map(files.map(f => [f.path, key(f)]));
   const added = [], changed = [], removed = [];
   for (const [p, sha] of now) {
     if (!was.has(p)) added.push(p);
