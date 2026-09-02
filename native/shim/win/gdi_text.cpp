@@ -496,10 +496,23 @@ BOOL RanGdi_ExtTextOutW(HDC hdc, int x, int y, UINT options, const RECT *rc,
     return RanGdi_ExtTextOutA(hdc, x, y, options, rc, utf8.c_str(), (UINT)utf8.size(), dx);
 }
 
-BOOL RanGdi_GetTextExtentPoint32W(HDC hdc, LPCWSTR str, int len, LPSIZE size) {
-    std::string utf8;
-    wideToUtf8(str, len, utf8);
-    return RanGdi_GetTextExtentPoint32A(hdc, utf8.c_str(), (int)utf8.size(), size);
+//  Deliberately reports nothing, and that is not laziness.
+//
+//  CD3DFontX::ConvWideAndTextExtent measures with this and falls back to
+//  m_pd3dxFont->DrawTextW when it comes back zero:
+//
+//      GetTextExtentPoint32W( m_hd3dxDC, ... );
+//      if ( Size.cx == 0 || Size.cy == 0 ) ConvWideAndTextExtent98( ... );
+//
+//  The fallback is the call that actually draws the glyphs, and every layout in
+//  this port is measured against it. Answering here instead put GDI numbers into
+//  use, and they disagree with what is drawn - gdi=150 against d3dx=116 on the
+//  same string - which is half a string of drift on every centred label.
+//
+//  The A version stays real: the atlas builder in D3DFont.cpp needs it, and that
+//  path measures and draws with the same DC.
+BOOL RanGdi_GetTextExtentPoint32W(HDC, LPCWSTR, int, LPSIZE) {
+    return TRUE;
 }
 
 HBRUSH RanGdi_CreateSolidBrush(COLORREF c) {
