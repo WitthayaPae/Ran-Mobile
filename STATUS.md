@@ -278,6 +278,58 @@ to 180. The lock does nothing without a live target, which is by design and is
 what the probe kept showing. Still unconfirmed on a device - the emulator would
 not boot again after this session.
 
+### PathFileExists bypassed the path resolver, and it cost the whole GAME_FEATURE block (2026-09-02)
+
+Reported as: long-press another player, choose **ดูข้อมูลส่วนตัว** (view personal
+info) — nothing happens, no window, no error message.
+
+**Cause: `PathFileExistsA` in `shim/win/windows.h` called plain `fopen`.** The
+`#define fopen ran_fopen` sits further down that same header, so the call there
+resolved to raw libc `fopen` and got the client's Windows path verbatim —
+backslash separators, wrong case. It always answered "missing" for a file that
+is present.
+
+One client caller gates on it, and the damage is out of all proportion:
+
+    RANPARAM::LOAD_GAMEOPTION()          RANPARAM_OPTION.cpp:22
+        if ( !PathFileExists( <root>\option.ini ) ) return FALSE;
+
+`RANPARAM::LOAD` runs `LOAD_PARAM` -> `LOAD_GAMEOPTION` -> `LOAD_FEATURE` and
+aborts the chain on the first FALSE. So **`LOAD_FEATURE` never ran and every
+`[GAME_FEATURE]` flag in Config.ini kept its compiled-in default**, most of them
+`FALSE`. `bFeatureViewCharInfo` is one of them, and `RequestCharacterInfo`
+returns silently when it is off — hence a button that does nothing and says
+nothing. The CP bar in the HUD was another casualty; there will be more.
+
+Measured, at the click:
+
+    before:  RequestCharacterInfo id=27 feature=0 timer=5.02/5.00     (no packet)
+    after:   RequestCharacterInfo id=27 feature=1 timer=5.01/5.00
+             sent SNETPC_REQ_CHARINFO
+             REQ_CHARINFO_FB emFB=2                                   (WEARINFO)
+
+and at boot, after the fix:
+
+    LOAD_FEATURE: opened <root>\Config.ini
+    bFeatureViewCharInfo=1  bFeatureStudentRecord=1  bFeatureProduct=0
+
+Fix: `PathFileExistsA` calls `ran_fopen` directly, declared immediately above it
+so the macro's position in the header stops mattering. Verified on a clean
+probe-free build: the character info window opens with test02's equipment, 3D
+model, stats, school and guild.
+
+**Ruled out along the way**, each by measurement rather than argument: the click
+delivery (the whisper button in the same menu works and fills `@test02` into the
+chat input), the request timer (`5.02/5.00`, past the 5s gate), the UI keyword
+(`RAN_ANOTHER_CHAR_WINDOW 506,0 480x528` is present in the uicfg), the message
+routing (`NET_MSG_GCTRL_REQ_CHARINFO_FB` is in the `DxGlobalStage` switch), and
+the file itself (`Config.ini` decodes to `bFeatureViewCharInfo = 1`, and opens on
+device with no `CIniLoader::open` error in the client's own ErrorLog).
+
+**Worth re-testing generally.** Anything that reads `[GAME_FEATURE]` has been
+running on defaults for the whole port, so features may appear that were never
+seen working here before.
+
 ### The interface turning to garbage: root cause (2026-09-02)
 
 Reproduced on LDPlayer and fixed. Trigger: **use a `กล่อง POWER UP` from the

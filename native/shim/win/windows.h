@@ -1200,7 +1200,15 @@ inline ATOM RegisterClassA(const WNDCLASSA *) { return 0; }
 inline BOOL AdjustWindowRect(LPRECT, DWORD, BOOL) { return TRUE; }
 inline BOOL ReadProcessMemory(HANDLE, LPCVOID, LPVOID, SIZE_T, SIZE_T *) { return FALSE; }
 inline HANDLE OpenProcess(DWORD, BOOL, DWORD) { return NULL; }
-inline BOOL PathFileExistsA(LPCSTR p) { if (!p) return FALSE; FILE *f = fopen(p, "rb"); if (f) { fclose(f); return TRUE; } return FALSE; }
+//  Through the resolver, and by calling ran_fopen directly rather than through
+//  the fopen macro: that macro is defined further down this header, so a plain
+//  fopen() here was the raw libc one and got the client's Windows path
+//  verbatim - backslashes, wrong case and all. Every caller that gates a load
+//  on this then took the "file is missing" branch on a file that is present.
+//  RANPARAM::LOAD_GAMEOPTION is one, and its early return skipped LOAD_FEATURE
+//  entirely, leaving every [GAME_FEATURE] flag at its compiled-in default.
+extern "C" FILE *ran_fopen(const char *path, const char *mode);
+inline BOOL PathFileExistsA(LPCSTR p) { if (!p) return FALSE; FILE *f = ran_fopen(p, "rb"); if (f) { fclose(f); return TRUE; } return FALSE; }
 #define PathFileExists PathFileExistsA
 inline HICON LoadIconA(HINSTANCE, LPCSTR) { return NULL; }
 #define LoadIcon LoadIconA
