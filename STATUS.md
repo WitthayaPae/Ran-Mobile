@@ -540,6 +540,67 @@ over the real app through any channel, which is the argument for backing them up
 cannot inject content since everything is hash- or signature-checked. A local
 actor with root can write a high `.patchver` to stall updates.
 
+### The patch payload was missing 3 GB, and no fresh install could have worked (2026-09-02)
+
+Found while looking for the loading art. The payload carried `data/` and nothing
+else. Against the shipped PC client:
+
+| in `Ran/` | size | files | was in the manifest |
+|---|---|---|---|
+| `data/` | 2.4 G | 6,408 | yes |
+| `textures/` | 2.8 G | 16,206 | **no** |
+| `sounds/` | 256 M | 864 | **no** |
+| `cVer.bin` | — | — | **no** |
+
+Every item icon, all interface art, the loading screen, every sound, and the
+version file the login compares. Nobody had hit it because every device so far -
+the Tab S9 and LDPlayer included - was seeded by `push-data.sh`, a manual full
+push. The patcher had never once provisioned a device on its own, which is
+exactly what handing the APK to a new player would have done.
+
+`--verify` missed it because it only walked `Ran/data`. It now walks the whole
+client root, with a skip list for the parts of a PC install that have no
+business on a phone (`.exe`, `.dll`, `GMTool`, `Hackshield`, `Logs`,
+`cFileList.bin`, `Launcher.URS`). It passes clean.
+
+`cache/` is still not shipped, and should not be: it is the font cache, created
+and written by the client at runtime.
+
+**Loose files already inside a pack are dropped.** Matched on the bare name -
+which is how the reader resolves an entry - and then confirmed by comparing the
+bytes, because a name collision between two different files would otherwise
+silently drop one. 74 of 80 matches were byte-identical (14.2 MB, mostly `.x`
+models also in SkinObject.rcc); the other 6 are kept, same name and different
+content.
+
+Payload is 1.68 GB -> 4.72 GB, 8,263 -> 25,259 files.
+
+**Proven from scratch**, which is the only test that counts here: device data
+root deleted entirely, then the launcher pointed at a local store. It fetched
+all 4,722 MB, and the client booted on it - server select with full art, correct
+Thai, the RAN mark. Before this it would have had no textures at all.
+
+### The patch screen is the game's loading screen now (2026-09-02)
+
+The player used to meet a bare dark panel, then a moment later the client's
+loading art: two screens for one wait. The launcher now draws the same lobby art
+(`loading_002.dds`), the RAN mark from the login page (`LOGIN_MARK`, taken from
+the ui config rather than eyeballed), and the progress along the bottom. The
+in-game splash drops the HINT badge and the corner spinner to match.
+
+The art is a drawable in the APK, and has to be: on a first install this screen
+is painted *while* the data root that holds it is still downloading.
+`extract-launcher-art.js` regenerates both PNGs from the client textures.
+
+**A regression of my own, caught on device.** Asking for storage permission on a
+fresh install opened the Settings screen, which put the launcher in the
+background exactly as the download started - and the permission change then
+killed the process: `Killing com.ran.native (adj 900): MANAGE_EXTERNAL_STORAGE
+changed`. The one case the prompt was meant to help, it broke. Nothing asks for
+storage now: an updating player keeps the grant from the old build and gets the
+migration, a fresh install has nothing to migrate. The launcher also holds
+`FLAG_KEEP_SCREEN_ON`, since a 4.7 GB download dies with the screen.
+
 ### Still open from this session
 
 * **The camera lock is not verified on a device.** Maths checked offline (see

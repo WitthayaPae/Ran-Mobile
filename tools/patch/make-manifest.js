@@ -96,7 +96,23 @@ const SHIP = [
   { dir: 'data/glogic/level'    },
   { dir: 'data/glogic/activity' },
   { dir: 'data/effect/char'     },
+
+  /*  Everything above is under data/. These are not, and leaving them out meant
+      a client provisioned only by the patcher had no item icons, no interface
+      art, no sound and no version file - which nobody noticed because every
+      device so far was seeded by push-data.sh instead.                        */
+  { dir: 'textures' },
+  { dir: 'sounds'   },
+
+  /*  The version the login compares (g_szClientVerFile in s_NetClient.cpp).
+      cFileList.bin sits beside it and is the PC launcher's own bookkeeping -
+      nothing in the client reads it, so it is not shipped.                    */
+  { file: 'cVer.bin' },
 ];
+
+/*  cache/ is deliberately absent: it is the font cache, created by the client
+    itself (DxResponseMan CreateDirectory, DxFontMan::SetPath) and written at
+    runtime. Shipping one would be stale the moment a font changed.            */
 
 /*  data/glogicserver is deliberately absent: the shipped PC client has no
     such directory. CLIENT/ is a development tree carrying both client and
@@ -115,8 +131,16 @@ const NEVER = [
     files. It is a real working install, so anything under its data/ that the
     manifest does not carry is a gap.                                          */
 const REFERENCE = path.join(ROOT, 'Ran');
+/*  Walked over the WHOLE reference client, not just its data/ - which is how
+    textures/ (2.8 GB) and sounds/ went unnoticed for the entire port. These are
+    the parts of a PC install that have no business on a phone.               */
 const REF_SKIP = [
   /^editor$/i, /^RanMapZipTemp$/i, /^RccAniBinTemp$/i,
+  /^GMTool$/i, /^Hackshield$/i, /^Logs$/i, /^cache$/i,
+  /\.exe$/i, /\.dll$/i, /\.url$/i, /\.dat$/i,
+  /^cFileList\.bin$/i,       //  the PC launcher's own bookkeeping
+  /^Launcher\.URS$/i,        //  likewise - nothing in the client reads it
+  /^option\.ini$/i,          //  seeded, and the reference copy is somebody's settings
 ];
 
 /* --------------------------------------------------------------------- args */
@@ -143,6 +167,7 @@ const PREV = (() => {
 
 /* ------------------------------------------------------------------- helpers */
 const excluded = name => NEVER.some(re => re.test(name));
+const mb = x => (x / 1048576).toFixed(1) + ' MB';
 
 function walk(rel, acc) {
   const abs = path.join(CLIENT, rel);
@@ -207,6 +232,68 @@ console.log('client : ' + CLIENT);
 console.log('output : ' + OUT);
 console.log('');
 
+/* ----------------------------------------------------- already in a pack
+   A loose file whose bytes are already inside one of the shipped .rcc packs is
+   dead weight: the client reads the pack, not the file beside it, because
+   bGLOGIC_ZIPFILE is always on and bENGLIB_ZIPFILE follows Map.rcc - which is
+   shipped. Sending both costs the player the download twice over.
+
+   Matched on the bare filename, because that is how the reader resolves an
+   entry (CUnzipper looks up zipPath + bareFilename), and then CONFIRMED by
+   comparing the bytes. A name collision between two genuinely different files
+   would otherwise silently drop one of them, and a missing asset is a much
+   worse outcome than a duplicated one.                                        */
+function packDuplicates(wanted) {
+  let RccArchive;
+  try { ({ RccArchive } = require('../rcc-extract/rcc.js')); }
+  catch (e) {
+    console.log('  (rcc reader unavailable - not checking for packed duplicates)');
+    return new Set();
+  }
+
+  //  bare name -> [{ pack, bytes }], only for the packs this manifest ships
+  const inPacks = new Map();
+  for (const item of SHIP) {
+    if (!item.file || !/\.rcc$/i.test(item.file)) continue;
+    const abs = path.join(CLIENT, item.file);
+    if (!fs.existsSync(abs)) continue;
+    let a;
+    try { a = new RccArchive(abs); } catch (e) { continue; }
+    for (const name of a.list()) {
+      const bare = path.basename(name).toLowerCase();
+      if (!inPacks.has(bare)) inPacks.set(bare, []);
+      inPacks.get(bare).push({ pack: item.file, archive: a, entry: name });
+    }
+  }
+
+  const drop = new Set();
+  let bytes = 0, sameName = 0;
+  for (const rel of wanted) {
+    const hits = inPacks.get(path.basename(rel).toLowerCase());
+    if (!hits) continue;
+    sameName++;
+    let loose;
+    try { loose = fs.readFileSync(path.join(CLIENT, rel)); } catch (e) { continue; }
+    for (const h of hits) {
+      let packed;
+      try { packed = h.archive.read(h.entry); } catch (e) { continue; }
+      if (packed.length === loose.length && packed.equals(loose)) {
+        drop.add(rel);
+        bytes += loose.length;
+        break;
+      }
+    }
+  }
+  if (sameName) {
+    console.log('  packed already: ' + drop.size + ' of ' + sameName +
+                ' name matches confirmed byte-identical, ' + mb(bytes) + ' not shipped');
+    if (sameName !== drop.size)
+      console.log('                  ' + (sameName - drop.size) +
+                  ' kept - same name, different bytes');
+  }
+  return drop;
+}
+
 const wanted = [];
 //  Paths the client owns once installed; see the seed note in SHIP. SHIP is
 //  authored with forward slashes, which is also the form manifest paths take,
@@ -225,6 +312,16 @@ for (const item of SHIP) {
     const before = wanted.length;
     walk(item.dir, wanted);
     console.log('  ' + item.dir + ': ' + (wanted.length - before) + ' files');
+  }
+}
+
+let PACKED_DUP = new Set();
+{
+  const drop = packDuplicates(wanted);
+  PACKED_DUP = drop;
+  if (drop.size) {
+    for (let i = wanted.length - 1; i >= 0; --i)
+      if (drop.has(wanted[i])) wanted.splice(i, 1);
   }
 }
 
@@ -397,7 +494,6 @@ fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null,
 }
 
 const uniq = new Set(files.map(f => f.sha256)).size;
-const mb = x => (x / 1048576).toFixed(1) + ' MB';
 console.log('                                        ');
 console.log('files    : ' + files.length + '  (' + uniq + ' unique blobs)');
 console.log('payload  : ' + mb(bytes));
@@ -549,12 +645,13 @@ if (argv.includes('--verify')) {
         if (excluded(e.name)) continue;
         const r = rel ? rel + '/' + e.name : e.name;
         if (e.isDirectory()) refWalk(r);
-        else if (e.isFile() && !shipped.has(r.toLowerCase())) missing.push(r);
+        else if (e.isFile() && !shipped.has(r.toLowerCase()) && !PACKED_DUP.has(r))
+          missing.push(r);
       }
-    })('data');
+    })('');
 
     if (!missing.length) {
-      console.log('verify: every file under ' + REFERENCE + '/data is in the manifest.');
+      console.log('verify: every file under ' + REFERENCE + ' is in the manifest.');
     } else {
       const byDir = {};
       for (const m of missing) {

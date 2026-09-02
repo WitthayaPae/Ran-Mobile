@@ -16,9 +16,13 @@
 //
 //  It is composited from the same pieces, in the same 1024x768 virtual layout,
 //  as NLOADINGTHREAD's in-game loading screen: ld_top across the top, the lobby
-//  art through the middle, ld_under across the bottom with the HINT badge, and
-//  the ld_back ring in the corner. Drawing only the bare art looked like a
-//  different screen from the one that appears a moment later.
+//  art through the middle and ld_under across the bottom. Drawing only the bare
+//  art looked like a different screen from the one that appears a moment later.
+//
+//  The HINT badge and the corner spinner are not drawn: the launcher patches on
+//  this same art and cannot show either, because its screen is painted while the
+//  data root holding them is still downloading. Keeping them here made the
+//  handover look like a jump between two screens rather than one.
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -219,11 +223,11 @@ void quad(GLuint tex, float x, float y, float w, float h,
 //  Kept between calls so the boot screen can be redrawn a frame at a time while
 //  the client loads, instead of being painted once and left static.
 struct State {
-    GLuint art, top, under, back, hint, step;
+    GLuint art, top, under;
     GLuint prog, vao, vbo;
     int    frame;
     bool   live;
-} g_s = { 0,0,0,0,0,0, 0,0,0, 0, false };
+} g_s = { 0,0,0, 0,0,0, 0, false };
 
 } // namespace
 
@@ -237,9 +241,6 @@ extern "C" void RanSplash_Begin(const char *dataRoot) {
     if (!g_s.art) return;                       // no art, no boot screen
     g_s.top   = loadTexture(dataRoot, "ld_top.dds",     NULL, NULL);
     g_s.under = loadTexture(dataRoot, "ld_under.dds",   NULL, NULL);
-    g_s.back  = loadTexture(dataRoot, "ld_back.dds",    NULL, NULL);
-    g_s.hint  = loadTexture(dataRoot, "HintIcon.dds",   NULL, NULL);
-    g_s.step  = loadTexture(dataRoot, "loading_st.dds", NULL, NULL);
 
     const GLuint vs = compile(GL_VERTEX_SHADER, kVert);
     const GLuint fs = compile(GL_FRAGMENT_SHADER, kFrag);
@@ -264,7 +265,7 @@ extern "C" void RanSplash_Begin(const char *dataRoot) {
     RanSplash_Step();
 }
 
-//  Advance the spinner and repaint. Called between the client boot steps, which
+//  Repaint between the client boot steps, which
 //  is the same thing LOADINGSTEP::SETSTEP does for the in-game loading screen -
 //  so the animation tracks real progress rather than a timer.
 extern "C" void RanSplash_Step(void) {
@@ -292,27 +293,16 @@ extern "C" void RanSplash_Step(void) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     //  The same 1024x768 virtual layout NLOADINGTHREAD uses, scaled to the panel.
+    //
+    //  The HINT badge and the corner spinner are deliberately not drawn. The
+    //  launcher patches on this same art, and it cannot show either of them -
+    //  its screen is painted while the data root that holds them is still being
+    //  downloaded. Drawing them here made the handover from the launcher to the
+    //  client's first frame look like a jump between two different screens
+    //  rather than one continuous one.
     quad(g_s.art,   0.0f,      128.0f * sy, 1024.0f * sx, 512.0f * sy);
     quad(g_s.top,   0.0f,        0.0f,      1024.0f * sx, 128.0f * sy);
     quad(g_s.under, 0.0f,      640.0f * sy, 1024.0f * sx, 128.0f * sy);
-    quad(g_s.hint, 15.0f * sx, 645.0f * sy,  100.0f * sx,  60.0f * sy);
-
-    //  The ring and the spinner are NOT put through the 1024x768 ratio.
-    //
-    //  LoadingThread sizes them in screen pixels and positions them from the
-    //  screen edge - vld_backRenderSize is a flat (128,128), and
-    //  vld_backRenderPos is fWidth/fHeight minus a margin. Scaling them the way
-    //  the bands are scaled stretches x and y by different factors (2.5 against
-    //  2.08 on this panel), which turns the ring into an ellipse. That is the
-    //  squeezed spinner.
-    const float backX = W - (128.0f + 15.0f), backY = H - (128.0f + 5.0f);
-    quad(g_s.back, backX, backY, 128.0f, 128.0f);
-
-    //  Four 105x105 frames along a 512x128 sheet, indexed exactly as the client
-    //  does it: left = (step mod 4) * 105. Native size, same reason as above.
-    const int f = g_s.frame & 3;
-    quad(g_s.step, backX + 12.0f, backY + 12.0f, 105.0f, 105.0f,
-         (f * 105.0f) / 512.0f, 0.0f, 105.0f / 512.0f, 105.0f / 128.0f);
 
     RanGL_Present();
     ++g_s.frame;
@@ -329,8 +319,8 @@ extern "C" void RanSplash_End(void) {
     glDeleteBuffers(1, &g_s.vbo);
     glDeleteVertexArrays(1, &g_s.vao);
     glDeleteProgram(g_s.prog);
-    const GLuint texes[6] = { g_s.art, g_s.top, g_s.under, g_s.back, g_s.hint, g_s.step };
-    glDeleteTextures(6, texes);
+    const GLuint texes[3] = { g_s.art, g_s.top, g_s.under };
+    glDeleteTextures(3, texes);
     g_s.live = false;
     LOGI("boot screen done after %d frames", g_s.frame);
 }

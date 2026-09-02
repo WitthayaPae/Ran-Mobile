@@ -17,7 +17,6 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -25,6 +24,8 @@ import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -118,56 +119,96 @@ public class RanLauncher extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(Color.parseColor("#0D1012"));
-        int pad = dp(28);
-        root.setPadding(pad, pad, pad, pad);
+        /*  The game's own loading screen, as the patch screen.
+         *
+         *  The player used to meet a bare dark panel, then a moment later the
+         *  client's loading art - two screens for one wait. This is the same
+         *  lobby art the in-game loader shows (loading_002.dds), with the RAN
+         *  mark from the login page over it and the progress along the bottom,
+         *  so the launcher and the first frame of the game are one continuous
+         *  screen.
+         *
+         *  The art is a drawable in the APK rather than a file read from the
+         *  data root, and it has to be: on a fresh install this screen is what
+         *  is drawn *while* that root is being downloaded, so nothing in it can
+         *  come from there.                                                    */
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#0B0E10"));
+
+        ImageView art = new ImageView(this);
+        setDrawable(art, "ran_loading");
+        //  Fill the panel and crop, rather than letterbox: the art is 2:1 and
+        //  a tablet is not, and black bars around it look like a broken asset.
+        art.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        root.addView(art, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        ImageView mark = new ImageView(this);
+        setDrawable(mark, "ran_mark");
+        mark.setAdjustViewBounds(true);
+        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
+                dp(230), ViewGroup.LayoutParams.WRAP_CONTENT);
+        mlp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        mlp.topMargin = dp(30);
+        root.addView(mark, mlp);
+
+        /*  The text and the bar sit in a band along the bottom. A little scrim
+         *  behind them, because the art is bright sky in places and white text
+         *  on it is unreadable.                                                */
+        LinearLayout band = new LinearLayout(this);
+        band.setOrientation(LinearLayout.VERTICAL);
+        band.setBackgroundColor(Color.parseColor("#B4000000"));
+        band.setPadding(dp(24), dp(12), dp(24), dp(14));
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.gravity = Gravity.BOTTOM;
+        root.addView(band, blp);
 
         status = new TextView(this);
-        status.setTextColor(Color.parseColor("#DCE3E7"));
-        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        status.setTextColor(Color.parseColor("#F0F4F6"));
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         status.setGravity(Gravity.CENTER);
         status.setText("Starting");
-        root.addView(status);
+        band.addView(status);
 
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(1000);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(18);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+        lp.topMargin = dp(10);
         bar.setLayoutParams(lp);
-        root.addView(bar);
+        band.addView(bar);
 
         detail = new TextView(this);
-        detail.setTextColor(Color.parseColor("#8D989F"));
-        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        detail.setTextColor(Color.parseColor("#AEB8BE"));
+        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         detail.setGravity(Gravity.CENTER);
-        detail.setPadding(0, dp(12), 0, 0);
-        root.addView(detail);
+        detail.setPadding(0, dp(8), 0, 0);
+        band.addView(detail);
 
         setContentView(root);
 
-        /*  Storage permission is not a condition of playing.
+        /*  A first install downloads 4.7 GB, and this Activity is what holds the
+         *  process alive while it happens. Let the screen sleep and Android
+         *  eventually kills a backgrounded process mid-download.              */
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        /*  Storage permission is never asked for, and never blocks anything.
          *
          *  The data lives in this app's own external files directory, which
-         *  needs no permission at all. The only thing All-files access is still
-         *  good for is spotting a pre-private-root install under /sdcard/ran
-         *  and moving it, which saves that player a 1.7 GB re-download - and
-         *  which nobody installing fresh has any use for.
+         *  needs no permission at all. All-files access is good for exactly one
+         *  thing: spotting a pre-private-root install under /sdcard/ran and
+         *  moving it instead of re-downloading it. An updating player already
+         *  granted it to the old build and the grant survives the update, so
+         *  they get the migration for free. A fresh install has nothing to
+         *  migrate and no use for the permission.
          *
-         *  So it is asked for once, and only from someone who might benefit:
-         *  no data in the private root yet, and the permission not already
-         *  held. Whatever they answer, the run continues - onResume picks it up
-         *  if they granted it, and the patcher simply downloads if they did
-         *  not. Demanding all-files access up front, from everyone, to read
-         *  files this app does not need, was the wrong trade.                 */
-        if (!hasStorage() && !privateRootHasData() && !askedForStorage) {
-            askedForStorage = true;
-            askForStorage();
-            return;                       //  onResume runs next and starts it
-        }
+         *  Prompting anyway was actively harmful, and measured: the Settings
+         *  screen put this Activity in the background just as the download
+         *  started, and the permission change then killed the process -
+         *  "Killing com.ran.native (adj 900): MANAGE_EXTERNAL_STORAGE changed".
+         *  The one case it helped, it broke.                                  */
+
         //  Claim the guard here, not just in onResume: onCreate is followed
         //  immediately by onResume, and without this both start a patch
         //  thread and the game is launched twice.
@@ -187,6 +228,18 @@ public class RanLauncher extends Activity {
 
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
+    /*  By name, not by R.drawable: this APK is linked by aapt2 without --java,
+     *  so there is no generated R class to compile against. A missing drawable
+     *  leaves the view empty rather than throwing - a launcher that crashes
+     *  because of its own wallpaper would be a poor trade.                    */
+    private void setDrawable(ImageView v, String name) {
+        try {
+            int id = getResources().getIdentifier(name, "drawable", getPackageName());
+            if (id != 0) v.setImageResource(id);
+            else Log.w(TAG, "drawable " + name + " not in the APK");
+        } catch (Throwable t) { Log.w(TAG, "drawable " + name + ": " + t); }
+    }
+
     private void say(final String s, final String d, final int permille) {
         if (s != null || d != null) Log.i(TAG, (s == null ? "" : s) + (d == null ? "" : "  |  " + d));
         ui.post(new Runnable() { public void run() {
@@ -195,39 +248,6 @@ public class RanLauncher extends Activity {
             if (permille >= 0) { bar.setIndeterminate(false); bar.setProgress(permille); }
             else bar.setIndeterminate(true);
         }});
-    }
-
-    /* ------------------------------------------------------------- storage */
-
-    private boolean hasStorage() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true;
-        return Environment.isExternalStorageManager();
-    }
-
-    private boolean askedForStorage = false;
-
-    /*  Has this device already got the game in the private root? If so there is
-     *  nothing to migrate and no reason to ask for anything.                  */
-    private boolean privateRootHasData() {
-        try {
-            File priv = getExternalFilesDir(null);
-            if (priv == null) priv = getFilesDir();
-            return priv != null && new File(priv, "config.ini").exists();
-        } catch (Throwable t) { return false; }
-    }
-
-    private void askForStorage() {
-        say("Optional: reuse an existing install",
-            "If RAN is already on this device, allow 'All files access' and it will be\n" +
-            "moved instead of downloaded. Otherwise just come back - it will download.", 0);
-        try {
-            Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                                  Uri.parse("package:" + getPackageName()));
-            startActivity(i);
-        } catch (Throwable t) {
-            try { startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)); }
-            catch (Throwable t2) { /* nothing else to try; the message stands */ }
-        }
     }
 
     /* --------------------------------------------------------------- patch */
