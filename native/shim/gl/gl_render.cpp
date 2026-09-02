@@ -663,6 +663,20 @@ struct GlState {
 GlState g_gl;
 
 void useProgram(GLuint p)  { if (g_gl.program != p) { glUseProgram(p); g_gl.program = p; } }
+
+//  Unit 0's binding is cached so a run of draws sharing a texture costs one
+//  glBindTexture. Every bind of unit 0 has to go through here: an upload path
+//  that binds behind the cache's back leaves the cache naming one texture
+//  while the sampler holds another, and the next draw both samples the wrong
+//  image and writes its sampler state onto that one.
+void bindTex2D(GLuint t) {
+    if (g_gl.texture2D == t) return;
+    glBindTexture(GL_TEXTURE_2D, t);
+    g_gl.texture2D = t;
+}
+//  Deleting a bound texture unbinds it in GL, so the cache has to forget it or
+//  it would skip the bind that puts a real texture back.
+void forgetTex2D(GLuint t) { if (g_gl.texture2D == t) g_gl.texture2D = 0; }
 //  The element array binding lives inside the vertex array object: switching
 //  VAOs changes which index buffer is bound without any glBindBuffer of ours,
 //  so a cached "already bound" shortcut can leave a draw with no index buffer
@@ -1106,7 +1120,18 @@ bool buildVariant(unsigned key, Variant &v) {
 }
 
 void useVariant(unsigned key) {
-    if (key == g_variantKey) return;
+    //  Re-assert the program even when the variant has not changed. The touch
+    //  HUD draws with a program of its own and then invalidates the state cache,
+    //  which zeroes g_gl.program but leaves g_variantKey naming the engine's
+    //  last variant - so this used to return with the HUD's program still bound
+    //  and every following draw took the wrong shader until some other variant
+    //  happened to be asked for. useProgram is itself cached, so this is free
+    //  whenever nothing moved.
+    if (key == g_variantKey) {
+        std::map<unsigned, Variant>::iterator cur = g_variants.find(key);
+        if (cur != g_variants.end()) useProgram(cur->second.prog);
+        return;
+    }
 
     //  Park the current program's cache before the locations change under it.
     std::map<unsigned, Variant>::iterator prev = g_variants.find(g_variantKey);
@@ -1262,7 +1287,7 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
         if (!rt.depth) glGenRenderbuffers(1, &rt.depth);
         rt.w = w; rt.h = h;
 
-        glBindTexture(GL_TEXTURE_2D, glTex);
+        bindTex2D(glTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1428,6 +1453,10 @@ extern "C" void RanGLR_SetMaterialAlpha(float a) { g_matAlpha = a; }
 //  longer exists and the next draw silently skips the binds it still needs.
 extern "C" void RanGLR_InvalidateStateCache(void) {
     g_gl.reset();
+    //  g_gl.reset() forgets which program is bound, so the variant cache has to
+    //  forget too: they are two halves of one piece of state, and leaving this
+    //  one set is what let a draw skip its glUseProgram entirely.
+    g_variantKey = 0xFFFFFFFFu;
     glActiveTexture(GL_TEXTURE0);
 }
 
@@ -2590,11 +2619,9 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  overhead, and ApplySampler is itself a no-op for a texture that already
     //  carries the current sampler state.
     const GLuint wanted = glTexture ? glTexture : g_whiteTex;
-    if (!g_skipTex)
-    if (wanted != g_gl.texture2D) {
-        glBindTexture(GL_TEXTURE_2D, wanted);
-        g_gl.texture2D = wanted;
-        ++g_callsTexture;
+    if (!g_skipTex) {
+        if (wanted != g_gl.texture2D) ++g_callsTexture;
+        bindTex2D(wanted);
     }
     if (glTexture && !g_skipTex) RanGLR_ApplySampler(glTexture);
     if (!g_skipUniform) {
@@ -3218,17 +3245,16 @@ extern "C" void RanGLR_ApplySampler(unsigned tex) {
 extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int width, int height,
                                               int d3dFormat, const void *bits, unsigned dataSize) {
     if (!g_inited || !bits || width <= 0 || height <= 0) return existing;
-
     GLuint tex = existing;
     if (!tex) {
         glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
+        bindTex2D(tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     } else {
-        glBindTexture(GL_TEXTURE_2D, tex);
+        bindTex2D(tex);
     }
 
     if (level == 0) g_texDims[tex] = std::make_pair(width, height);
@@ -3370,9 +3396,8 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
 extern "C" void RanGLR_UpdateTextureRect(unsigned tex, int x, int y, int w, int h,
                                          int d3dFormat, const void *bits, unsigned pitchBytes) {
     if (!g_inited || !tex || !bits || w <= 0 || h <= 0) return;
-    glBindTexture(GL_TEXTURE_2D, tex);
+    bindTex2D(tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
     const int n = w * h;
     switch (d3dFormat) {
         case D3DFMT_A8R8G8B8:
@@ -3529,9 +3554,18 @@ extern "C" void RanGLR_FinishCubeTexture(unsigned tex, int levels) {
 extern "C" void RanGLR_FinishTexture(unsigned tex, int levels, int d3dFormat) {
     if (!g_inited || !tex) return;
     ++g_texFullUploads;
-    glBindTexture(GL_TEXTURE_2D, tex);
+    bindTex2D(tex);
     if (levels <= 1 && !isDXT(d3dFormat)) {
+        while (glGetError() != GL_NO_ERROR) {}
         glGenerateMipmap(GL_TEXTURE_2D);
+        {
+            const GLenum e = glGetError();
+            if (e != GL_NO_ERROR) {
+                static int said = 0;
+                if (said < 5) { ++said;
+                    LOGE("glGenerateMipmap FAILED 0x%04X tex=%u d3dfmt=%d", e, tex, d3dFormat); }
+            }
+        }
         levels = 2;                                   // "has mips" is all the sampler needs
     }
     if (levels > 1) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
@@ -3568,6 +3602,9 @@ extern "C" void RanGLR_LogTextureStats(void) {
 
 extern "C" void RanGLR_DeleteTexture(unsigned tex) {
     g_texSampler.erase((GLuint)tex);
+    g_texLevels.erase((GLuint)tex);
+    g_texDims.erase((GLuint)tex);
+    forgetTex2D((GLuint)tex);
     if (tex) { GLuint t = tex; glDeleteTextures(1, &t); }
 }
 

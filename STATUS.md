@@ -278,6 +278,84 @@ to 180. The lock does nothing without a live target, which is by design and is
 what the probe kept showing. Still unconfirmed on a device - the emulator would
 not boot again after this session.
 
+### The interface turning to garbage: root cause (2026-09-02)
+
+Reproduced on LDPlayer and fixed. Trigger: **use a `กล่อง POWER UP` from the
+inventory**. The buff draws its "POWER UP" banner, and from that moment every
+string in the game renders as a solid white block — glyph quads in the right
+places, at the right widths, with Thai marks stacked correctly, but filled flat.
+Icons, world and window frames stay perfect.
+
+**Cause: `g_gl.program` and `g_variantKey` are two halves of one piece of state,
+and only one of them was being invalidated.**
+
+`RanGLR_InvalidateStateCache()` calls `g_gl.reset()`, which zeroes the cached
+program. It did **not** reset `g_variantKey`. `useVariant()` opened with
+`if (key == g_variantKey) return;` — so after the touch HUD drew with its own GL
+program and invalidated the cache, the next engine draw asking for that same
+variant returned early, never issued `glUseProgram`, and rendered under the HUD's
+program. Everything stayed wrong until some other variant happened to be asked
+for. The banner is what pins the UI pass to a single variant, which is why the
+POWER UP box makes it permanent rather than a one-frame flicker.
+
+That is also the long-unexplained sticky `glErr=0x0502`: drawing with the wrong
+or no program is exactly `GL_INVALID_OPERATION`.
+
+Measured across the fault, at the text draw itself:
+
+    before the box:  FONTDRAW ... prog=33
+    after the box:   FONTDRAW ... prog=0          <- white text
+    after the fix:   FONTDRAW cached prog=33  actually bound=33  variantKey=00000401
+
+Fix, both halves: `useVariant` re-asserts `useProgram` even when the key has not
+changed (`useProgram` is itself cached, so it is free when nothing moved), and
+`RanGLR_InvalidateStateCache` clears `g_variantKey`. Verified on a clean
+probe-free build: box used, all text correct, `glErr=0x0000`.
+
+**What this was NOT.** Ruled out by measurement, each ruling out a theory that
+looked right: the glyph atlas (read back off the GPU through an FBO mid-fault —
+`alive=1 levels=2 minf=GL_LINEAR`, texels carrying real coverage `00 32 2A 23 40`,
+not opaque white); the texture upload paths; `glGenerateMipmap`; atlas-full; the
+text outline; the fixed-function stage-0 ops (`colorop=4 arg1=2 arg2=0` right
+through the fault); render-target volume (identical, ~7000 draws/s, in working
+and broken sessions).
+
+### Two real bugs found on the way, both fixed, neither of them this one
+
+**The unit-0 bind cache could disagree with GL.** `RanGLR_Draw` skips
+`glBindTexture` when `g_gl.texture2D` already names the texture it wants, but
+`RanGLR_UploadTextureLevel`, `RanGLR_UpdateTextureRect`, `RanGLR_FinishTexture`
+and the render-target path all bound unit 0 without updating that field, and
+`RanGLR_DeleteTexture` deleted a bound texture (GL unbinds it) without clearing
+it. A draw could then sample the wrong texture *and* have
+`RanGLR_ApplySampler` write its `glTexParameteri` onto that wrong texture, and
+memoise the result against the right one. One `bindTex2D()` helper is now the
+only way unit 0 is bound, and `RanGLR_DeleteTexture` forgets the name plus its
+`g_texLevels` / `g_texDims` entries, which were otherwise inherited by whatever
+id GL recycled next.
+
+**`ATLAS_W`/`ATLAS_H` were file-scope and grew under fonts that had already
+allocated.** A font holding a 1024 atlas would then pack and compute UVs against
+2048, writing past the end of its locked bits. Per-font `m_atlasW`/`m_atlasH`
+now; the global only sizes the next atlas.
+
+### Test-rig notes from this session
+
+* `login-ld.sh` was stale — it targeted `android.app.NativeActivity`, which the
+  launcher split replaced, and typed credentials by tapping a client-drawn keypad
+  that no longer exists. **`ld-login.sh` is the working one**: it starts
+  `com.ran.launcher.RanActivity` and types through the IME. The dead component
+  name is fixed in all the login scripts.
+* Skipping the server-row/channel/connect taps and typing straight into the login
+  box hangs forever with **no socket open at all** (`/proc/net/tcp` for the app's
+  uid is empty). Check that before blaming the server.
+* `adb shell input keyevent 37` (KEYCODE_I) opens the inventory — letters map to
+  DirectInput scan codes in `scanCodeFor`. Far more reliable than hunting the
+  icon row, whose contents shift as windows open.
+* `กล่องของขวัญ POWER UP` is the *pack*; `กล่อง POWER UP` inside it is the item
+  that triggers the bug. Using the pack proves nothing.
+
+
 ### Still open from this session
 
 * **The camera lock is not verified on a device.** Maths checked offline (see

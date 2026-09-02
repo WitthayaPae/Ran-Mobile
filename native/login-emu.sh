@@ -24,7 +24,7 @@ wait_log() {                       # $1 = pattern, $2 = seconds
 "$ADB" -s "$D" shell am force-stop com.ran.native
 sleep 2
 "$ADB" -s "$D" logcat -c 2>/dev/null
-"$ADB" -s "$D" shell am start -n com.ran.native/android.app.NativeActivity > /dev/null
+"$ADB" -s "$D" shell am start -n com.ran.native/com.ran.launcher.RanActivity > /dev/null
 
 echo "waiting for the client to boot..."
 wait_log "RanApp  : === RAN mobile boot" 180 || exit 1

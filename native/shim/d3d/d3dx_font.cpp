@@ -104,6 +104,11 @@ public:
 
     IDirect3DTexture9 *m_atlas = NULL;
     int m_penX = 1, m_penY = 1, m_rowH = 0;
+    //  The size THIS font's atlas texture was actually created at. The global
+    //  below is only the size the next atlas will be created at; a font that
+    //  allocated before it grew would pack and compute UVs against a texture
+    //  larger than the one it owns - writing past the end of the locked bits.
+    int m_atlasW = 0, m_atlasH = 0;
     std::map<unsigned, Glyph> m_glyphs;
     HDC m_dc = NULL;
 
@@ -429,15 +434,17 @@ void RanD3DXFont::ensureAtlas() {
         const int want = 1024 * ss;
         if (want > ATLAS_W) { ATLAS_W = want; ATLAS_H = want; }
     }
+    m_atlasW = ATLAS_W;
+    m_atlasH = ATLAS_H;
     // A8R8G8B8 rather than A8: the GLES backend already uploads ARGB, and the
     // atlas is written once per new glyph, so the extra bytes cost nothing.
-    if (FAILED(m_device->CreateTexture(ATLAS_W, ATLAS_H, 1, 0, D3DFMT_A8R8G8B8,
+    if (FAILED(m_device->CreateTexture(m_atlasW, m_atlasH, 1, 0, D3DFMT_A8R8G8B8,
                                        D3DPOOL_MANAGED, &m_atlas, NULL)))
         m_atlas = NULL;
     if (!m_atlas) return;
     D3DLOCKED_RECT lr;
     if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
-        memset(lr.pBits, 0, (size_t)ATLAS_W * ATLAS_H * 4);
+        memset(lr.pBits, 0, (size_t)m_atlasW * m_atlasH * 4);
         m_atlas->UnlockRect(0);
     }
 }
@@ -534,12 +541,12 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
     g.u0 = g.v0 = g.u1 = g.v1 = 0.0f;
 
     if (gb.width > 0 && gb.height > 0) {
-        if (m_penX + gb.width + 1 > ATLAS_W) {
+        if (m_penX + gb.width + 1 > m_atlasW) {
             m_penX = 1;
             m_penY += m_rowH + 1;
             m_rowH = 0;
         }
-        if (m_penY + gb.height + 1 > ATLAS_H) {
+        if (m_penY + gb.height + 1 > m_atlasH) {
             // The atlas is full. Rather than corrupt it, later glyphs draw blank
             // — and say so once, because it means the atlas needs to grow.
             static bool warned = false;
@@ -551,7 +558,7 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
         if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
             DWORD *base = (DWORD *)lr.pBits;
             for (int y = 0; y < gb.height; ++y) {
-                DWORD *row = base + (size_t)(m_penY + y) * ATLAS_W + m_penX;
+                DWORD *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
                 const unsigned char *src = &gb.coverage[(size_t)y * gb.width];
                 for (int x = 0; x < gb.width; ++x) {
                     // White with the coverage as alpha; the vertex colour tints it.
@@ -561,10 +568,10 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
             m_atlas->UnlockRect(0);
         }
 
-        g.u0 = (float)m_penX / ATLAS_W;
-        g.v0 = (float)m_penY / ATLAS_H;
-        g.u1 = (float)(m_penX + gb.width) / ATLAS_W;
-        g.v1 = (float)(m_penY + gb.height) / ATLAS_H;
+        g.u0 = (float)m_penX / m_atlasW;
+        g.v0 = (float)m_penY / m_atlasH;
+        g.u1 = (float)(m_penX + gb.width) / m_atlasW;
+        g.v1 = (float)(m_penY + gb.height) / m_atlasH;
 
         m_penX += gb.width + 1;
         if (gb.height > m_rowH) m_rowH = gb.height;

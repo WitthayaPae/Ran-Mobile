@@ -13,7 +13,7 @@ shot() { "$ADB" -s "$D" exec-out screencap -p > "out/$1"; }
 
 "$ADB" -s "$D" shell am force-stop com.ran.native
 "$ADB" -s "$D" logcat -c
-"$ADB" -s "$D" shell am start -n com.ran.native/android.app.NativeActivity > /dev/null
+"$ADB" -s "$D" shell am start -n com.ran.native/com.ran.launcher.RanActivity > /dev/null
 sleep "${BOOT:-45}"
 
 t 1229 708 3      # server "YourServer" in the list
