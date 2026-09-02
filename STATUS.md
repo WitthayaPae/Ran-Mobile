@@ -4678,3 +4678,36 @@ does. Screenshot `MOBILE/native/out/gbox_zoom.png`.
 ships it again (it was dropped by an earlier over-broad pack-dedup rule), but the
 emulator cannot reach the patch host, so its data is still the pre-fix copy.
 Expected to clear on the next successful patch.
+
+## The patch page appeared to vanish and be replaced by a loading screen (2026-09-03)
+
+Both activities use `@style/RanSplash`, whose `android:windowBackground` was
+`@drawable/splash` - the bare 1024x512 art, **without the RAN mark**. A window
+background is drawn before either activity's own views are, and a drawable there
+can only be *stretched* to fill: there is no CENTER_CROP for a drawable. So the
+boot ran
+
+    splash.png stretched 2:1 -> 16:9, no mark      (RanLauncher window background)
+    ran_loading cover-fit + mark + status band     (RanLauncher's own views)
+    splash.png stretched again, mark gone          (RanActivity window background)
+    ran_loading cover-fit + mark                   (the native GL splash)
+
+The mark disappearing and the photo jumping crop, twice, is what read as "the
+patch page disappears and then a loading page shows".
+
+`MOBILE/tools/rcc-extract/compose-splash.js` now composes `splash.png` as the
+cover-fit result *plus* the mark at 16:9, so stretching it to fill is a no-op on
+a 16:9 panel and a couple of percent on 16:10. All four frames are then the same
+picture.
+
+**Measured, not asserted.** A throwaway build with a 2.5 s sleep before
+`setContentView` exposed the window-background frame on its own for capture
+(`wbg_1.png`); on a normal boot the frames after the launcher's page are
+byte-identical to it (`md5 12a9009a...`, v_03 through v_05). The activity could
+not simply be started directly to capture it - `am start` on RanActivity is
+refused, `not exported from uid 10074`, which is the export hardening working.
+
+Note for anyone repeating this: there is no ffmpeg on this machine and
+`screenrecord` has no raw-frame output, so `screencap` bursts are the only frame
+source, and they are far too slow to catch a sub-second transition by luck. Slow
+the app down and capture deliberately instead.
