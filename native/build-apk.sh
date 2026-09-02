@@ -2,7 +2,8 @@
 # Package libran.so into an installable APK. No Gradle: aapt2 + zipalign +
 # apksigner straight from the SDK that ships with Unity.
 #
-#   ./build.sh && ABI=x86_64 ./build.sh && ./build-apk.sh   -> out/ran-phase2.apk
+#   ./build.sh && ABI=x86_64 ./build.sh && ./build-apk.sh   -> out/RanOnline.apk
+# MAKE-PATCH.bat passes NAME=RanOnlineV<nnn>, from android:versionName.
 #
 # Every ABI that has been built is included: arm64-v8a for real devices, x86_64
 # for the LDPlayer emulator (which reports x86_64, not ARM).
@@ -15,7 +16,7 @@ JAVA="$U/OpenJDK/bin/java.exe"
 JAVAC="$U/OpenJDK/bin/javac.exe"
 ABIS="${ABIS:-arm64-v8a x86_64}"
 OUT="$HERE/out/apk"
-NAME="${NAME:-ran-phase2}"
+NAME="${NAME:-RanOnline}"
 
 rm -rf "$OUT"; mkdir -p "$OUT/res"
 

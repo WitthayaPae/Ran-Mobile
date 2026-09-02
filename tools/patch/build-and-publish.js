@@ -43,8 +43,24 @@ function findRoot(dir) {
 const ROOT   = findRoot(__dirname);
 const NATIVE = path.join(ROOT, 'MOBILE/native');
 const AMF    = path.join(NATIVE, 'android/AndroidManifest.xml');
-const APK    = path.join(NATIVE, 'out/ran-phase3.apk');
 const ABIS   = ['arm64-v8a', 'x86_64'];
+
+/*  Two numbers, and they are not the same thing.
+ *
+ *  android:versionCode is Android's own: an integer that only ever goes up,
+ *  and the only thing the platform and the launcher compare. Nobody sees it.
+ *
+ *  android:versionName is the release label - V001, V002 - and it is what the
+ *  file is named after, because the APK is handed to people directly and
+ *  "ran-phase3.apk" tells them nothing about what they have.                  */
+function manifestXml() { return fs.readFileSync(AMF, 'utf8'); }
+function versionName(src) {
+  const m = /android:versionName="([^"]*)"/.exec(src || manifestXml());
+  if (!m) throw new Error('no android:versionName in ' + AMF);
+  return m[1];
+}
+function apkName(src) { return 'RanOnline' + versionName(src) + '.apk'; }
+function apkPath(src) { return path.join(NATIVE, 'out', apkName(src)); }
 
 /* --------------------------------------------------------------------- bash
    build.sh and build-apk.sh are shell scripts, and this runs from a .bat. Git
@@ -123,13 +139,31 @@ function newestInput() {
   return { at: newest, who: who };
 }
 
-function bumpVersionCode() {
-  const src = fs.readFileSync(AMF, 'utf8');
-  const m = /android:versionCode="(\d+)"/.exec(src);
-  if (!m) throw new Error('no android:versionCode in ' + AMF);
-  const was = parseInt(m[1], 10), now = was + 1;
-  fs.writeFileSync(AMF, src.replace(m[0], 'android:versionCode="' + now + '"'));
-  return { was: was, now: now };
+/*  Both numbers move together on a release: the integer Android compares, and
+    the label the file is named after. A versionName that is not V<digits> is
+    left alone - someone has named this release deliberately.                  */
+function bumpVersion(bumpName) {
+  let src = manifestXml();
+  const c = /android:versionCode="(\d+)"/.exec(src);
+  if (!c) throw new Error('no android:versionCode in ' + AMF);
+  const codeWas = parseInt(c[1], 10), codeNow = codeWas + 1;
+  src = src.replace(c[0], 'android:versionCode="' + codeNow + '"');
+
+  const nameWas = versionName(src);
+  let nameNow = nameWas;
+  /*  The label only moves when there was already an APK carrying it. Renaming
+      the scheme, or a first build, publishes V001 rather than skipping to V002 -
+      while versionCode still goes up, because Android compares that one and it
+      may never repeat.                                                        */
+  const v = bumpName ? /^V(\d+)$/.exec(nameWas) : null;
+  if (v) {
+    const n = parseInt(v[1], 10) + 1;
+    nameNow = 'V' + String(n).padStart(v[1].length, '0');
+    src = src.replace('android:versionName="' + nameWas + '"',
+                      'android:versionName="' + nameNow + '"');
+  }
+  fs.writeFileSync(AMF, src);
+  return { codeWas: codeWas, codeNow: codeNow, nameWas: nameWas, nameNow: nameNow };
 }
 
 /*  Remove everything in a directory except a named keep-set, and say what went.
@@ -175,8 +209,9 @@ function sweepStore() {
  *  and recreates on every run anyway; the rest is screenshots, logs and pulled
  *  files from testing.                                                        */
 function sweepOut() {
+  const apk = apkName();
   return sweep(path.join(NATIVE, 'out'),
-               new Set(['launcher_mobile', 'ran-phase3.apk', 'ran-phase3.apk.idsig',
+               new Set(['launcher_mobile', apk, apk + '.idsig',
                         'arm64-v8a', 'x86_64', 'ref']),
                'out/');
 }
@@ -201,16 +236,20 @@ console.log('[1/3] building libran.so');
 for (const abi of ABIS) build(abi);
 
 const input = newestInput();
+const APK   = apkPath();
 const apkAt = fs.existsSync(APK) ? fs.statSync(APK).mtimeMs : 0;
 
 console.log('');
 if (input.at > apkAt) {
-  console.log('[2/3] ' + (apkAt === 0 ? 'no APK yet' : input.who + ' is newer than the APK'));
-  const v = bumpVersionCode();
-  console.log('      versionCode ' + v.was + ' -> ' + v.now);
+  console.log('[2/3] ' + (apkAt === 0 ? 'no APK for ' + versionName() + ' yet'
+                                      : input.who + ' is newer than the APK'));
+  const v = bumpVersion(apkAt !== 0);
+  console.log('      versionCode ' + v.codeWas + ' -> ' + v.codeNow +
+              (v.nameNow !== v.nameWas ? '   release ' + v.nameWas + ' -> ' + v.nameNow : ''));
+  const base = path.basename(apkPath(), '.apk');
   process.stdout.write('      packaging   ');
-  const r = sh('NAME=ran-phase3 ABIS="arm64-v8a x86_64" ./build-apk.sh');
-  const line = r.out.split('\n').find(l => /ran-phase3\.apk/.test(l) && /MB/.test(l));
+  const r = sh('NAME=' + base + ' ABIS="arm64-v8a x86_64" ./build-apk.sh');
+  const line = r.out.split('\n').find(l => l.indexOf(base + '.apk') >= 0 && /MB/.test(l));
   if (!line) {
     console.log('FAILED');
     console.error(r.out.split('\n').slice(-25).join('\n'));
@@ -218,7 +257,7 @@ if (input.at > apkAt) {
   }
   console.log(line.trim());
 } else {
-  console.log('[2/3] no code change - the published APK is current, versionCode untouched');
+  console.log('[2/3] no code change - ' + apkName() + ' is current, version untouched');
 }
 
 console.log('');

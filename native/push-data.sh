@@ -77,6 +77,6 @@ fi
 echo "== done =="
 "$ADB" shell du -sh $DEST 2>/dev/null || true
 echo
-echo "Then:  adb install -r out/ran-phase2.apk"
+echo "Then:  adb install -r out/RanOnlineV001.apk"
 echo "       adb shell am start -n com.ran.native/android.app.NativeActivity"
 echo "       adb logcat -s RanMain RanApp RanD3D RanD3DX RanSound RanShell"
