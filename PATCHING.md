@@ -200,6 +200,35 @@ other way round):
 The player has to allow "install unknown apps" for the launcher once. If they
 have not, the launcher says so and opens that Settings screen, then plays on.
 
+### The two ways to publish a binary nobody receives
+
+Both are silent, both are easy, so `make-manifest.js` refuses to build instead
+of warning:
+
+* **versionCode not bumped.** The launcher only offers a *strictly newer* one,
+  so a new binary under the old number is skipped by every client.
+
+      Error: this APK is a different build from the published one, but its
+      versionCode is 7, not newer than 7. ... Bump android:versionCode in
+      MOBILE/native/android/AndroidManifest.xml and rebuild the APK.
+
+* **Code rebuilt, APK not repackaged.** If either `out/<abi>/libran.so` is newer
+  than the APK, the APK does not contain the fix.
+
+      Error: out/arm64-v8a/libran.so is newer than ran-phase3.apk, so the APK
+      does not contain the current code. Run build-apk.sh again.
+
+So the order for a code change is fixed, and the script enforces it:
+
+    1. edit the code
+    2. bump android:versionCode in MOBILE/native/android/AndroidManifest.xml
+    3. cd MOBILE/native && ./build.sh && ABI=x86_64 ./build.sh
+    4. NAME=ran-phase3 ABIS="arm64-v8a x86_64" ./build-apk.sh
+    5. MAKE-PATCH.bat        (or: node MOBILE/tools/patch/make-manifest.js)
+    6. upload launcher_mobile/
+
+A data-only change is steps 5 and 6 alone.
+
 ### Why this is safe over plain HTTP
 
 * The hash comes out of `manifest.json`, which is verified against a key

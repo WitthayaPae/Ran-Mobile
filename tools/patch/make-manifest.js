@@ -265,7 +265,38 @@ const apk = (() => {
   const vn = /android:versionName="([^"]*)"/.exec(amf);
   if (!vc) throw new Error('no android:versionCode in AndroidManifest.xml');
   const st = fs.statSync(apkArg);
-  const hash = sha256(apkArg);
+
+  /*  Two ways to publish an APK nobody will ever be offered, both silent and
+      both easy to do. They are errors rather than warnings: a patch that looks
+      published and changes nothing on the device is worse than one that
+      refuses to build.
+
+      The launcher only offers a strictly newer versionCode, so shipping a new
+      binary under the old number means every client skips it, and you are left
+      wondering why the fix never landed.                                      */
+  const prevApk = PREV && PREV.apk ? PREV.apk : null;
+  const vcNow = parseInt(vc[1], 10);
+  const shaNow = sha256(apkArg);
+  if (prevApk && prevApk.sha256 !== shaNow && vcNow <= prevApk.versionCode) {
+    throw new Error(
+      'this APK is a different build from the published one, but its versionCode is ' +
+      vcNow + ', not newer than ' + prevApk.versionCode + '. No client would ever ' +
+      'be offered it. Bump android:versionCode in ' +
+      'MOBILE/native/android/AndroidManifest.xml and rebuild the APK.');
+  }
+
+  /*  And the other way: code rebuilt, APK not repackaged. The manifest would
+      then publish yesterday's binary under today's version number.            */
+  for (const abi of ['arm64-v8a', 'x86_64']) {
+    const so = path.join(ROOT, 'MOBILE/native/out', abi, 'libran.so');
+    if (fs.existsSync(so) && fs.statSync(so).mtimeMs > st.mtimeMs) {
+      throw new Error(
+        'out/' + abi + '/libran.so is newer than ' + path.basename(apkArg) +
+        ', so the APK does not contain the current code. Run build-apk.sh again.');
+    }
+  }
+
+  const hash = shaNow;
   place(apkArg, path.join(OUT, 'blobs', hash));
   return { versionCode: parseInt(vc[1], 10),
            versionName: vn ? vn[1] : '',
