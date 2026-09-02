@@ -149,7 +149,25 @@ public class RanLauncher extends Activity {
 
         setContentView(root);
 
-        if (!hasStorage()) { askForStorage(); return; }
+        /*  Storage permission is not a condition of playing.
+         *
+         *  The data lives in this app's own external files directory, which
+         *  needs no permission at all. The only thing All-files access is still
+         *  good for is spotting a pre-private-root install under /sdcard/ran
+         *  and moving it, which saves that player a 1.7 GB re-download - and
+         *  which nobody installing fresh has any use for.
+         *
+         *  So it is asked for once, and only from someone who might benefit:
+         *  no data in the private root yet, and the permission not already
+         *  held. Whatever they answer, the run continues - onResume picks it up
+         *  if they granted it, and the patcher simply downloads if they did
+         *  not. Demanding all-files access up front, from everyone, to read
+         *  files this app does not need, was the wrong trade.                 */
+        if (!hasStorage() && !privateRootHasData() && !askedForStorage) {
+            askedForStorage = true;
+            askForStorage();
+            return;                       //  onResume runs next and starts it
+        }
         //  Claim the guard here, not just in onResume: onCreate is followed
         //  immediately by onResume, and without this both start a patch
         //  thread and the game is launched twice.
@@ -159,8 +177,8 @@ public class RanLauncher extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        /*  Coming back from the storage-permission screen. */
-        if (hasStorage() && !started) {
+        /*  Coming back from the storage-permission screen - granted or not. */
+        if (!started) {
             started = true;
             new Thread(new Runnable() { public void run() { patchThenPlay(); } }).start();
         }
@@ -186,9 +204,22 @@ public class RanLauncher extends Activity {
         return Environment.isExternalStorageManager();
     }
 
+    private boolean askedForStorage = false;
+
+    /*  Has this device already got the game in the private root? If so there is
+     *  nothing to migrate and no reason to ask for anything.                  */
+    private boolean privateRootHasData() {
+        try {
+            File priv = getExternalFilesDir(null);
+            if (priv == null) priv = getFilesDir();
+            return priv != null && new File(priv, "config.ini").exists();
+        } catch (Throwable t) { return false; }
+    }
+
     private void askForStorage() {
-        say("Storage permission needed",
-            "RAN keeps its game data on shared storage.\nAllow 'All files access', then come back.", 0);
+        say("Optional: reuse an existing install",
+            "If RAN is already on this device, allow 'All files access' and it will be\n" +
+            "moved instead of downloaded. Otherwise just come back - it will download.", 0);
         try {
             Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                                   Uri.parse("package:" + getPackageName()));

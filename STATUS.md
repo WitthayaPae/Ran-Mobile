@@ -489,6 +489,56 @@ in `CLIENT/` are server-side data, which is what that tree is.
 manifest. Packing those files in would make mobile behave differently from PC,
 which is the opposite of the point.
 
+### Security review of the delivery path (2026-09-02)
+
+Full read of the fetch, verify, write and install paths. Two things fixed, the
+rest recorded as checked so the next review starts from evidence.
+
+**Fixed: all-files access no longer gates startup.** `onCreate` refused to run
+without `MANAGE_EXTERNAL_STORAGE` - permission to read and write every file on
+the device - even though the data root is this app's own external files
+directory, which needs no permission at all. The only remaining use for it is
+spotting a pre-private-root install under `/sdcard/ran` and moving it, saving
+that player a 1.7 GB re-download; nobody installing fresh has any use for it.
+
+It is now asked for once, only from someone who might benefit (no data in the
+private root, permission not already held), and the run continues whatever they
+answer. Measured with the permission set to `deny`: no prompt, boots, logs in,
+reaches the world, `glErr=0x0000`.
+
+**Fixed: `RanActivity` was `exported="true"`.** Any app on the device could
+start the game directly, skipping the launcher and with it the update check and
+the signature-verified manifest. Now `exported="false"`; `am start` on it
+returns `Permission Denial: ... not exported from uid 10074`. The login scripts
+go through `RanLauncher` instead, which is the path a player takes anyway.
+
+**Checked and sound**, each read rather than recalled:
+
+* the manifest is verified before it is parsed, fail-closed on missing,
+  malformed or wrong signature (P-256 ECDSA, key compiled into the APK)
+* `safeDest` blocks traversal twice - syntactic (absolute, drive, backslash,
+  `..`) and canonical-path containment
+* anti-rollback on both halves: the data version cannot go backwards, and only a
+  strictly newer `versionCode` is offered
+* the APK never exists as a file - streamed into a `PackageInstaller` session,
+  hashed in flight, abandoned on mismatch. Proven by flipping one byte on the
+  server
+* blobs: size ceiling enforced mid-stream, hash checked before the atomic
+  rename, temp file in the private root
+* APK signed with v2 and v3 schemes, one signer, `CN=RAN Debug, O=RAN, C=TH` -
+  a unique key, not the well-known public Android debug key
+* `allowBackup="false"`, `debuggable` absent, cleartext scoped per host
+* the native loader has no `/sdcard/ran` fallback for game data, so the private
+  root really is the only place the C++ parsers read from
+
+**Residual, accepted:** both signing keys are protected by file secrecy alone -
+the keystore password is `android` in `build-apk.sh` and the manifest key is an
+unencrypted PEM. Anyone holding `debug.keystore` can sign an APK that installs
+over the real app through any channel, which is the argument for backing them up
+*securely* rather than merely backing them up. Redirects are followed, which
+cannot inject content since everything is hash- or signature-checked. A local
+actor with root can write a high `.patchver` to stall updates.
+
 ### Still open from this session
 
 * **The camera lock is not verified on a device.** Maths checked offline (see

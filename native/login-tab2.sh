@@ -10,7 +10,7 @@ k() { for a in "$@"; do "$ADB" shell input keyevent "$a"; sleep 0.6; done; }
 
 "$ADB" shell am force-stop com.ran.native
 "$ADB" logcat -c
-"$ADB" shell am start -n com.ran.native/com.ran.launcher.RanActivity > /dev/null
+"$ADB" shell am start -n com.ran.native/com.ran.launcher.RanLauncher > /dev/null
 sleep "${BOOT:-55}"
 
 t 1232 788 3      # server "YourServer"

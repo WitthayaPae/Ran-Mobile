@@ -50,7 +50,7 @@ done
 "$ADB" -s "$D" logcat -b all -c 2>/dev/null || "$ADB" -s "$D" logcat -c
 
 for i in 1 2 3 4 5; do
-  "$ADB" -s "$D" shell am start -n com.ran.native/com.ran.launcher.RanActivity >/dev/null 2>&1
+  "$ADB" -s "$D" shell am start -n com.ran.native/com.ran.launcher.RanLauncher >/dev/null 2>&1
   sleep 4
   PID=$("$ADB" -s "$D" shell pidof com.ran.native | tr -d "
 ")
