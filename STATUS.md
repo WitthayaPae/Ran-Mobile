@@ -457,7 +457,8 @@ writes the manifest. Publishing an APK nobody would receive is a hard error, not
 a warning, in both of the ways that happen silently: `versionCode` not bumped,
 and code rebuilt without repackaging.
 
-The APK is `RanOnlineV001.apk` now. `versionCode` stays a private counter that
+The APK is `RanMobile.apk` now - one name every release, so a link to it never
+has to be reissued. `versionCode` stays a private counter that
 only goes up, because Android compares it and refuses to install over a higher
 one; `versionName` is the release label, and the file is named after it.
 
@@ -467,7 +468,7 @@ shipping it normally reset everyone's settings on every patch, silently undoing
 the settings fix above.
 
 **One-time:** the APK players hold has no updater in it, so it ignores the
-manifest's `apk` block. That group needs `RanOnlineV001.apk` by hand once.
+manifest's `apk` block. That group needs `RanMobile.apk` by hand once.
 Everything after is a patch.
 
 **Both keys are single points of failure and are gitignored.**

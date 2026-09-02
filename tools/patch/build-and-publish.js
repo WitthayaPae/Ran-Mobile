@@ -45,22 +45,24 @@ const NATIVE = path.join(ROOT, 'MOBILE/native');
 const AMF    = path.join(NATIVE, 'android/AndroidManifest.xml');
 const ABIS   = ['arm64-v8a', 'x86_64'];
 
-/*  Two numbers, and they are not the same thing.
+/*  The file has one name, always: a player downloading an update should not
+ *  have to work out which of several files is the current one, and a link to it
+ *  should not have to be reissued every release.
  *
- *  android:versionCode is Android's own: an integer that only ever goes up,
- *  and the only thing the platform and the launcher compare. Nobody sees it.
- *
- *  android:versionName is the release label - V001, V002 - and it is what the
- *  file is named after, because the APK is handed to people directly and
- *  "ran-phase3.apk" tells them nothing about what they have.                  */
+ *  Which release it actually is lives inside, in two numbers that are not the
+ *  same thing. android:versionCode is Android's own: an integer that only ever
+ *  goes up, and the only thing the platform and the launcher compare - nobody
+ *  sees it. android:versionName is the human label, V001, V002, shown in the
+ *  player's app info and in the launcher's "version 16 (V001)" line.          */
+const APK_NAME = 'RanMobile.apk';
 function manifestXml() { return fs.readFileSync(AMF, 'utf8'); }
 function versionName(src) {
   const m = /android:versionName="([^"]*)"/.exec(src || manifestXml());
   if (!m) throw new Error('no android:versionName in ' + AMF);
   return m[1];
 }
-function apkName(src) { return 'RanOnline' + versionName(src) + '.apk'; }
-function apkPath(src) { return path.join(NATIVE, 'out', apkName(src)); }
+function apkName() { return APK_NAME; }
+function apkPath() { return path.join(NATIVE, 'out', APK_NAME); }
 
 /* --------------------------------------------------------------------- bash
    build.sh and build-apk.sh are shell scripts, and this runs from a .bat. Git
@@ -241,7 +243,7 @@ const apkAt = fs.existsSync(APK) ? fs.statSync(APK).mtimeMs : 0;
 
 console.log('');
 if (input.at > apkAt) {
-  console.log('[2/3] ' + (apkAt === 0 ? 'no APK for ' + versionName() + ' yet'
+  console.log('[2/3] ' + (apkAt === 0 ? 'no ' + apkName() + ' yet'
                                       : input.who + ' is newer than the APK'));
   const v = bumpVersion(apkAt !== 0);
   console.log('      versionCode ' + v.codeWas + ' -> ' + v.codeNow +

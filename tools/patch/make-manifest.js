@@ -127,18 +127,10 @@ const arg = (name, fallback) => {
 };
 const versionArg = parseInt(arg('version', ''), 10);
 const minApk = parseInt(arg('min-apk', '1'), 10);
-/*  The APK is named after the release label in AndroidManifest.xml -
-    RanOnlineV001.apk - so this finds it the same way build-and-publish.js
-    names it, rather than by a fixed path that would drift.                    */
-const apkDefault = (() => {
-  try {
-    const amf = fs.readFileSync(path.join(ROOT, 'MOBILE/native/android/AndroidManifest.xml'), 'utf8');
-    const vn = /android:versionName="([^"]*)"/.exec(amf);
-    if (vn) return path.join(ROOT, 'MOBILE/native/out', 'RanOnline' + vn[1] + '.apk');
-  } catch (e) { }
-  return path.join(ROOT, 'MOBILE/native/out/RanOnline.apk');
-})();
-const apkArg = arg('apk', apkDefault);
+/*  One name, every release: a download link to it never has to be reissued, and
+    nobody has to work out which of several files is current. Which release it
+    is lives inside, in versionCode and versionName.                           */
+const apkArg = arg('apk', path.join(ROOT, 'MOBILE/native/out/RanMobile.apk'));
 const noApk = argv.includes('--no-apk');
 
 /*  The previous manifest, if this store has been built before. It is what the

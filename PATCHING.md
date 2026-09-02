@@ -94,7 +94,7 @@ everybody, it has to be a code change or a `config.ini` flag.
 
 Just publish. `MAKE-PATCH.bat` compiles both ABIs, sees the library is newer
 than the APK, bumps `versionCode` and the `V001` label, repackages
-`RanOnlineV<nnn>.apk` and puts it in the store. The launcher offers it and
+`RanMobile.apk` and puts it in the store. The launcher offers it and
 Android installs it after the player confirms.
 
 The same applies to launcher Java, `AndroidManifest.xml` and resources — they
@@ -103,7 +103,7 @@ tree, not just the libraries.
 
 **One exception, once.** A player whose installed APK predates the self-updater
 has no code to offer them anything, so it ignores the manifest's `apk` block
-entirely. That group needs one APK by hand — `RanOnlineV001.apk`. Everyone after
+entirely. That group needs one APK by hand — `RanMobile.apk`. Everyone after
 that is a patch away.
 
 ### The patch server's own address
@@ -180,7 +180,7 @@ one order that works:
 
     [2/3] out\x86_64\libran.so is newer than the APK
           versionCode 8 -> 9
-          packaging   out/RanOnlineV002.apk  321.2 MB   ABIs: arm64-v8a x86_64
+          packaging   out/RanMobile.apk  321.2 MB   ABIs: arm64-v8a x86_64
 
     [3/3] building the payload
           ...
@@ -203,7 +203,7 @@ running.
 
 ### The APK's name, and the two version numbers
 
-The file is named after the release: **`RanOnlineV001.apk`**. It is handed to
+The file has one name every release: **`RanMobile.apk`**. It is handed to
 people directly, so it says what it is.
 
 Two numbers live in `MOBILE/native/android/AndroidManifest.xml` and they are not
@@ -212,11 +212,12 @@ the same thing:
 | | what it is | who sees it |
 |---|---|---|
 | `android:versionCode` | an integer that only ever goes up | nobody — it is what Android and the launcher compare |
-| `android:versionName` | the release label, `V001` | the filename, and the player's app info |
+| `android:versionName` | the release label, `V001` | the player's app info, and the launcher's "version 16 (V001)" line |
 
-`MAKE-PATCH.bat` moves both when it repackages: `versionCode` 12 -> 13 and
-`V001` -> `V002`, so the next build lands as `RanOnlineV002.apk`. The sweep
-keeps only the current one, so `out/` never accumulates old releases.
+`MAKE-PATCH.bat` moves both when it repackages: `versionCode` 15 -> 16 and
+`V001` -> `V002`. The filename never moves, so a download link to it does not
+have to be reissued, and nobody has to work out which of several files is
+current.
 
 `versionCode` can never repeat or go down — Android refuses to install over a
 higher one — which is why it is a plain counter and not derived from the label.
@@ -226,7 +227,7 @@ and the script stops renumbering it and just uses it.
 **out/ and the store are cleaned before publishing.** Three kinds of leftover go:
 
 * **Everything in `native/out/` that is not needed.** After a run that directory
-  holds exactly six things: `launcher_mobile/`, `RanOnlineV<nnn>.apk` and its
+  holds exactly six things: `launcher_mobile/`, `RanMobile.apk` and its
   `.idsig`, the two ABI build trees, and `ref/`. `out/apk` is build-apk.sh's
   staging area - it wipes and recreates it on every run anyway - and screenshots,
   logs and files pulled off a device are swept with it.
@@ -387,7 +388,7 @@ this one targets 34. So there is no equivalent of dropping a new `MiniA.exe`
 into the patch: a code fix reaches a player only as a new APK.
 
 The launcher installs it. `make-manifest.js` picks up
-`MOBILE/native/out/RanOnlineV<nnn>.apk` (override with `--apk`, disable with
+`MOBILE/native/out/RanMobile.apk` (override with `--apk`, disable with
 `--no-apk`), puts it in the store as a blob like everything else, and adds one
 block to the manifest:
 
@@ -430,7 +431,7 @@ of warning:
 * **Code rebuilt, APK not repackaged.** If either `out/<abi>/libran.so` is newer
   than the APK, the APK does not contain the fix.
 
-      Error: out/arm64-v8a/libran.so is newer than RanOnlineV001.apk, so the APK
+      Error: out/arm64-v8a/libran.so is newer than RanMobile.apk, so the APK
       does not contain the current code. Run build-apk.sh again.
 
 So the order for a code change is fixed. **MAKE-PATCH.bat does all of it** (see
@@ -440,7 +441,7 @@ ever run them by hand:
     1. edit the code
     2. bump android:versionCode in MOBILE/native/android/AndroidManifest.xml
     3. cd MOBILE/native && ./build.sh && ABI=x86_64 ./build.sh
-    4. NAME=RanOnlineV<nnn> ABIS="arm64-v8a x86_64" ./build-apk.sh
+    4. NAME=RanMobile ABIS="arm64-v8a x86_64" ./build-apk.sh
     5. node MOBILE/tools/patch/make-manifest.js
     6. upload launcher_mobile/
 
@@ -693,7 +694,7 @@ the store being immutable, and it is the right trade.
 ## Shipping a code change
 
 Double-click `MAKE-PATCH.bat`, then upload `launcher_mobile/`. It compiles both
-ABIs, bumps the version, repackages `native/out/RanOnlineV<nnn>.apk` and
+ABIs, bumps the version, repackages `native/out/RanMobile.apk` and
 puts it in the store; the launcher offers it and Android installs it. See
 **One click** and **Shipping code** above.
 
@@ -702,7 +703,7 @@ By hand, if you ever need to:
     cd MOBILE/native
     ./build.sh && ABI=x86_64 ./build.sh
     # bump android:versionCode in android/AndroidManifest.xml
-    NAME=RanOnlineV<nnn> ABIS="arm64-v8a x86_64" ./build-apk.sh
+    NAME=RanMobile ABIS="arm64-v8a x86_64" ./build-apk.sh
     node ../tools/patch/make-manifest.js
 
 `make-manifest.js` refuses to publish if the `versionCode` did not move or the
