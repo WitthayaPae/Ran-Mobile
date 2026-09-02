@@ -525,14 +525,32 @@ the store being immutable, and it is the right trade.
 
 ## Shipping a code change
 
-    ABI=arm64-v8a ./build.sh              # and ABI=x86_64 for the emulator
-    NAME=ran-phase3 ./build-apk.sh        # -> native/out/ran-phase3.apk
+Double-click `MAKE-PATCH.bat`, then upload `launcher_mobile/`. It compiles both
+ABIs, bumps `android:versionCode`, repackages `native/out/ran-phase3.apk` and
+puts it in the store; the launcher offers it and Android installs it. See
+**One click** and **Shipping code** above.
 
-Bump `versionCode` and `versionName` in `native/android/AndroidManifest.xml` so
-the build is identifiable. Raise the manifest's `minApk` to that `versionCode`
-**only** if you want old APKs refused — the launcher can then only display
-"the server needs app version N", so anyone who cannot reach a new APK is stuck
-at that dialog.
+By hand, if you ever need to:
 
-The data payload is unaffected by a code change. If `/launcher_mobile/` is
-already uploaded, a code release means handing out one APK and nothing else.
+    cd MOBILE/native
+    ./build.sh && ABI=x86_64 ./build.sh
+    # bump android:versionCode in android/AndroidManifest.xml
+    NAME=ran-phase3 ABIS="arm64-v8a x86_64" ./build-apk.sh
+    node ../tools/patch/make-manifest.js
+
+`make-manifest.js` refuses to publish if the `versionCode` did not move or the
+APK is older than the libraries, so a missed step is an error rather than a
+patch that quietly reaches nobody.
+
+`versionName` is yours to set; nothing depends on it.
+
+Raise the manifest's `minApk` **only** to refuse a client too old to talk to the
+server at all — a stale packet layout, say. It is a hard stop: the launcher shows
+"the server needs app version N" and goes no further. It is not the mechanism for
+delivering an update; the `apk` block is.
+
+### The one exception
+
+A player whose installed APK predates the self-updater cannot be updated by it.
+That build has no `offerApk`, so it ignores the manifest's `apk` block entirely.
+Those players need one APK by hand; everyone after that is a patch away.
