@@ -66,6 +66,54 @@ Never edit it to "point at" anything. The server address lives in one place only
 
 ---
 
+## One click: MAKE-PATCH.bat
+
+Double-click `MAKE-PATCH.bat` in the repo root. It runs
+`MOBILE/tools/patch/build-and-publish.js`, which does the whole sequence in the
+one order that works:
+
+    [1/3] building libran.so
+      arm64-v8a   ok
+      x86_64      ok
+
+    [2/3] out\x86_64\libran.so is newer than the APK
+          versionCode 8 -> 9
+          packaging   out/ran-phase3.apk  321.2 MB   ABIs: arm64-v8a x86_64
+
+    [3/3] building the payload
+          ...
+          version  : 372  (bumped from 371)   minApk: 1
+          apk      : versionCode 9 "0.5-self-update", 321.2 MB
+
+Then upload `launcher_mobile/`. That is the whole job, for a code change and a
+data change alike.
+
+**It only repackages when it has to.** Step 2 compares the APK's timestamp
+against everything the APK contains - both `libran.so` files and the whole
+`android/` tree, so a launcher-only or resource-only edit counts too. When
+nothing is newer it says so and leaves the APK and its `versionCode` alone:
+
+    [2/3] no code change - the published APK is current, versionCode untouched
+
+That matters beyond tidiness. Bumping `versionCode` for a data-only patch would
+offer every player a 321 MB reinstall of a binary identical to the one they are
+running.
+
+**`versionCode` is bumped for you**, in
+`MOBILE/native/android/AndroidManifest.xml`, and the file is edited in place -
+so the number in git always matches what was published. `versionName` is left
+alone; set it by hand when a release deserves a name.
+
+**A compile error stops everything.** `build.sh` prints
+`--- errors: N  failed: M` whatever its pipeline exits with, so that line is
+what gets believed; a non-zero count prints the offending lines and nothing is
+published.
+
+It needs `bash` - Git for Windows is enough, and it looks in the usual install
+paths. Set `RAN_BASH` to a `bash.exe` if yours lives somewhere unusual.
+
+---
+
 ## Publishing a data update
 
 **Double-click `MAKE-PATCH.bat` in the development root.** It runs the build
@@ -218,16 +266,19 @@ of warning:
       Error: out/arm64-v8a/libran.so is newer than ran-phase3.apk, so the APK
       does not contain the current code. Run build-apk.sh again.
 
-So the order for a code change is fixed, and the script enforces it:
+So the order for a code change is fixed. **MAKE-PATCH.bat does all of it** (see
+above); these are the steps it runs, and what make-manifest.js enforces if you
+ever run them by hand:
 
     1. edit the code
     2. bump android:versionCode in MOBILE/native/android/AndroidManifest.xml
     3. cd MOBILE/native && ./build.sh && ABI=x86_64 ./build.sh
     4. NAME=ran-phase3 ABIS="arm64-v8a x86_64" ./build-apk.sh
-    5. MAKE-PATCH.bat        (or: node MOBILE/tools/patch/make-manifest.js)
+    5. node MOBILE/tools/patch/make-manifest.js
     6. upload launcher_mobile/
 
-A data-only change is steps 5 and 6 alone.
+A data-only change is steps 5 and 6 alone. MAKE-PATCH.bat is 1-5 in one click,
+and works out for itself whether 2-4 are needed.
 
 ### Why this is safe over plain HTTP
 
