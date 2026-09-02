@@ -165,6 +165,38 @@ the change was structural.
   than the `STARGETID` (whose position is the one it had when selected). With nothing
   selected the camera is left alone.
 
+### A dying target is dropped in 52 ms, not 521 (measured 2026-09-02)
+
+The complaint was that a killed mob keeps its bar and stays hittable. Two probe
+runs, one line per frame, same mob type and same server.
+
+Dropping on `GLAT_DIE` alone:
+
+    09:37:11.513  hp=1/180 die=0      <- health stops here
+    ...  about twenty frames ...
+    09:37:12.034  hp=1/180 die=1      <- 521 ms later
+
+Adding `GLAT_FALLING`:
+
+    09:53:07.245  hp=1/180 die=0 fall=0
+    09:53:07.271  hp=1/180 die=0 fall=0
+    09:53:07.297  hp=1/180 die=0 fall=1   <- 52 ms
+
+`FALLING` arrives while `DIE` is still 0, and that is the whole difference. The
+client's own continuation logic already treated either action as target-gone;
+`MobileTargetIsLive` now tests the same pair.
+
+**The client's health for a mob never reaches zero** - it stops at 1 and the
+server sends no final update, only the death action. So the zero-health test
+added earlier in the session is dead code for mobs. It is kept only because a
+player's bar does reach zero.
+
+**Two things in this area were my own regressions, both now removed:** a
+fallback in the nearest-mob search that re-picked with `FindClosedCrow` (no
+state test) exactly when every candidate was dead, handing the corpse straight
+back; and the belief that auto-select was broken, which came from pressing the
+wrong pad button.
+
 ### Dead targets, measured (2026-09-02)
 
 Killing something now drops it everywhere at once. Instrumented across a kill:
