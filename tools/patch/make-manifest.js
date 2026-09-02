@@ -280,6 +280,15 @@ function packDuplicates(wanted) {
   const drop = new Set();
   let bytes = 0, sameName = 0;
   for (const rel of wanted) {
+    /*  Never a file at the client root. The match is on the bare name, and an
+        archive stands for the directory it lives in - so the root comment.ini
+        was being dropped because GLogic.rcc, which is data/glogic/, holds an
+        entry of that name. Two different destinations that happen to agree on
+        the filename, and the shipped PC client carries both. There are four
+        root files, they are a kilobyte each, and getting one wrong costs more
+        than shipping all of them.                                             */
+    if (rel.indexOf('/') < 0) continue;
+
     const hits = inPacks.get(path.basename(rel).toLowerCase());
     if (!hits) continue;
     sameName++;

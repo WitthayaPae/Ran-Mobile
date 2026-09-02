@@ -477,18 +477,38 @@ player can ever upgrade, only uninstall and re-download 1.7 GB.
 `tools/patch/keys/manifest-signing-key.pem` signs the manifest — without it no
 patch can ship at all. Back both up off the build machine.
 
-### Not a bug: the loose `data/glogic/*.ini` (2026-09-02)
+### The `.ini` files, and a correction (2026-09-02)
 
-`ERROR : GLCONST_CHAR::LOADRANK(), Rank.ini` in every run is normal, and the PC
-client logs it too. Those loaders read through `GLogic.rcc`, `gltexfile::open`
-has no loose fallback, and the pack contains no `.ini` at all — 377 entries,
-zero, in our copy and in the shipped `Ran/` copy alike. The shipped PC client
-carries exactly one loose `.ini` under `data/` (`data/skin/desktop.ini`); the 63
-in `CLIENT/` are server-side data, which is what that tree is.
+**Correction.** An earlier version of this entry said the packs contain no
+`.ini` at all, and that `Rank.ini` therefore cannot load on PC either. That was
+wrong, and wrong because of a bad measurement: the check called a method the
+rcc reader does not have, got array indices back instead of names, and counted
+zero `.ini` in a pack that holds seventeen. `GLogic.rcc` contains `Rank.ini`,
+`attendance.ini`, `busstation.ini`, `comment.ini`, `emoticon.ini`,
+`pandorabox.ini`, `colortable.ini` and ten more. Whatever `LOADRANK` is
+complaining about, "the file is not in the pack" is not it.
 
-`make-manifest.js --verify` confirms it: every file under `Ran/data` is in the
-manifest. Packing those files in would make mobile behave differently from PC,
-which is the opposite of the point.
+**What ships**, six files:
+
+| | |
+|---|---|
+| `config.ini` | the `[GAME_FEATURE]` flags |
+| `param.ini` | the game server address |
+| `comment.ini` | read from the pack, but the PC client carries a root copy too, so it ships for parity |
+| `option.ini` | seeded - installed when absent, never overwritten |
+| `data/skin/desktop.ini`, `textures/item/desktop.ini` | Windows Explorer folder settings that the PC install happens to contain. A kilobyte between them, and present in `Ran/`, so they ship rather than open a hole in `--verify` |
+
+**What does not**, and should not: the other 63 `.ini` in `CLIENT/`. They are
+server-side or already inside `GLogic.rcc`, which is where the client reads them
+from - `bGLOGIC_ZIPFILE` is always on and `gltexfile::open` has no loose
+fallback. `Hackshield/*.ini` is skipped with the rest of that directory.
+
+**One trap this exposed.** The duplicate check matches on the bare filename,
+and an archive stands for the directory it lives in - so the root `comment.ini`
+was dropped because `GLogic.rcc`, which is `data/glogic/`, holds an entry of
+that name. Two different destinations agreeing on a filename. Root files are now
+never deduplicated: there are four, they are a kilobyte each, and getting one
+wrong costs more than shipping all of them.
 
 ### Security review of the delivery path (2026-09-02)
 
