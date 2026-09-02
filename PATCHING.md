@@ -556,6 +556,50 @@ release build anyway.
 
 ---
 
+### If the store moves on the server
+
+Three cases, and only one of them is free.
+
+**The path changes, same host** — `/launcher_mobile/` becomes `/patchstore/`.
+Serve a `301` from the old path and every client follows it. Tested end to end:
+the manifest, the signature and the blob downloads all came through the
+redirect, including a forced re-download of a deleted file.
+
+    301 /launcher_mobile/manifest.json   ->  /patchstore/manifest.json
+    301 /launcher_mobile/blobs/68d46f9e… ->  /patchstore/blobs/68d46f9e…
+    Updated  |  version 381
+
+No APK, no hand-out. Keep the redirect up for as long as any client might still
+be pointed at the old path — which, since the address is compiled in, is
+forever.
+
+**The host or IP changes.** This one is not free. Two things are baked into the
+APK: `BASE_DEFAULT` in `RanLauncher.java`, and the cleartext allowlist in
+`res/xml/network_security_config.xml`, which names `143.14.11.244` explicitly.
+A redirect to a host that is not in that list is refused by the platform, not by
+us — the launcher reports "could not reach the patch server". So a move needs a
+new APK, handed out the old way, which is exactly the position the self-updater
+exists to avoid.
+
+**Moving to HTTPS.** `HttpURLConnection` does not follow redirects across
+protocols, so an `http` client cannot be walked to `https` by redirect. Treat
+this as needing a new APK too. (Documented Java behaviour; not tested here.)
+
+#### Worth doing before you ever need it
+
+Point `BASE_DEFAULT` at a **hostname you control** rather than a bare IP, and
+allow that domain instead of the address. After that every future move — new
+box, new IP, new hosting company — is a DNS change and never needs another
+hand-out. It costs one APK now, while you are already handing one out.
+
+Better still, put it behind HTTPS at the same time and delete the cleartext
+exception entirely. The manifest signature already makes plain HTTP safe against
+tampering, but TLS also stops anyone on the path seeing what a player downloads.
+
+`.patchbase` in the data root overrides the address without a rebuild, but the
+data root is app-private now, so that is a development tool and not something a
+player can be talked through.
+
 ## Pointing at a different server
 
 For a permanent change, edit `BASE_DEFAULT` in
