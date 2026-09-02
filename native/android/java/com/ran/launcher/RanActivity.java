@@ -12,7 +12,6 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
-import android.graphics.PixelFormat;
 import android.widget.FrameLayout;
 
 /*  The game activity, with something for the keyboard to type into.
@@ -63,52 +62,10 @@ public class RanActivity extends NativeActivity {
     private static native void nativeCommitText(String text);
     private static native void nativeBackspace();
 
-    /*  Holding the splash screen until the client has actually drawn.
-     *
-     *  Android takes the starting window down as soon as this activity has a
-     *  window of its own. Measured on the emulator:
-     *
-     *      +0ms    START RanActivity
-     *      +20ms   Displayed RanActivity        <- starting window removed
-     *      +72ms   GLES renderer ready
-     *      +99ms   RanSplash: boot screen up    <- first pixels on the surface
-     *
-     *  For those ~80 ms the window is an opaque surface with nothing drawn in
-     *  it, which is black. That black frame between the patch page and the boot
-     *  art is what looked like the patch page disappearing and a loading screen
-     *  taking its place.
-     *
-     *  Two things that do NOT fix it, both tried and measured:
-     *    - a windowBackground on this activity. It belongs to the starting
-     *      window, which is precisely what has already been taken away.
-     *    - a full-screen ImageView added in onCreate. A NativeActivity window
-     *      is rendered by the native side through ANativeWindow, not by the
-     *      View hierarchy, so the View never reaches the surface; "Displayed"
-     *      stayed at +20ms with it in place.
-     *
-     *  The platform has a hook for exactly this. Retaining the SplashScreenView
-     *  instead of letting the exit animation run keeps the splash on screen for
-     *  as long as we like, over the top of the still-blank window. The native
-     *  side calls back on its first present and it comes off then.            */
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         mIme = new ImeView(this);
         //  Deliberately NOT attached here - see attach() below.
-    }
-
-    /*  Called from the native side after its first present.
-     *
-     *  Until this point the window is translucent and what the player is
-     *  looking at is the launcher page underneath it. Now there are pixels, so
-     *  the window goes back to an opaque surface - a translucent one makes
-     *  SurfaceFlinger blend every frame for the rest of the session - and the
-     *  launcher, which has been deliberately kept alive to be seen through
-     *  this window, is let go.                                                */
-    public void ranBootScreenUp() {
-        runOnUiThread(new Runnable() { public void run() {
-            getWindow().setFormat(PixelFormat.OPAQUE);
-            RanLauncher.dismiss();
-        }});
     }
 
     /*  The view is attached only while a field is being typed into.

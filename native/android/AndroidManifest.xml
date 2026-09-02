@@ -61,7 +61,7 @@
 
         <activity android:name="com.ran.launcher.RanActivity"
             android:label="RAN"
-            android:theme="@style/RanGame"
+            android:theme="@style/RanSplash"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|keyboard|navigation|uiMode|density"
             android:windowSoftInputMode="adjustNothing"
             android:screenOrientation="sensorLandscape"

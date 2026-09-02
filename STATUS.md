@@ -4766,3 +4766,50 @@ on the emulator. Not yet checked on the Tab S9 - it was offline.
 `RanD3DXFont::glyphFor` while `CInventoryUI_TradeInven::CreateSubControl`
 measured text. It did not reproduce on the next run and nothing changed in that
 path, but it is not explained.
+
+### Correction again: the translucent window was wrong, and unnecessary
+
+The previous entry is superseded. It was arrived at by trying mechanisms and
+measuring each one, instead of reading how this codebase's window and blending
+actually work first. Two things in our own code rule the approach out:
+
+- **`setBlend` uses `glBlendFunc`, not `glBlendFuncSeparate`**, and nothing masks
+  the alpha channel (`shim/gl/gl_render.cpp:696`). `SRC_ALPHA/ONE_MINUS_SRC_ALPHA`
+  therefore blends alpha as well as colour, so every semi-transparent panel -
+  chat box, tooltips, the name plates - drives destination alpha below 1. The
+  client clears with `D3DCOLOR_XRGB`, which is `D3DCOLOR_ARGB(0xff,...)`, so the
+  frame *starts* opaque and is eroded from there. Against a translucent window
+  those pixels composite as see-through. That would have shipped.
+- **The shim cannot survive a window-surface recreation**, which is what
+  `setFormat(PixelFormat.OPAQUE)` does. `RanGL_Init` opens with
+  `if (g_ready) return 1;` (`shim/gl/gl_context.cpp:97`) and `APP_CMD_TERM_WINDOW`
+  only sets `st->ready = false` (`platform/android/android_main.cpp:864`) - no
+  `eglDestroySurface`, no re-create. A second `APP_CMD_INIT_WINDOW` does nothing
+  and the stale EGLSurface stays bound to a dead window. That is the 550 ms of
+  nothing measured on the Tab S9 after `setFormat`, which was misread at the
+  time as an animation.
+
+And there was nothing to cover. On the Tab S9:
+
+    Displayed RanActivity   02:17:13.229
+    boot screen up          02:17:13.241     <- 12 ms
+
+Twelve milliseconds, under one frame. The 80 ms hole is the emulator's EGL init
+(51 ms of it), not the hardware players run on.
+
+So all of it is reverted - translucency, `windowDisablePreview`, the Java cover
+view, the SplashScreen hold, `setFormat`, the deferred launcher dismissal and the
+`RanAndroid_BootScreenUp` callback. What remains is the one change the evidence
+supports: **the composed `splash.png`**. The build the tablet was actually
+running (versionCode 18, V001) drew the old asset - the bare 2:1 art, no RAN
+mark, stretched to fill - for RanActivity's starting window, so a different
+picture appeared between the patch page and the boot art.
+
+**Measured after the revert, on the Tab S9:** 4/4 boots go
+home (54) -> patch page (176) -> boot art (189) -> login (81), with no dark frame
+and no dip.
+
+**Method note.** `screencap` bursts over adb sample ~every 400 ms and cannot see
+an 80 ms event; one clean burst is not evidence. Capture with a device-side raw
+`screencap` loop (8-10 fps) writing to `/data/local/tmp`, repeat at least three
+times, and read the mean-luminance trace rather than eyeballing single frames.

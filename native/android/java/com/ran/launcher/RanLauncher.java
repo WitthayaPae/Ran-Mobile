@@ -963,34 +963,6 @@ public class RanLauncher extends Activity {
         i.setComponent(new ComponentName(getPackageName(), "com.ran.launcher.RanActivity"));
         i.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
         startActivity(i);
-
-        //  Deliberately NOT finish() here.
-        //
-        //  RanActivity draws nothing until its first GL frame - it suppresses
-        //  the starting window precisely so that no background of its own can
-        //  appear - and the client spends seconds loading data before that
-        //  frame exists. Finishing now would tear this page down while the
-        //  screen still has to show something, and the something would be
-        //  whatever is behind the app. Staying up means the page the player is
-        //  already looking at is what covers the whole native init, and the
-        //  native splash draws the same picture when it takes over.
-        //
-        //  onStop runs once the game window is actually up, which is the point
-        //  at which this one is safe to let go of.
-        sHandingOver = RanLauncher.this;
-    }
-
-    /*  The launcher outlives startActivity on purpose.
-     *
-     *  RanActivity is translucent until its first present, so for the ~80 ms
-     *  the client needs to reach that point, this page is what is on screen
-     *  through it. Finishing here - or in onStop, which a translucent activity
-     *  on top does not even trigger - would put the black window back.        */
-    private static RanLauncher sHandingOver = null;
-
-    static void dismiss() {
-        final RanLauncher a = sHandingOver;
-        sHandingOver = null;
-        if (a != null) a.finish();
+        finish();
     }
 }

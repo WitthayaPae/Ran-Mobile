@@ -38,7 +38,6 @@
 extern "C" int  RanGL_Width(void);
 extern "C" int  RanGL_Height(void);
 extern "C" void RanGL_Present(void);
-extern "C" void RanAndroid_BootScreenUp(void);
 extern "C" void RanSplash_Step(void);
 
 namespace {
@@ -343,10 +342,6 @@ extern "C" void RanSplash_Step(void) {
     }
 
     RanGL_Present();
-    if (g_s.frame == 0) {
-        //  First frame is now on the surface: the Java cover has done its job.
-        RanAndroid_BootScreenUp();
-    }
     ++g_s.frame;
 }
 
