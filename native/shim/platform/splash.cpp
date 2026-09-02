@@ -225,12 +225,55 @@ void quad(GLuint tex, float x, float y, float w, float h,
 //  Kept between calls so the boot screen can be redrawn a frame at a time while
 //  the client loads, instead of being painted once and left static.
 struct State {
-    GLuint art, mark;
+    GLuint art, mark, cover;
     float  markU0, markV0, markDU, markDV;
     GLuint prog, vao, vbo;
     int    frame;
     bool   live;
-} g_s = { 0,0, 0,0,0,0, 0,0,0, 0, false };
+} g_s = { 0,0,0, 0,0,0,0, 0,0,0, 0, false };
+
+//  The launcher's own page, rasterised.
+//
+//  The patch screen has to stay on screen unchanged while the client boots -
+//  art, dark band, status line and progress bar, exactly as the player was
+//  already looking at. Redrawing that here would mean reimplementing the band
+//  and its text in GL before the client's font system exists, and it would
+//  drift from the launcher's layout the first time either changed.
+//
+//  So the launcher draws its own view hierarchy into a bitmap just before it
+//  starts the game and leaves it in cache/, and this paints that. Same picture
+//  by construction. cache/ because the patch manifest does not list it, so a
+//  patch never fights over the file.
+GLuint loadCover(const char *root) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cache/bootcover.bin", root);
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+
+    unsigned hdr[3] = { 0, 0, 0 };
+    if (fread(hdr, 4, 3, f) != 3 || hdr[0] != 0x434e4152u /* "RANC" */ ||
+        !hdr[1] || !hdr[2] || hdr[1] > 4096 || hdr[2] > 4096) { fclose(f); return 0; }
+
+    const size_t bytes = (size_t)hdr[1] * hdr[2] * 4;
+    unsigned char *px = (unsigned char *)malloc(bytes);
+    const size_t got = px ? fread(px, 1, bytes, f) : 0;
+    fclose(f);
+    if (!px || got != bytes) { free(px); return 0; }
+
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)hdr[1], (GLsizei)hdr[2], 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    free(px);
+    LOGI("boot cover %ux%u from the launcher", hdr[1], hdr[2]);
+    return t;
+}
 
 } // namespace
 
@@ -240,15 +283,20 @@ extern "C" void RanSplash_Begin(const char *dataRoot) {
     if (!dataRoot || g_s.live) return;
 
     unsigned artW = 0, artH = 0;
-    g_s.art   = loadTexture(dataRoot, "loading_002.dds", &artW, &artH);
-    if (!g_s.art) return;                       // no art, no boot screen
+    g_s.cover = loadCover(dataRoot);
+    if (!g_s.cover) {
+        //  No handover picture - the game was started without the launcher, or
+        //  the write failed. Fall back to composing the same thing here.
+        g_s.art = loadTexture(dataRoot, "loading_002.dds", &artW, &artH);
+        if (!g_s.art) return;                   // no art, no boot screen
+    }
 
     //  LOGIN_MARK in the ui config: outgui_character.dds at 335,416, 177x96.
     //  Taken as a sub-rectangle of the sheet at draw time rather than shipped
     //  as its own file, so there is one copy of it and the launcher's PNG and
     //  this agree by construction.
     unsigned sheetW = 0, sheetH = 0;
-    g_s.mark = loadTexture(dataRoot, "outgui_character.dds", &sheetW, &sheetH);
+    if (!g_s.cover) g_s.mark = loadTexture(dataRoot, "outgui_character.dds", &sheetW, &sheetH);
     if (g_s.mark && sheetW && sheetH) {
         g_s.markU0 = 335.0f / sheetW;
         g_s.markV0 = 416.0f / sheetH;
@@ -324,7 +372,10 @@ extern "C" void RanSplash_Step(void) {
     //  Cover rather than fit, matching the launcher's CENTER_CROP: the art is
     //  2:1 and no panel is, and bars down the sides would not line up with what
     //  the launcher just showed.
-    {
+    if (g_s.cover) {
+        //  Already the whole window, laid out by the launcher. 1:1.
+        quad(g_s.cover, 0.0f, 0.0f, W, H);
+    } else {
         const float aspect = W / H;
         float w = W, h = H;
         if (aspect > 2.0f) h = W / 2.0f;        //  wider than the art: fill width
@@ -356,8 +407,9 @@ extern "C" void RanSplash_End(void) {
     glDeleteBuffers(1, &g_s.vbo);
     glDeleteVertexArrays(1, &g_s.vao);
     glDeleteProgram(g_s.prog);
-    const GLuint texes[2] = { g_s.art, g_s.mark };
-    glDeleteTextures(2, texes);
+    const GLuint texes[3] = { g_s.art, g_s.mark, g_s.cover };
+    glDeleteTextures(3, texes);
+    g_s.art = g_s.mark = g_s.cover = 0;
     g_s.live = false;
     LOGI("boot screen done after %d frames", g_s.frame);
 }

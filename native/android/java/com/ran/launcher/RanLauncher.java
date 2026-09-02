@@ -133,6 +133,7 @@ public class RanLauncher extends Activity {
          *  is drawn *while* that root is being downloaded, so nothing in it can
          *  come from there.                                                    */
         FrameLayout root = new FrameLayout(this);
+        mPage = root;
         root.setBackgroundColor(Color.parseColor("#0B0E10"));
 
         ImageView art = new ImageView(this);
@@ -193,6 +194,22 @@ public class RanLauncher extends Activity {
          *  eventually kills a backgrounded process mid-download.              */
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        /*  The same immersive flags the game sets in goFullscreen.
+         *
+         *  Not cosmetic. This page is handed to the client as a picture and
+         *  drawn over the whole game surface, and that surface is the whole
+         *  panel. Laid out inside the navigation bar instead, the page is 1568
+         *  px tall against 1600 and the handover stretches it by 2% - a small
+         *  but visible jerk at the one moment the two are meant to be
+         *  indistinguishable. Same insets, same picture.                      */
+        getWindow().getDecorView().setSystemUiVisibility(
+                  0x00000002      //  HIDE_NAVIGATION
+                | 0x00000004      //  FULLSCREEN
+                | 0x00000100      //  LAYOUT_STABLE
+                | 0x00000200      //  LAYOUT_HIDE_NAVIGATION
+                | 0x00000400      //  LAYOUT_FULLSCREEN
+                | 0x00001000);    //  IMMERSIVE_STICKY
+
         /*  Storage permission is never asked for, and never blocks anything.
          *
          *  The data lives in this app's own external files directory, which
@@ -225,6 +242,69 @@ public class RanLauncher extends Activity {
         }
     }
     private boolean started = false;
+
+    /*  The page, kept so it can be handed to the game as a picture. */
+    private FrameLayout mPage;
+
+    /*  Rasterise this page for the client to keep showing.
+     *
+     *  The client boots for a couple of seconds after this Activity goes away,
+     *  behind a window it has not drawn to yet, and what has to be on screen
+     *  for that time is this page - unchanged, band and status line included.
+     *  Drawing it again on the native side would mean building the band and its
+     *  text in GL before the client has a font, and it would drift from this
+     *  layout the first time either was touched. Handing over the actual pixels
+     *  cannot drift.
+     *
+     *  Half resolution: it is a photograph behind a caption, it is stretched
+     *  back to full size by a linear filter, and this keeps the file to about
+     *  4 MB and the write under a frame. cache/ is not in the patch manifest,
+     *  so a patch never fights over it.                                       */
+    private void handOverPage() {
+        final java.util.concurrent.CountDownLatch done =
+                new java.util.concurrent.CountDownLatch(1);
+        ui.post(new Runnable() { public void run() {
+            try {
+                final int w = mPage.getWidth() / 2, h = mPage.getHeight() / 2;
+                if (w <= 0 || h <= 0) return;
+
+                android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
+                        w, h, android.graphics.Bitmap.Config.ARGB_8888);
+                android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+                c.scale(0.5f, 0.5f);
+                mPage.draw(c);
+
+                java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(w * h * 4);
+                bmp.copyPixelsToBuffer(buf);        //  ARGB_8888 is RGBA in memory
+                bmp.recycle();
+
+                File dir = new File(ROOT, "cache");
+                if (!dir.isDirectory() && !dir.mkdirs()) return;
+                File tmp = new File(dir, "bootcover.tmp");
+                FileOutputStream os = new FileOutputStream(tmp);
+                try {
+                    //  "RANC", then width and height, little-endian.
+                    os.write(new byte[] { 82, 65, 78, 67 });
+                    writeLE(os, w);
+                    writeLE(os, h);
+                    os.write(buf.array());
+                } finally { os.close(); }
+                //  Rename last: a half-written file must never be picked up.
+                File dst = new File(dir, "bootcover.bin");
+                dst.delete();
+                if (!tmp.renameTo(dst)) tmp.delete();
+            } catch (Throwable t) {
+                //  Not fatal - the client composes its own boot screen instead.
+                Log.w(TAG, "boot cover: " + t);
+            } finally { done.countDown(); }
+        }});
+        try { done.await(2, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    private static void writeLE(FileOutputStream os, int v) throws Exception {
+        os.write(new byte[] { (byte) v, (byte) (v >> 8), (byte) (v >> 16), (byte) (v >> 24) });
+    }
 
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
@@ -959,6 +1039,9 @@ public class RanLauncher extends Activity {
         //  A bare Intent plus setComponent. Intent(Context, Class) builds the
         //  ComponentName from the class immediately, so passing null there
         //  throws before setComponent can replace it.
+        //  Before the window goes: the client shows these pixels while it boots.
+        handOverPage();
+
         Intent i = new Intent();
         i.setComponent(new ComponentName(getPackageName(), "com.ran.launcher.RanActivity"));
         i.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);

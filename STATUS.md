@@ -4813,3 +4813,32 @@ and no dip.
 an 80 ms event; one clean burst is not evidence. Capture with a device-side raw
 `screencap` loop (8-10 fps) writing to `/data/local/tmp`, repeat at least three
 times, and read the mean-luminance trace rather than eyeballing single frames.
+
+### The boot screen is now the patch page itself
+
+Requested: show the patch page, and when patching finishes go straight to the
+login page - no separate loading screen. The ~2.5 s of `RanApp_Boot` cannot be
+removed, only covered, and it was being covered by a bare art screen with no
+band, which is the "loading page" that should not exist.
+
+Rather than rebuild the band and its text in GL - before the client has a font,
+and destined to drift from the launcher's layout - **RanLauncher rasterises its
+own view hierarchy** just before `startActivity` and leaves it in
+`<root>/cache/bootcover.bin` (`"RANC"`, width, height, then RGBA). `RanSplash`
+draws that verbatim over the whole surface, and falls back to composing art +
+mark if the file is not there (game started without the launcher, or the write
+failed). Half resolution, so ~4 MB and a sub-frame write; `cache/` because the
+patch manifest does not list it, so a patch never fights over the file.
+
+The launcher also had to take the same immersive flags the game sets in
+`goFullscreen`: laid out inside the navigation bar its page is 1568 px tall
+against the surface's 1600, and the handover stretched it by 2%.
+
+**Measured on the Tab S9, 3 boots:** home (54) -> patch page (179) -> boot
+screen (180) -> login (81). Patch page against boot screen, pixel for pixel:
+mean absolute difference 2.5 of 765, with 1.0% of pixels differing by more than
+60 - all of it text antialiasing from the half-resolution capture. Before this,
+the boot screen read 189 against the page's 176.
+
+In world afterwards on the Tab S9: 120 fps, and the PVP reward chest renders
+with its texture.
