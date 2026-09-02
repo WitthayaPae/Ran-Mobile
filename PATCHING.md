@@ -14,13 +14,16 @@ An update is one of two things, and they travel by completely different routes.
 | What changed | Ships as | How the player gets it |
 |---|---|---|
 | Client **data** — `.rcc` packs, `.ntk`, quests, effects, `config.ini` | the patch payload | the launcher downloads it on next start |
-| **Code** — anything in `SOURCE/` or `MOBILE/native/` | `libran.so` / `classes.dex`, i.e. the APK | you hand out a new APK |
+| **Code** — anything in `SOURCE/` or `MOBILE/native/` | `libran.so` / `classes.dex`, i.e. the APK | the launcher offers it and Android installs it — see below |
 
-There is no mechanism for the launcher to deliver an APK. It can only *tell* a
-player theirs is too old, via `minApk`. Distribution is direct.
+Both travel through the same store. The APK goes in as a blob and the launcher
+installs it, with Android showing its own confirmation — see **Shipping code**
+below. `minApk` still exists to refuse a client that is too old to talk to the
+server at all.
 
-So: a shader fix, a UI fix, a crash fix — new APK. A rebalanced drop table, a new
-map, changed NPC text — patch.
+So: a shader fix, a UI fix, a crash fix — a new APK, offered by the launcher. A
+rebalanced drop table, a new map, changed NPC text — the payload. Either way you
+publish the same directory.
 
 ---
 
@@ -158,6 +161,87 @@ Verified end to end against a local store, version 366 -> 367:
 Add `seed: true` to anything else the client writes into the data root. Right now
 `option.ini` is the only one: `config.ini`, `param.ini` and `comment.ini` are
 read-only content.
+
+---
+
+## Shipping code: the launcher installs the APK
+
+Native code cannot ride the payload. Since Android 10 an app targeting API 29 or
+above may not `dlopen` a library out of its own writable storage — W^X — and
+this one targets 34. So there is no equivalent of dropping a new `MiniA.exe`
+into the patch: a code fix reaches a player only as a new APK.
+
+The launcher installs it. `make-manifest.js` picks up
+`MOBILE/native/out/ran-phase3.apk` (override with `--apk`, disable with
+`--no-apk`), puts it in the store as a blob like everything else, and adds one
+block to the manifest:
+
+    "apk": { "versionCode": 7, "versionName": "0.5-self-update",
+             "size": 336806734, "sha256": "bcbd3b19…" }
+
+`versionCode` and `versionName` are read from
+`MOBILE/native/android/AndroidManifest.xml` — the same file the APK was built
+from, so they cannot drift from what is inside it. **Bump `versionCode` before
+building, or the launcher will not offer the new binary**: it only ever offers a
+*strictly newer* one.
+
+On the client, before any data is fetched (data can depend on code, never the
+other way round):
+
+1. Nothing happens unless `apk.versionCode` is greater than the installed one.
+2. `blobs/<sha256>` is streamed straight into a `PackageInstaller` session and
+   hashed on the way through.
+3. Hash mismatch, short body or oversize body abandons the session.
+4. Otherwise it commits, and Android shows its own "update this app?" prompt.
+   The player taps once. This cannot be silent without device-owner privileges.
+5. Declined, dismissed, or not permitted: the launcher says so and carries on
+   into the data patch on the installed binary. An update is never a wall.
+
+The player has to allow "install unknown apps" for the launcher once. If they
+have not, the launcher says so and opens that Settings screen, then plays on.
+
+### Why this is safe over plain HTTP
+
+* The hash comes out of `manifest.json`, which is verified against a key
+  compiled into the APK **before it is parsed**. The bytes are authenticated,
+  not merely un-corrupted — the property the data blobs already had.
+* Content-addressed: the manifest never names a path for the APK, so there is no
+  traversal surface and nothing new to validate.
+* The bytes never exist as a file. They go into the installer session as they
+  arrive, so there is no window in which this app — or any other — could swap
+  them between the check and the install.
+* Only forward. An old manifest stays validly signed forever; without the
+  `versionCode` test a replay could walk a player back to a version whose bugs
+  are known.
+* Android's signature check is the second anchor, and the one that cannot be
+  talked around: an APK signed with a different key from the installed app is
+  refused outright. The manifest signature says *the publisher meant this*; the
+  platform signature says *this is the same app*.
+* The install-result broadcast is addressed to this package explicitly, so no
+  other app listening on the action can see it.
+
+### Verified end to end
+
+Against a local store over `adb reverse`, on the emulator:
+
+| | result |
+|---|---|
+| v4 installed, manifest offers v5 | downloaded 154.1 MB, hash matched, prompt shown, **installed — versionCode 5** |
+| manifest offers v6, one byte of the served blob flipped | `checksum failed for the apk`, session abandoned, **still versionCode 5**, launcher continued into the data patch |
+| same blob restored | downloaded, prompt shown, **installed — versionCode 6** |
+
+The middle row is the one that matters: the tampered binary was refused, and the
+refusal did not lock the player out of the game.
+
+### The signing key
+
+`MOBILE/native/android/debug.keystore` is the app's permanent identity, and
+`build-apk.sh` silently generates a fresh one if the file is missing. Android
+refuses an update signed with a different key. **Lose that file and no player can
+ever upgrade again** — they would have to uninstall, which wipes
+`Android/data/com.ran.native` and costs them the full 1.7 GB re-download. It is
+gitignored. Back it up off this machine, alongside
+`MOBILE/tools/patch/keys/manifest-signing-key.pem`.
 
 ---
 

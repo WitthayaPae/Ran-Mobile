@@ -8,7 +8,11 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.app.PendingIntent;
+import android.content.pm.PackageInstaller;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -34,6 +38,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.Signature;
@@ -365,6 +371,11 @@ public class RanLauncher extends Activity {
             throw new Exception("apk too old");
         }
 
+        /*  A new binary, if the manifest offers one, before any data is
+         *  fetched: data can depend on code, never the other way round, and an
+         *  install restarts the process anyway.                              */
+        if (offerApk(m.optJSONObject("apk"), myApk)) return;
+
         File rootDir = new File(ROOT);
         if (!rootDir.exists() && !rootDir.mkdirs())
             throw new Exception("cannot create " + ROOT);
@@ -686,6 +697,202 @@ public class RanLauncher extends Activity {
             detail.setText(msg);
         }});
     }
+
+
+
+    /* ------------------------------------------------------------ apk update
+     *
+     *  Native code cannot ride the payload. Since Android 10 an app targeting
+     *  API 29 or above may not dlopen a library out of its own writable
+     *  storage - W^X - and this one targets 34. A code fix therefore reaches a
+     *  player only as a new APK, and this is what installs it.
+     *
+     *  Every step of that is somewhere to be careful, so:
+     *
+     *  *  The APK's hash comes out of manifest.json, which is verified against
+     *     a key compiled into this APK before it is even parsed. The bytes are
+     *     authenticated, not merely un-corrupted, and that holds over plain
+     *     HTTP to a bare IP - the property the data blobs already have.
+     *
+     *  *  It is fetched from blobs/<sha256>, content-addressed like everything
+     *     else. The manifest never names a path here, so there is no traversal
+     *     surface and nothing new to validate.
+     *
+     *  *  The bytes stream straight into a PackageInstaller session and are
+     *     hashed on the way through. They are never a file on disk that this
+     *     app, or any other, could swap between the check and the install -
+     *     which is the hole every download-verify-install sequence has.
+     *
+     *  *  A mismatch abandons the session, so a wrong or truncated body is
+     *     discarded rather than handed to the installer.
+     *
+     *  *  Only a strictly newer versionCode is offered. An old manifest stays
+     *     validly signed forever, so without this a replay could walk a player
+     *     back to a version whose bugs are known.
+     *
+     *  *  Android's own check is the second anchor, and the one that cannot be
+     *     talked around: an APK signed with a different key from the installed
+     *     app is refused outright. The manifest signature says "the publisher
+     *     meant this"; the platform signature says "this is the same app".
+     *
+     *  Returns true when the install went ahead - the process is about to be
+     *  replaced, so there is nothing further to do this run.                  */
+    private static final String INSTALL_ACTION = "com.ran.launcher.INSTALL_RESULT";
+
+    private boolean offerApk(JSONObject apk, int myApk) throws Exception {
+        if (apk == null) return false;
+
+        final int want = apk.getInt("versionCode");
+        if (want <= myApk) return false;              //  never sideways, never back
+
+        final String sha  = apk.getString("sha256");
+        final long   size = apk.getLong("size");
+        final String name = apk.optString("versionName", "");
+        final String what = "version " + want + (name.length() == 0 ? "" : " (" + name + ")");
+
+        /*  Installing needs the player's consent once, in Settings. Asking is
+         *  all this can do, and being refused is not a reason to keep them out
+         *  of the game.                                                       */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !getPackageManager().canRequestPackageInstalls()) {
+            say("Update available", what + " is ready, but this app may not install it.\n" +
+                "Allow it under Install unknown apps, then restart.", -1);
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                         Uri.parse("package:" + getPackageName())));
+            } catch (Throwable t) { /* no such screen; the message stands */ }
+            sleep(4000);
+            return false;
+        }
+
+        say("Downloading update", what + ", " + mb(size), 0);
+
+        PackageInstaller pi = getPackageManager().getPackageInstaller();
+        PackageInstaller.SessionParams sp =
+            new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        sp.setAppPackageName(getPackageName());
+        try { sp.setSize(size); } catch (Throwable t) { }
+
+        final int sessionId = pi.createSession(sp);
+        PackageInstaller.Session session = pi.openSession(sessionId);
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            HttpURLConnection c = open(base() + "blobs/" + sha);
+            try {
+                int code = c.getResponseCode();
+                if (code != 200) throw new Exception("HTTP " + code + " for the apk");
+                InputStream in = c.getInputStream();
+                OutputStream out = session.openWrite("apk", 0, size);
+                long written = 0;
+                try {
+                    byte[] buf = new byte[1 << 16];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        written += n;
+                        /*  The size the manifest promised is a ceiling. The hash
+                         *  would reject an overlong body anyway, but only after
+                         *  all of it had been written.                         */
+                        if (written > size) throw new Exception("oversize apk body");
+                        md.update(buf, 0, n);
+                        out.write(buf, 0, n);
+                        say(null, mb(written) + " of " + mb(size),
+                            (int) (size == 0 ? 1000 : written * 1000 / size));
+                    }
+                    if (written != size) throw new Exception("short apk body");
+                    session.fsync(out);
+                } finally { try { out.close(); } finally { in.close(); } }
+            } finally { c.disconnect(); }
+
+            String got = hex(md.digest());
+            if (!got.equalsIgnoreCase(sha)) throw new Exception("checksum failed for the apk");
+        } catch (Throwable t) {
+            session.abandon();
+            Log.e(TAG, "apk update failed", t);
+            say("Update failed", t.getMessage() + "\nContinuing on version " + myApk, -1);
+            sleep(2500);
+            return false;                              //  the old binary still works
+        }
+
+        return commitInstall(session, sessionId, what);
+    }
+
+    /*  Commit, and wait for the player to answer the system's install prompt.
+     *
+     *  The result arrives as a broadcast, and the first one is normally
+     *  STATUS_PENDING_USER_ACTION carrying the confirmation Intent that has to
+     *  be started from here: a session commits, it does not install by itself.
+     *  The patch thread blocks on the latch so a declined install falls through
+     *  to the data patch rather than racing it.                               */
+    private boolean commitInstall(PackageInstaller.Session session, int sessionId,
+                                  final String what) throws Exception {
+        final CountDownLatch done = new CountDownLatch(1);
+        final int[] status = { PackageInstaller.STATUS_FAILURE };
+        final String[] why = { "" };
+
+        BroadcastReceiver rx = new BroadcastReceiver() {
+            public void onReceive(Context ctx, Intent i) {
+                int st = i.getIntExtra(PackageInstaller.EXTRA_STATUS,
+                                       PackageInstaller.STATUS_FAILURE);
+                if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                    Intent confirm = (Intent) i.getParcelableExtra(Intent.EXTRA_INTENT);
+                    if (confirm != null) {
+                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        try { startActivity(confirm); return; }      //  still pending
+                        catch (Throwable t) { why[0] = String.valueOf(t.getMessage()); }
+                    }
+                    st = PackageInstaller.STATUS_FAILURE;
+                }
+                status[0] = st;
+                if (why[0].length() == 0)
+                    why[0] = String.valueOf(i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
+                done.countDown();
+            }
+        };
+
+        IntentFilter filter = new IntentFilter(INSTALL_ACTION);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(rx, filter, Context.RECEIVER_NOT_EXPORTED);
+        else                             registerReceiver(rx, filter);
+
+        try {
+            /*  Addressed to this package explicitly: an implicit broadcast would
+             *  let any app listening on the action see the install result.     */
+            Intent i = new Intent(INSTALL_ACTION).setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent pe = PendingIntent.getBroadcast(this, sessionId, i, flags);
+
+            say("Installing update", what + "\nConfirm the install when asked.", -1);
+            session.commit(pe.getIntentSender());
+            session.close();
+
+            /*  Generous: the prompt waits on a human. If it expires the app is
+             *  simply left as it was.                                         */
+            if (!done.await(5, TimeUnit.MINUTES)) {
+                say("Update not confirmed", "Continuing on the installed version", -1);
+                sleep(2000);
+                return false;
+            }
+        } finally {
+            try { unregisterReceiver(rx); } catch (Throwable t) { }
+        }
+
+        if (status[0] == PackageInstaller.STATUS_SUCCESS) {
+            say("Updated", what + " installed", 1000);
+            return true;                     //  the process is about to be replaced
+        }
+        Log.w(TAG, "install not completed: status " + status[0] + " " + why[0]);
+        say("Update not installed", why[0] + "\nContinuing on the installed version", -1);
+        sleep(2500);
+        return false;
+    }
+
+    private static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) sb.append(Character.forDigit((x >> 4) & 0xF, 16))
+                           .append(Character.forDigit(x & 0xF, 16));
+        return sb.toString();
+    }
+
 
     /* ---------------------------------------------------------------- play */
 

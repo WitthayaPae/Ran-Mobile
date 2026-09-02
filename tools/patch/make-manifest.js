@@ -127,6 +127,8 @@ const arg = (name, fallback) => {
 };
 const versionArg = parseInt(arg('version', ''), 10);
 const minApk = parseInt(arg('min-apk', '1'), 10);
+const apkArg = arg('apk', path.join(ROOT, 'MOBILE/native/out/ran-phase3.apk'));
+const noApk = argv.includes('--no-apk');
 
 /*  The previous manifest, if this store has been built before. It is what the
     new version number is derived from, and what decides whether anything
@@ -242,6 +244,35 @@ for (const rel of wanted) {
 
 files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
+/* ----------------------------------------------------------------- the apk
+   Native code cannot travel in the payload: since Android 10 an app targeting
+   API 29+ may not dlopen a library out of its own writable storage, and this
+   one targets 34. So a code fix reaches a player only as a new APK, and the
+   launcher installs it.
+
+   It goes in as a blob like everything else - named by its own SHA-256 - so
+   there is no path here for a manifest to choose, and nothing new to validate.
+   The version numbers are read from the manifest that built it, which is the
+   same file the APK's versionCode comes from, so they cannot drift.           */
+const apk = (() => {
+  if (noApk) return null;
+  if (!fs.existsSync(apkArg)) {
+    console.log('apk      : ' + apkArg + ' not found - no APK offered');
+    return null;
+  }
+  const amf = fs.readFileSync(path.join(ROOT, 'MOBILE/native/android/AndroidManifest.xml'), 'utf8');
+  const vc = /android:versionCode="(\d+)"/.exec(amf);
+  const vn = /android:versionName="([^"]*)"/.exec(amf);
+  if (!vc) throw new Error('no android:versionCode in AndroidManifest.xml');
+  const st = fs.statSync(apkArg);
+  const hash = sha256(apkArg);
+  place(apkArg, path.join(OUT, 'blobs', hash));
+  return { versionCode: parseInt(vc[1], 10),
+           versionName: vn ? vn[1] : '',
+           size: st.size, sha256: hash };
+})();
+
+
 /* ------------------------------------------------------------------ version
    The version number is the switch that makes an already-patched client look
    at anything: it returns "up to date" the moment its local number matches,
@@ -260,14 +291,20 @@ const changes = (() => {
   const key = f => f.sha256 + (f.seed ? ':seed' : '');
   const was = new Map(PREV.files.map(f => [f.path, key(f)]));
   const now = new Map(files.map(f => [f.path, key(f)]));
+  //  A new APK is a reason to publish on its own: without this a build whose
+  //  only change is the binary keeps the old version number, and no client
+  //  ever looks at the manifest offering it.
+  const apkWas = PREV.apk ? PREV.apk.sha256 : '';
+  const apkNow = apk ? apk.sha256 : '';
   const added = [], changed = [], removed = [];
   for (const [p, sha] of now) {
     if (!was.has(p)) added.push(p);
     else if (was.get(p) !== sha) changed.push(p);
   }
   for (const p of was.keys()) if (!now.has(p)) removed.push(p);
-  return { added, changed, removed,
-           total: added.length + changed.length + removed.length };
+  const apkChanged = apkWas !== apkNow;
+  return { added, changed, removed, apkChanged,
+           total: added.length + changed.length + removed.length + (apkChanged ? 1 : 0) };
 })();
 
 let version, versionWhy;
@@ -287,6 +324,7 @@ if (Number.isFinite(versionArg)) {
 
 let signed = 0;   //  signature length, 0 when the payload is unsigned
 const manifest = { version: version, minApk: minApk, files: files };
+if (apk) manifest.apk = apk;
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
 
 /* ------------------------------------------------------------------- sign
@@ -333,6 +371,9 @@ console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept +
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
             (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
+console.log('apk      : ' + (apk
+  ? 'versionCode ' + apk.versionCode + ' "' + apk.versionName + '", ' + mb(apk.size)
+  : 'none offered'));
 if (changes) {
   const show = (label, list) => {
     if (!list.length) return;
@@ -343,6 +384,7 @@ if (changes) {
   show('added  ', changes.added);
   show('changed', changes.changed);
   show('removed', changes.removed);
+  if (changes.apkChanged) console.log('  apk      versionCode ' + (apk ? apk.versionCode : 'removed'));
   if (changes.total === 0)
     console.log('  nothing changed since version ' + PREV.version + ' - no upload needed');
 }
@@ -433,6 +475,7 @@ if (argv.includes('--fsck')) {
 {
   const blobDir = path.join(OUT, 'blobs');
   const need = new Set(files.map(f => f.sha256));
+  if (apk) need.add(apk.sha256);       //  the offered APK is referenced too
   let stale = [], staleBytes = 0;
   for (const name of fs.readdirSync(blobDir)) {
     if (need.has(name)) continue;
