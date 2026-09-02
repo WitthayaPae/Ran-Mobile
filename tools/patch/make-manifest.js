@@ -538,6 +538,27 @@ if (changes) {
   if (changes.total === 0)
     console.log('  nothing changed since version ' + PREV.version + ' - no upload needed');
 }
+/*  A plain-text inventory beside the store, rewritten every publish. "What
+    exactly does a player get" should be answerable without a JSON reader, and
+    the manifest is 3.7 MB of one-line JSON.                                   */
+{
+  const lines = [
+    "# Everything the patcher ships - store version " + version,
+    "# " + files.length + " files, " + mb(bytes) + " payload",
+    apk ? "# plus RanMobile.apk  versionCode " + apk.versionCode + " \"" + apk.versionName + "\"  " + mb(apk.size)
+        : "# no APK offered",
+    "#",
+    "# size(bytes)  flag  path   (flag: S = seeded, installed only when absent)",
+    "",
+  ];
+  for (const f of files)
+    lines.push(String(f.size).padStart(10) + "  " + (f.seed ? "S" : " ") + "  " + f.path);
+  const NL = String.fromCharCode(10);
+  fs.writeFileSync(path.join(ROOT, 'MOBILE/native/out/PAYLOAD.txt'),
+                   lines.join(NL) + NL);
+  console.log("payload   : MOBILE/native/out/PAYLOAD.txt  (" + files.length + " files listed)");
+}
+
 console.log('');
 console.log('upload the contents of ' + OUT);
 console.log('to http://<host>/launcher_mobile/');

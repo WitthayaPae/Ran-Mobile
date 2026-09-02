@@ -214,7 +214,7 @@ function sweepOut() {
   const apk = apkName();
   return sweep(path.join(NATIVE, 'out'),
                new Set(['launcher_mobile', apk, apk + '.idsig',
-                        'arm64-v8a', 'x86_64', 'ref']),
+                        'arm64-v8a', 'x86_64', 'ref', 'PAYLOAD.txt']),
                'out/');
 }
 
