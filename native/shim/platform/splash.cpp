@@ -14,15 +14,17 @@
 //  surface the game itself will use - the swap chain holds it until the client's
 //  own first frame replaces it, which is exactly as long as it is wanted.
 //
-//  It is composited from the same pieces, in the same 1024x768 virtual layout,
-//  as NLOADINGTHREAD's in-game loading screen: ld_top across the top, the lobby
-//  art through the middle and ld_under across the bottom. Drawing only the bare
-//  art looked like a different screen from the one that appears a moment later.
+//  It is the launcher's patch screen continuing, not a second screen: the same
+//  lobby art filling the panel and the same RAN mark over it, in the same place.
+//  The player has already been watching that page for the whole patch check, and
+//  the client then boots for several seconds behind a surface it has not drawn
+//  to yet.
 //
-//  The HINT badge and the corner spinner are not drawn: the launcher patches on
-//  this same art and cannot show either, because its screen is painted while the
-//  data root holding them is still downloading. Keeping them here made the
-//  handover look like a jump between two screens rather than one.
+//  Everything that used to make this look like its own page is gone - the
+//  ld_top and ld_under bands, the HINT badge, the corner spinner. Half of them
+//  the launcher could not show anyway, because its screen is painted while the
+//  data root holding them is still downloading, and the difference read as two
+//  loading pages for one wait.
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -223,11 +225,12 @@ void quad(GLuint tex, float x, float y, float w, float h,
 //  Kept between calls so the boot screen can be redrawn a frame at a time while
 //  the client loads, instead of being painted once and left static.
 struct State {
-    GLuint art, top, under;
+    GLuint art, mark;
+    float  markU0, markV0, markDU, markDV;
     GLuint prog, vao, vbo;
     int    frame;
     bool   live;
-} g_s = { 0,0,0, 0,0,0, 0, false };
+} g_s = { 0,0, 0,0,0,0, 0,0,0, 0, false };
 
 } // namespace
 
@@ -239,8 +242,21 @@ extern "C" void RanSplash_Begin(const char *dataRoot) {
     unsigned artW = 0, artH = 0;
     g_s.art   = loadTexture(dataRoot, "loading_002.dds", &artW, &artH);
     if (!g_s.art) return;                       // no art, no boot screen
-    g_s.top   = loadTexture(dataRoot, "ld_top.dds",     NULL, NULL);
-    g_s.under = loadTexture(dataRoot, "ld_under.dds",   NULL, NULL);
+
+    //  LOGIN_MARK in the ui config: outgui_character.dds at 335,416, 177x96.
+    //  Taken as a sub-rectangle of the sheet at draw time rather than shipped
+    //  as its own file, so there is one copy of it and the launcher's PNG and
+    //  this agree by construction.
+    unsigned sheetW = 0, sheetH = 0;
+    g_s.mark = loadTexture(dataRoot, "outgui_character.dds", &sheetW, &sheetH);
+    if (g_s.mark && sheetW && sheetH) {
+        g_s.markU0 = 335.0f / sheetW;
+        g_s.markV0 = 416.0f / sheetH;
+        g_s.markDU = 177.0f / sheetW;
+        g_s.markDV =  96.0f / sheetH;
+    } else {
+        g_s.mark = 0;
+    }
 
     const GLuint vs = compile(GL_VERTEX_SHADER, kVert);
     const GLuint fs = compile(GL_FRAGMENT_SHADER, kFrag);
@@ -294,15 +310,36 @@ extern "C" void RanSplash_Step(void) {
 
     //  The same 1024x768 virtual layout NLOADINGTHREAD uses, scaled to the panel.
     //
-    //  The HINT badge and the corner spinner are deliberately not drawn. The
-    //  launcher patches on this same art, and it cannot show either of them -
-    //  its screen is painted while the data root that holds them is still being
-    //  downloaded. Drawing them here made the handover from the launcher to the
-    //  client's first frame look like a jump between two different screens
-    //  rather than one continuous one.
-    quad(g_s.art,   0.0f,      128.0f * sy, 1024.0f * sx, 512.0f * sy);
-    quad(g_s.top,   0.0f,        0.0f,      1024.0f * sx, 128.0f * sy);
-    quad(g_s.under, 0.0f,      640.0f * sy, 1024.0f * sx, 128.0f * sy);
+    //  This is the launcher's patch screen continuing, not a second screen.
+    //
+    //  The player has already been looking at this art for the whole patch
+    //  check; the client then boots for several seconds behind a surface it has
+    //  not drawn to yet. Painting anything different here - the HINT badge, the
+    //  corner spinner, the top and bottom bands - turned that handover into a
+    //  visible jump between two loading pages for one wait. So it is the same
+    //  composition the launcher uses: the art filling the panel, and the RAN
+    //  mark in the same place. Removing it altogether was the other option, and
+    //  is worse: the surface underneath is black.
+    //
+    //  Cover rather than fit, matching the launcher's CENTER_CROP: the art is
+    //  2:1 and no panel is, and bars down the sides would not line up with what
+    //  the launcher just showed.
+    {
+        const float aspect = W / H;
+        float w = W, h = H;
+        if (aspect > 2.0f) h = W / 2.0f;        //  wider than the art: fill width
+        else               w = H * 2.0f;        //  taller: fill height
+        quad(g_s.art, (W - w) * 0.5f, (H - h) * 0.5f, w, h);
+    }
+
+    //  Same size and position as the launcher's: 230dp wide, 30dp from the top,
+    //  centred. dp is 160ths of an inch; this panel reports its own density, so
+    //  the closest thing available here is a fraction of the width.
+    if (g_s.mark) {
+        const float mw = W * 0.18f, mh = mw * (96.0f / 177.0f);
+        quad(g_s.mark, (W - mw) * 0.5f, H * 0.035f, mw, mh,
+             g_s.markU0, g_s.markV0, g_s.markDU, g_s.markDV);
+    }
 
     RanGL_Present();
     ++g_s.frame;
@@ -319,8 +356,8 @@ extern "C" void RanSplash_End(void) {
     glDeleteBuffers(1, &g_s.vbo);
     glDeleteVertexArrays(1, &g_s.vao);
     glDeleteProgram(g_s.prog);
-    const GLuint texes[3] = { g_s.art, g_s.top, g_s.under };
-    glDeleteTextures(3, texes);
+    const GLuint texes[2] = { g_s.art, g_s.mark };
+    glDeleteTextures(2, texes);
     g_s.live = false;
     LOGI("boot screen done after %d frames", g_s.frame);
 }

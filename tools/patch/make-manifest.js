@@ -280,17 +280,25 @@ function packDuplicates(wanted) {
   const drop = new Set();
   let bytes = 0, sameName = 0;
   for (const rel of wanted) {
-    /*  Never a file at the client root. The match is on the bare name, and an
-        archive stands for the directory it lives in - so the root comment.ini
-        was being dropped because GLogic.rcc, which is data/glogic/, holds an
-        entry of that name. Two different destinations that happen to agree on
-        the filename, and the shipped PC client carries both. There are four
-        root files, they are a kilobyte each, and getting one wrong costs more
-        than shipping all of them.                                             */
-    if (rel.indexOf('/') < 0) continue;
-
-    const hits = inPacks.get(path.basename(rel).toLowerCase());
-    if (!hits) continue;
+    const dir = rel.indexOf('/') < 0 ? '' : path.posix.dirname(rel);
+    const hits = (inPacks.get(path.basename(rel).toLowerCase()) || [])
+      /*  Only an archive sitting in the SAME directory as the file.
+       *
+       *  A name match on its own is not evidence the client will find the file
+       *  in that archive, and acting on it broke real content twice. The root
+       *  comment.ini went because GLogic.rcc - which is data/glogic/ - has an
+       *  entry of that name. Worse, 74 models under data/skin/ went because
+       *  SkinObject.rcc - which is data/skinobject/ - contains them, and the
+       *  client then could not load them at all:
+       *
+       *      file not found by DxSkinMesh9::OnCreateSkin: s_m_bs_leg.x
+       *
+       *  Byte-identical is not the question. Where the client looks is, and the
+       *  only case anything here can be sure of is an archive that lives beside
+       *  the file it supersedes - Quest.rcc over the .qst next to it, and the
+       *  three like it.                                                       */
+      .filter(h => path.posix.dirname(h.pack.split(path.sep).join('/')) === dir);
+    if (!hits.length) continue;
     sameName++;
     let loose;
     try { loose = fs.readFileSync(path.join(CLIENT, rel)); } catch (e) { continue; }

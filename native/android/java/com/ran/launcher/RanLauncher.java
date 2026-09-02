@@ -259,13 +259,17 @@ public class RanLauncher extends Activity {
         } catch (Throwable t) {
             /*  A patch failure must not be fatal when the game is already
              *  installed - a player on a bad connection should still get in. */
+            /*  The reason goes to the log, not to the screen. It carries URLs,
+             *  host names and file paths, and this screen is the first thing a
+             *  player screenshots when something goes wrong.                  */
             Log.e(TAG, "patch failed", t);
-            final String msg = t.getMessage() == null ? t.toString() : t.getMessage();
             if (new File(ROOT, "data/glogic/GLogic.rcc").exists()) {
-                say("Could not reach the patch server", msg + "\nStarting with the data already installed.", 1000);
+                say("Could not reach the update server",
+                    "Starting with the data already installed.", 1000);
                 sleep(1800);
             } else {
-                fail("Could not download the game data", msg);
+                fail("Could not download the game data",
+                     "The update server could not be reached.\nCheck your connection and try again.");
                 return;
             }
         }
@@ -394,7 +398,11 @@ public class RanLauncher extends Activity {
     }
 
     private void patch() throws Exception {
-        say("Checking for updates", base(), -1);
+        //  The host is not the player's business, and a screenshot of this
+        //  screen should not hand anyone the patch address. It goes to the log,
+        //  which is where someone diagnosing a patch failure is looking anyway.
+        Log.i(TAG, "patch base " + base());
+        say("Checking for updates", null, -1);
 
         /*  Fetched as bytes and checked before being parsed: a JSON parser is
          *  the first thing an attacker reaches, so it must not run on anything
@@ -664,7 +672,7 @@ public class RanLauncher extends Activity {
             int code = c.getResponseCode();
             boolean append = (code == 206);
             if (!append && have > 0) have = 0;          //  server ignored Range
-            if (code != 200 && code != 206) throw new Exception("HTTP " + code + " for " + url);
+            if (code != 200 && code != 206) throw new Exception("HTTP " + code);
 
             InputStream in = c.getInputStream();
             OutputStream out = new FileOutputStream(tmp, append);
@@ -680,7 +688,7 @@ public class RanLauncher extends Activity {
                     written += n;
                     if (expected >= 0 && written > expected) {
                         bad = true;
-                        throw new Exception("oversize body for " + url);
+                        throw new Exception("oversize body");
                     }
                     out.write(buf, 0, n);
                 }
@@ -858,8 +866,8 @@ public class RanLauncher extends Activity {
             if (!got.equalsIgnoreCase(sha)) throw new Exception("checksum failed for the apk");
         } catch (Throwable t) {
             session.abandon();
-            Log.e(TAG, "apk update failed", t);
-            say("Update failed", t.getMessage() + "\nContinuing on version " + myApk, -1);
+            Log.e(TAG, "apk update failed", t);   //  reason to the log, not the screen
+            say("Update failed", "Continuing on the installed version", -1);
             sleep(2500);
             return false;                              //  the old binary still works
         }

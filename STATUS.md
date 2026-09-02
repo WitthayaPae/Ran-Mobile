@@ -4607,3 +4607,74 @@ tested against a local server over `adb reverse` without rebuilding the APK.
   end-of-life since 2019.
 - `minApk` is 1 and `versionCode` is 1; give the APK a real numbering scheme
   before relying on the out-of-date gate.
+
+---
+
+## Text-format `.x` files were parsed with two whole features missing (2026-09-03)
+
+**Symptom.** `กล่อง PVP รางวัล` - the PVP reward chest NPC - did not appear at all.
+Other pieces (wings, bikes, some costumes, several weapons) had the same shape of
+failure. The device log gave the chain in three steps:
+
+```
+RanPiece: skin mesh s_gbox_01.x (skeleton b_gbox_01.X) failed to load
+RanSkin : s_gbox_01.x: SetupBoneMatrixPointers failed 0x80004005
+RanSkin : s_gbox_01.x: bone 0/1 "" not in skeleton b_gbox_01.x
+```
+
+The bone name came back **empty**, so `DxBoneCollector::FindBone` could not match
+it and the whole piece was dropped.
+
+**Cause 1 - string members were invisible.** `xfile_parse.cpp` has two parsers.
+The binary one records, for every string member it writes, the byte offset at
+which the pointer lands, in `XNode::stringOffsets`. The text one never did.
+`stringMember()` in `d3dx_hierarchy.cpp` refuses to dereference an offset the
+parser did not declare - deliberately, because a blob whose members pack
+differently would otherwise hand eight bytes of float data to `strlen`. The
+result was that **every string member of every text-format `.x` read as absent**:
+bone names in `SkinWeights`, filenames in `TextureFilename`. 133 text-format
+skins in `data/skin` were affected. One line in the text parser's string branch
+fixes it.
+
+**Cause 2 - `{ Name }` references were never resolved.** With the bones fixed the
+chest rendered, but flat. A text export writes each material once at file scope
+and points every user at it:
+
+```
+Material Material__5376 { ... TextureFilename { "G_Box_base.dds"; } }
+...
+MeshMaterialList { 1; 32; 0,0,...; { Material__5376 } }
+```
+
+Both parsers emitted those `{ Name }` children as bare `__reference` nodes and
+nothing ever bound them - `XNode::reference` was a declared-but-never-assigned
+field. So `MeshMaterialList` looked like it had no `Material` child at all.
+`XFile_Parse` now runs a `resolveReferences()` pass once the whole file is in
+(the target may not be parsed yet at the point the reference is read), and
+`XNode_Deref()` in the header is what any child walk has to step through.
+
+**Cause 3 - `DeclData` was not read.** The chest was textured after that, but
+still drew as one flat colour. `s_gbox_01.x` ships **no `MeshNormals` and no
+`MeshTextureCoords`**: its per-vertex normals and UVs live in a `DeclData` block,
+a `D3DVERTEXELEMENT9` array followed by one packed record per vertex. Nothing in
+the shim read it, so the mesh had no UVs and every pixel sampled texel 0 - which
+looks exactly like a missing texture, not like missing UVs. `meshFromNode` now
+falls back to `DeclData` for whichever of normals/UVs the named blocks did not
+supply. **27 text-format `.x` under `data/skin` and `data/object` have `DeclData`
+and no `MeshTextureCoords`.**
+
+**The lesson worth keeping.** All three were the same shape: a text-format `.x`
+feature the binary parser had and the text parser did not. Only ~130 of the
+several thousand skins are text format, which is why this survived so long, and
+why the symptom looked like content damage - a missing NPC, a white mesh, a flat
+mesh - rather than a parser gap.
+
+**Verified on device** (LDPlayer x86_64, 2026-09-03): the chest renders with its
+`g_box_base.dds` metal-chest texture; `RanD3D: texture 3086 = g_box_base.dds
+(512x512, 2 levels)` appears and no `RanXH: ... has no TextureFilename` line
+does. Screenshot `MOBILE/native/out/gbox_zoom.png`.
+
+**Still open:** `s_m_bs_leg.X` still fails to load on that device. The manifest
+ships it again (it was dropped by an earlier over-broad pack-dedup rule), but the
+emulator cannot reach the patch host, so its data is still the pre-fix copy.
+Expected to clear on the next successful patch.

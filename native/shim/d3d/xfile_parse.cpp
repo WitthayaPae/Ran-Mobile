@@ -450,6 +450,17 @@ struct TextParser {
                 std::string *stored = new std::string(s, p - s);
                 if (p < end) ++p;
                 file->strings.push_back(stored);
+                //  Record where the pointer lands, exactly as the binary reader
+                //  does. stringMember() refuses to read a string at an offset
+                //  the parser did not declare - a deliberate guard against
+                //  handing float data to strlen - so without this line every
+                //  string in a text .x is invisible: the bone name in each
+                //  SkinWeights and the path in each TextureFilename.
+                //
+                //  133 text-format skins loaded and then failed, because
+                //  SetupBoneMatrixPointers looked up bone "" and found nothing.
+                //  That is the missing gift-box NPC, the wings, the bikes.
+                node->stringOffsets.push_back(node->data.size());
                 appendPtr(node->data, stored->c_str());
                 continue;
             }
@@ -517,6 +528,29 @@ bool XFile_GuidForTemplate(const char *name, GUID *out) {
     return false;
 }
 
+//  Both parsers emit `{ Name }` children as bare __reference nodes: at the
+//  point they are read the target may not have been parsed yet. Once the whole
+//  file is in, every name is known, so bind them in one pass.
+static void collectNamed(XNode *n, std::map<std::string, XNode *> &out) {
+    if (!n->name.empty() && n->typeName != "__reference")
+        out.insert(std::make_pair(n->name, n));
+    for (size_t i = 0; i < n->children.size(); ++i) collectNamed(n->children[i], out);
+}
+
+static void bindReferences(XNode *n, const std::map<std::string, XNode *> &named) {
+    if (n->typeName == "__reference" && !n->name.empty()) {
+        std::map<std::string, XNode *>::const_iterator it = named.find(n->name);
+        if (it != named.end()) n->reference = it->second;
+    }
+    for (size_t i = 0; i < n->children.size(); ++i) bindReferences(n->children[i], named);
+}
+
+static void resolveReferences(XFile *file) {
+    std::map<std::string, XNode *> named;
+    for (size_t i = 0; i < file->roots.size(); ++i) collectNamed(file->roots[i], named);
+    for (size_t i = 0; i < file->roots.size(); ++i) bindReferences(file->roots[i], named);
+}
+
 XFile *XFile_Parse(const void *data, size_t size) {
     if (!data || size < 16) return NULL;
     const BYTE *p = (const BYTE *)data;
@@ -533,6 +567,7 @@ XFile *XFile_Parse(const void *data, size_t size) {
     if (strncmp(format, "txt", 3) == 0) {
         TextParser tp((const char *)(p + 16), size - 16, file);
         if (!tp.parse() && file->roots.empty()) { delete file; warnOnce(".x: text parse failed"); return NULL; }
+        resolveReferences(file);
         return file;
     }
 
@@ -562,5 +597,6 @@ XFile *XFile_Parse(const void *data, size_t size) {
         warnOnce(".x: no data objects parsed");
         return NULL;
     }
+    resolveReferences(file);
     return file;
 }

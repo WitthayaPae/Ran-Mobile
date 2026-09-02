@@ -49,5 +49,15 @@ struct XFile {
 // file this reader understands; the reason is logged once per distinct cause.
 XFile *XFile_Parse(const void *data, size_t size);
 
+//  A `{ Name }` child is a reference to an object defined elsewhere in the
+//  file, not an object of its own: the exporter writes each material once and
+//  points every user at it. XFile_Parse resolves those into `reference`, so
+//  anything walking children has to step through this to reach the real node.
+//  Skipping it makes a referenced material look like no material at all, and
+//  the mesh draws flat white.
+inline const XNode *XNode_Deref(const XNode *n) {
+    return (n && n->reference) ? n->reference : n;
+}
+
 // Looks up a template GUID by its name, for the standard D3DRM templates.
 bool XFile_GuidForTemplate(const char *name, GUID *out);

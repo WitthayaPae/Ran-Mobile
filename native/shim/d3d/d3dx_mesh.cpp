@@ -244,8 +244,10 @@ private:
 
 // -------------------------------------------------------- .x Mesh -> RanMesh
 const XNode *findChild(const XNode *node, const char *typeName) {
-    for (size_t i = 0; i < node->children.size(); ++i)
-        if (node->children[i]->typeName == typeName) return node->children[i];
+    for (size_t i = 0; i < node->children.size(); ++i) {
+        const XNode *c = XNode_Deref(node->children[i]);
+        if (c->typeName == typeName) return c;
+    }
     return NULL;
 }
 
@@ -377,6 +379,59 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
         }
     }
 
+    //  Some exports carry no MeshNormals/MeshTextureCoords at all: the extra
+    //  per-vertex channels live in a DeclData block instead, a D3DVERTEXELEMENT9
+    //  array followed by one packed record per vertex. Without reading it the
+    //  mesh has no UVs, so every pixel samples texel 0 and the piece draws as a
+    //  flat colour that looks exactly like a missing texture.
+    if (normals.size() != numVerts || uvs.size() != numVerts) {
+        const XNode *declNode = findChild(mesh, "DeclData");
+        if (declNode) {
+            Cursor dc(declNode->data);
+            unsigned nElem = 0;
+            if (dc.u32(nElem) && nElem && nElem <= 32) {
+                struct Elem { unsigned type, usage; unsigned dwords, offset; };
+                std::vector<Elem> elems(nElem);
+                unsigned strideDW = 0;
+                bool ok = true;
+                for (unsigned i = 0; i < nElem && ok; ++i) {
+                    unsigned type = 0, method = 0, usage = 0, usageIndex = 0;
+                    if (!dc.u32(type) || !dc.u32(method) || !dc.u32(usage) || !dc.u32(usageIndex)) { ok = false; break; }
+                    //  D3DDECLTYPE sizes, in DWORDs. Anything outside this set
+                    //  would desync the record walk, so give up rather than
+                    //  guess a stride.
+                    static const unsigned kSize[] = { 1, 2, 3, 4, 1, 1, 1, 2, 1, 2, 2, 4, 2, 4, 2, 4, 2 };
+                    if (type >= sizeof(kSize) / sizeof(kSize[0])) { ok = false; break; }
+                    elems[i].type = type;
+                    elems[i].usage = usage;
+                    elems[i].dwords = kSize[type];
+                    elems[i].offset = strideDW;
+                    strideDW += kSize[type];
+                }
+                unsigned nDW = 0;
+                if (ok && strideDW && dc.u32(nDW) && nDW / strideDW >= numVerts) {
+                    if (dc.left >= (size_t)nDW * 4) {
+                        const BYTE *raw = dc.p;
+                        const size_t recBytes = (size_t)strideDW * 4;
+                        for (unsigned e = 0; e < nElem; ++e) {
+                            const Elem &el = elems[e];
+                            const size_t off = (size_t)el.offset * 4;
+                            if (el.usage == 3 && el.type == 2 && normals.size() != numVerts) {
+                                normals.resize(numVerts);
+                                for (unsigned i = 0; i < numVerts; ++i)
+                                    memcpy(&normals[i], raw + (size_t)i * recBytes + off, 12);
+                            } else if (el.usage == 5 && el.type == 1 && uvs.size() != numVerts) {
+                                uvs.resize(numVerts);
+                                for (unsigned i = 0; i < numVerts; ++i)
+                                    memcpy(&uvs[i], raw + (size_t)i * recBytes + off, 8);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     DWORD fvf = D3DFVF_XYZ;
     if (normals.size() == numVerts) fvf |= D3DFVF_NORMAL;
     if (uvs.size() == numVerts)     fvf |= D3DFVF_TEX1;
@@ -437,7 +492,7 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
             std::vector<const XNode *> matNodes;
             std::vector<std::string> matNames;
             for (size_t i = 0; i < matNode->children.size() && matNodes.size() < numMaterials; ++i) {
-                const XNode *m = matNode->children[i];
+                const XNode *m = XNode_Deref(matNode->children[i]);
                 if (m->typeName != "Material") continue;
                 matNodes.push_back(m);
                 std::string name;
