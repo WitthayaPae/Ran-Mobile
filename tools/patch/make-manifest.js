@@ -119,7 +119,10 @@ const SHIP = [
     server data, so its presence there means nothing.                          */
 
 const NEVER = [
-  /\.bak(_|\.|$)/i,   /_bak$/i,      /_BACKUP/i,      /_RECOVERED/i,
+  /\.bak(_|-|\.|$)/i, /_bak$/i,      /_BACKUP/i,      /_RECOVERED/i,
+  /สำเนา/,  //  "สำเนา" - Explorer's Thai for "copy"
+  / - copy(\.|$)/i, /^copy of /i,
+  /^test\.effskin$/i,                //  a stray test asset in data/effect/char
   /_PRISTINE/i,       /_backup_/i,   /_removed_not_in_maplist/i,
   /ep9bak/i,          /Eo9Bak/i,     /ep1bak/i,       /_unreadable_/i,
   /_ep1import_bak/i,
@@ -251,10 +254,18 @@ function packDuplicates(wanted) {
     return new Set();
   }
 
-  //  bare name -> [{ pack, bytes }], only for the packs this manifest ships
+  /*  Every .rcc this manifest ships, not just the ones named in SHIP.
+      quest/, npctalk/, level/ and effect/char/ each carry their own archive -
+      Quest.rcc, NpcTalk.rcc, Level.rcc, EffectChar.rcc - which arrive through
+      the directory walk rather than by name. Indexing only the named packs
+      meant the loose .qst, .ntk, .lev and .effskin_a sources beside them
+      shipped too: 1,944 files of quest script, NPC dialogue and level data that
+      the real client has never handed to a player, since Ran/ carries the
+      archive alone.                                                           */
   const inPacks = new Map();
-  for (const item of SHIP) {
-    if (!item.file || !/\.rcc$/i.test(item.file)) continue;
+  for (const rel of wanted) {
+    if (!/\.rcc$/i.test(rel)) continue;
+    const item = { file: rel };
     const abs = path.join(CLIENT, item.file);
     if (!fs.existsSync(abs)) continue;
     let a;

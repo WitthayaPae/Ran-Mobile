@@ -601,6 +601,44 @@ storage now: an updating player keeps the grant from the old build and gets the
 migration, a fresh install has nothing to migrate. The launcher also holds
 `FLAG_KEEP_SCREEN_ON`, since a 4.7 GB download dies with the screen.
 
+### The payload mirrors the shipped client now, not the dev tree (2026-09-02)
+
+`CLIENT/` carries client *and* server data, so "it is in CLIENT" was never a
+reason to ship a file. Measured against `Ran/`, the real shipped client, the
+payload held **2,061 files it does not have** - and four of its directories were
+the reason:
+
+| the shipped client has | our dev tree has |
+|---|---|
+| `quest/Quest.rcc` | 838 loose `.qst` |
+| `npctalk/NpcTalk.rcc` | 665 loose `.ntk` |
+| `level/Level.rcc` | 266 loose `.lev` |
+| `effect/char/EffectChar.rcc` | 200 loose `.effskin_a` |
+
+Those four archives were already being shipped - the directory walk picks them
+up - but so was every loose source beside them: quest script, NPC dialogue and
+level data handed to players as readable files, which the PC client has never
+done.
+
+The duplicate check only indexed the packs named in `SHIP`, so these four, which
+arrive through the walk, were invisible to it. It now indexes **every `.rcc` in
+the payload**. 2,035 of 2,041 name matches were confirmed byte-identical and
+dropped; the 6 that differ are kept, which is the whole point of comparing bytes
+rather than trusting names.
+
+`.bak-`, Explorer's Thai "สำเนา" copies and a stray `test.effskin` are excluded
+too - three dev leftovers that were being published.
+
+23,293 files, 4,679 MB. What remains that `Ran/` lacks is 96 `.enm` and one
+`.mxf`: costume entries newer than the reference install, so genuinely content
+rather than leftovers.
+
+**Checked functionally, not just by hash.** The loose sources were deleted off
+the device, leaving only the archives, and the client was taken into the world:
+`glErr=0x0000`, HUD, mobs, NPCs, Thai chat all correct. `QUEST load fail : 1307`
+appears in that run's log - and in the two runs *before* the deletion, 12 times
+in each. Pre-existing, and not caused by this.
+
 ### Still open from this session
 
 * **The camera lock is not verified on a device.** Maths checked offline (see
