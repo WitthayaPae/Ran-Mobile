@@ -249,6 +249,31 @@ android_app *g_app = NULL;
 //  g_imeActive because imeCall reads it and imeCall comes first.
 bool g_imeNumeric = false;
 
+//  Android takes the starting window down as soon as the activity has a
+//  window, which here is 25 ms after launch - about 80 ms before the client
+//  has an EGL context and the boot art on the surface. For those 80 ms the
+//  window is an opaque surface with nothing in it, which is black, and the
+//  patch page appears to vanish and be replaced by a loading screen a moment
+//  later. RanActivity therefore puts the same art in the window as a View, so
+//  the window has content the moment it is shown; this is what tells it the
+//  surface is now painted and the View can go.
+extern "C" void RanAndroid_BootScreenUp(void) {
+    static bool s_told = false;
+    if (s_told || !g_app) return;
+    s_told = true;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+    jobject act  = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+    jmethodID m  = env->GetMethodID(cAct, "ranBootScreenUp", "()V");
+    if (m) env->CallVoidMethod(act, m);
+    //  Any pending exception makes the next JNI call abort the process, so it
+    //  has to be cleared here rather than left for the caller.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    g_app->activity->vm->DetachCurrentThread();
+}
+
 void imeCall(bool show) {
     if (!g_app) return;
 

@@ -4711,3 +4711,58 @@ Note for anyone repeating this: there is no ffmpeg on this machine and
 `screenrecord` has no raw-frame output, so `screencap` bursts are the only frame
 source, and they are far too slow to catch a sub-second transition by luck. Slow
 the app down and capture deliberately instead.
+
+### Correction: the flash was a black frame, not a mismatched picture
+
+The composed `splash.png` above was the right thing to do but it was **not** the
+reported bug, and claiming it was fixed on one sampled boot was wrong - a
+`screencap` burst samples about every 400 ms and cannot see an 80 ms event.
+
+Captured properly (raw `screencap` in a device-side loop at 640x360, ~10 fps,
+90 frames per boot), the boot is:
+
+    launcher page   mean 126 / 12% dark
+    BLACK           mean   0 / 100% dark      <- one frame, every boot
+    boot art        mean 189 /  0% dark
+
+and logcat gives its length:
+
+    +0 ms    START RanActivity
+    +20 ms   Displayed RanActivity        <- starting window handed back
+    +72 ms   GLES renderer ready
+    +99 ms   RanSplash: boot screen up    <- first pixels on the surface
+
+**~80 ms of an opaque window with nothing drawn in it.** Three fixes were tried
+and measured, and two of them did nothing:
+
+- `windowBackground` on RanActivity - belongs to the starting window, which is
+  exactly what has already been taken away. 5/5 boots still black.
+- a full-screen `ImageView` added in `onCreate` - a NativeActivity window is
+  rendered by the native side through `ANativeWindow`, not by the View
+  hierarchy, so it never reaches the surface. "Displayed" stayed at +20 ms.
+  5/5 boots still black.
+- the platform SplashScreen API's `setOnExitAnimationListener`, to hold the
+  splash until told - the Android 12+ splash screen only appears on a cold start
+  from the launcher icon, never on an activity-to-activity switch inside the
+  app, so the listener never fires. 5/5 boots still black.
+
+What works is to stop the window being opaque before it has anything in it.
+RanActivity's theme is `windowIsTranslucent`, so the launcher underneath shows
+through for those 80 ms; RanLauncher no longer finishes at `startActivity` (nor
+in `onStop`, which a translucent activity on top does not even trigger) but
+waits to be dismissed. On its first present the native side calls
+`RanAndroid_BootScreenUp` -> `RanActivity.ranBootScreenUp`, which puts the
+window back to `PixelFormat.OPAQUE` - a translucent window would otherwise make
+SurfaceFlinger blend every frame for the whole session - and dismisses the
+launcher.
+
+**Measured after:** 0 black frames in 8 boots (5 at 640x360, 3 at 1280x720),
+against 5/5 black before. In-world afterwards: 34 fps at the same spot that gave
+32 fps earlier the same day, so the translucent window costs nothing measurable
+on the emulator. Not yet checked on the Tab S9 - it was offline.
+
+**Unattributed:** one SIGSEGV during a login run, in
+`RanTexture::LockRect` (`d3d9_impl.cpp:238`) reached from
+`RanD3DXFont::glyphFor` while `CInventoryUI_TradeInven::CreateSubControl`
+measured text. It did not reproduce on the next run and nothing changed in that
+path, but it is not explained.

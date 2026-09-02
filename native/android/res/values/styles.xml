@@ -1,13 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- What Android paints from the moment the app is launched until the first
-         GL frame. That gap is the client loading its data with no device yet:
-         m_pd3dDevice is still NULL throughout DxGlobalStage::OneTimeSceneInit,
-         so nothing can be drawn from inside the game during it, and the window
-         is otherwise plain black - which reads as a hang on a slow device.
-         This puts the client's own lobby loading art there instead, the image
-         DxGlobalStage already names for the lobby stage (loading_002.dds). -->
     <style name="RanSplash" parent="@android:style/Theme.NoTitleBar.Fullscreen">
         <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+
+    <!--  The game window starts translucent so the launcher shows through it.
+
+          Android hands the starting window back as soon as this activity has a
+          window, ~80 ms before the client has an EGL context and can draw. An
+          opaque window with nothing in it is black, and that black frame is
+          what made the patch page look like it vanished. The window cannot be
+          given content any earlier - see the note in RanActivity - so instead
+          it is see-through until there is some, and the launcher underneath
+          stays up to be seen. RanActivity turns it opaque again and dismisses
+          the launcher on the first present.                                   -->
+    <style name="RanGame" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
     </style>
 </resources>
