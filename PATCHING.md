@@ -67,6 +67,15 @@ Quests, NPC dialogue, maps, skins, effects, help. Copy it into the matching
 place under `CLIENT\` and publish. The manifest picks up whole directories, so a
 new file is included without touching any list.
 
+**But a loose file that is already inside an archive will not ship**, and that
+is deliberate: the client reads the archive, so sending both costs the player
+the download twice. This is checked by comparing the bytes, not just the name,
+so a file that differs from its namesake in a pack *is* shipped. In practice it
+means editing a `.qst`, `.ntk` or `.lev` in place does nothing — those live in
+`Quest.rcc`, `NpcTalk.rcc` and `Level.rcc`, and the edit has to go back into the
+archive with `rcc-pack.js`, exactly as for the GUI. `PAYLOAD.txt` is how you
+confirm what actually went.
+
 ### `config.ini` or `param.ini`
 
 These are Rijndael-encrypted, and the client **refuses a plaintext one** —
@@ -126,6 +135,63 @@ Publishing is safe to repeat. If nothing moved, the version number does not
 either, and it says so:
 
     nothing changed since version 377 - no upload needed
+
+---
+
+## What is in the payload
+
+`MOBILE/native/out/PAYLOAD.txt` is rewritten on every publish and lists every
+file a player receives - size, path, and an `S` on the one seeded entry:
+
+    # Everything the patcher ships - store version 386
+    # 23294 files, 4679.4 MB payload
+    # plus RanMobile.apk  versionCode 19 "V002"  321.6 MB
+    #
+    # size(bytes)  flag  path   (flag: S = seeded, installed only when absent)
+
+             8     cVer.bin
+         31188     comment.ini
+          1156     config.ini
+     307440325     data/animation/Animation.rcc
+
+Read that rather than `manifest.json`, which is 3.7 MB of one-line JSON. It
+cannot go stale: it is written by `make-manifest.js` itself, and the `out/`
+sweep keeps it.
+
+Roughly, by weight:
+
+| | files | size |
+|---|---|---|
+| `textures/` — item, map, char, mob, gui, effect, shadow, bike | 15,832 | 2.7 GB |
+| `data/map/Map.rcc` | 1 | 548 MB |
+| `data/skin/` | 2,809 | 520 MB |
+| `data/animation/Animation.rcc` | 1 | 293 MB |
+| `sounds/` — sfx and bgm | 864 | 254 MB |
+| `data/piece/`, `data/object/`, `data/skeleton/`, `data/help/` | 3,402 | 147 MB |
+| `Gui.rcc`, `SkinObject.rcc`, `Effect.rcc`, `GLogic.rcc` | 4 | 102 MB |
+| `Level.rcc`, `NpcTalk.rcc`, `Quest.rcc`, `EffectChar.rcc` | 4 | 13 MB |
+| `config.ini`, `param.ini`, `comment.ini`, `option.ini`, `cVer.bin` | 5 | 34 KB |
+
+Nine `.rcc` archives, and **none of their loose sources**. `quest/`, `npctalk/`,
+`level/` and `effect/char/` each carry their own archive, and the loose `.qst`,
+`.ntk`, `.lev` and `.effskin_a` beside them in `CLIENT/` are dev-side inputs the
+PC client has never shipped. They are dropped by the duplicate check, which
+confirms the bytes match before dropping anything - 2,034 of 2,040 name matches
+were identical, and the six that were not are shipped.
+
+Two directions are checked, and both matter:
+
+* `--verify` walks the whole reference client and fails if anything it ships is
+  missing from the manifest. That is what caught `textures/` (2.8 GB) being
+  absent for the entire port.
+* The payload is compared against `Ran/` the other way too. What ships and the
+  reference client does not have is 96 `.enm` and one `.mxf` - costume entries
+  newer than that install, so content rather than leftovers.
+
+`CLIENT/` carries client **and** server data, so a file being there is never a
+reason to ship it. `data/glogicserver/`, 63 loose `.ini`, `cache/` (the font
+cache the client writes itself), `cFileList.bin` and `Launcher.URS` all stay
+behind.
 
 ---
 
@@ -227,10 +293,10 @@ and the script stops renumbering it and just uses it.
 **out/ and the store are cleaned before publishing.** Three kinds of leftover go:
 
 * **Everything in `native/out/` that is not needed.** After a run that directory
-  holds exactly six things: `launcher_mobile/`, `RanMobile.apk` and its
-  `.idsig`, the two ABI build trees, and `ref/`. `out/apk` is build-apk.sh's
-  staging area - it wipes and recreates it on every run anyway - and screenshots,
-  logs and files pulled off a device are swept with it.
+  holds exactly seven things: `launcher_mobile/`, `RanMobile.apk` and its
+  `.idsig`, `PAYLOAD.txt`, the two ABI build trees, and `ref/`. `out/apk` is
+  build-apk.sh's staging area - it wipes and recreates it on every run anyway -
+  and screenshots, logs and files pulled off a device are swept with it.
 
   The two ABI directories stay, and that is deliberate. They are ninja's build
   trees: delete them and the next run recompiles the whole client, which also

@@ -649,9 +649,14 @@ rather than trusting names.
 `.bak-`, Explorer's Thai "สำเนา" copies and a stray `test.effskin` are excluded
 too - three dev leftovers that were being published.
 
-23,293 files, 4,679 MB. What remains that `Ran/` lacks is 96 `.enm` and one
+23,294 files, 4,679 MB. What remains that `Ran/` lacks is 96 `.enm` and one
 `.mxf`: costume entries newer than the reference install, so genuinely content
 rather than leftovers.
+
+`MOBILE/native/out/PAYLOAD.txt` lists every one of them — size, path, and an `S`
+on the seeded entry — and is rewritten on every publish, so "what does a player
+actually get" never needs a JSON reader on a 3.7 MB manifest. `PATCHING.md` has
+the breakdown by weight.
 
 **Checked functionally, not just by hash.** The loose sources were deleted off
 the device, leaving only the archives, and the client was taken into the world:
