@@ -108,6 +108,58 @@ the change was structural.
 
 ## Log
 
+- **2026-09-02** — **One flag moved every label and armed a crash: the outline fix.**
+
+  Reported as mob names sitting left of their mob, on a build where they had been
+  fine. It was a regression of mine, and the cause was a single change - not any of
+  the things I altered afterwards while chasing it.
+
+  Making `GetVersionEx` report the truth (Windows 7, rather than the unknown
+  version `GetWinVer` derived from an unfilled `wProductType`) was what switched
+  the black text outline on. It also flips `CD3DFontX::m_bWindows98` from TRUE to
+  FALSE, and that flag chooses between **two different implementations of text
+  measurement**:
+
+      m_bWindows98 : m_pd3dxFont->DrawTextW( NULL, ..., DT_CALCRECT )
+      else         : GetTextExtentPoint32W( m_hd3dxDC, ... )
+
+  This port has always laid out against the first. The switch was harmless at the
+  time only because `GetTextExtentPoint32W` was a stub: it left `SIZE` at zero and
+  the `if ( Size.cx == 0 )` fallback quietly put the D3DX path back. **Implementing
+  that stub later removed the fallback** and put the GDI numbers into use, and they
+  disagree with what is actually drawn - by more the longer the string:
+
+      gdi=111  d3dx=102        gdi=128  d3dx=101        gdi=150  d3dx=116
+
+  Layout centres a box on the measured width, so 34 pixels of over-measure puts the
+  visible text 17 pixels left of the mob. Mobile now measures with the call that
+  draws.
+
+  The same flag also switched on `CTextUtil`. Its `FrameMove` runs from
+  `CUIMan::Render` whatever the font path does, and it took the process down:
+
+      signal 11 (SIGSEGV) ... RanTexture::LockRect
+      CTextTexture::FrameMove -> CTextUtil::FrameMove -> CUIMan::Render
+
+  `m_bUsage` has to stay TRUE - it is what gates the outline - so the cache is idle
+  on mobile instead. Using it for real means implementing the GDI it builds its
+  textures with (`ExtTextOutW`, `GetTextExtentPoint32W`, `FillRect`,
+  `CreateSolidBrush`, now written but unused), which is separate work and would
+  also buy back the 1.6 ms a frame the outline costs.
+
+  Also found and fixed while reading this path: the string table returns mob names
+  with a trailing blank (`Little Vulgarian` is 17 bytes, the last `0x20`; player
+  names have none), and `CNameDisplay` never resized its name box with the control,
+  so a centred draw inside a 20-pixel box holding 126 pixels of text started at the
+  box origin.
+
+  **What this cost:** a long stretch of the session spent changing things and
+  re-testing instead of finding the one cause. The lesson is recorded in memory:
+  when something worked before, the first move is to list my own changes that touch
+  the affected subsystem - shared machinery like text metrics moves everything that
+  depends on it.
+
+
 - **2026-09-01 (evening)** — **Four interface faults, each traced to the PC mechanism first.**
 
   **NPCs showed a health bar.** `MobileTargetTick` called `SetTargetInfo` for whatever
