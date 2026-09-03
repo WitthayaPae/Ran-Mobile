@@ -196,3 +196,65 @@ it, so the Android file list stays exactly as it was.
 5. `LaunchScreen` storyboard referenced by the plist does not exist yet.
 6. ANGLE, before any submission: `OpenGLES` is deprecated on iOS 12+ and still works, but
    is not a foundation to ship on.
+
+### Progress — 2026-09-03, second batch
+
+The iOS entry point as first written could not have built, and finding out why
+was the useful part of this batch. The method: take each call the new file
+makes, open the file that answers it, and check what that file includes. Three
+whole classes of problem came out of it — and one of them was breaking the
+**PC** build, not iOS.
+
+**What was actually wrong**
+
+| Where | What | Effect |
+|---|---|---|
+| `shim/gl/gl_context.cpp` | EGL top to bottom, `<android/native_window.h>`, no guard | the whole GL context is Android-only |
+| `gl_render.cpp`, `splash.cpp`, `touch_ui.cpp` | `<GLES3/gl3.h>`, `gl31.h`, `<EGL/egl.h>` | headers that do not exist on iOS |
+| `win/malloc.h` | `#include_next <malloc.h>` | Darwin has `<malloc/malloc.h>`; pulled in by most of the tree |
+| `win/win_impl.cpp` | `_SC_PHYS_PAGES`, `_SC_AVPHYS_PAGES` | Linux-only sysconf keys |
+| `win/path_resolve.cpp` | `/proc/self/fd` | no `/proc` on iOS |
+| `SOURCE`, 29 files | `<android/log.h>` + 54 `__android_log_print` | the logging seam had covered the shim only |
+| **`SOURCE/Lib_ClientUI/Interface/SkillTrayTab.cpp`** | `<android/log.h>` and `touch_ui.h` **unguarded** | **this would have stopped the MSVC/PC build** |
+
+The last one is the important one. A sweep of all 31 mobile-only includes in
+`SOURCE` says it was the only unguarded one; the other 30 are behind
+`#ifdef RAN_MOBILE` as they should be.
+
+**What was added**
+
+* `shim/gl/gl_context_ios.mm` — the same `RanGL_*` API on EAGL: context,
+  framebuffer, colour/depth/stencil renderbuffers, present, the context handover
+  the loading thread needs, and the same renderScale/UIScale arithmetic. It also
+  gains `RanGL_SurfaceChanged`, which Android never needed because its window is
+  fixed landscape.
+* `shim/gl/gl_platform.h` — one place that says what "GL" means: the header
+  path, `GL_APIENTRY`, and `RanGL_ProcAddress` in place of `eglGetProcAddress`.
+  On iOS it returns NULL for everything, which is the truth rather than a stub:
+  there is no ES 3.1 vertex-attrib-format, no `glBufferStorageEXT`, no disjoint
+  timer query. Checked first that nothing calls an ES 3.1 entry point directly —
+  all four go through resolved pointers — and that the EXT enums the renderer
+  uses are already self-defined behind `#ifndef`.
+* `platform/ios/ran_ios_patch.mm` — the patcher, mirroring `RanLauncher.java`
+  step for step against the same signed store. No APK offer (iOS cannot install
+  over itself); the build gate is `minIos`, and a manifest without one is
+  refused rather than assumed safe.
+* `platform/ios/icons/` — the 13 icon sizes, cut by `make-ios-icons.js` from the
+  same 512px master the Android icons came from.
+
+`RanGL_Init` owns the EAGL context now, not the view controller, so there is one
+place that knows how a frame is presented — as on Android.
+
+**Verified after every change**: Android reconfigured from scratch, both ABIs
+rebuilt clean, APK reinstalled on LDPlayer, logged in and played. The converted
+log lines come out with their tags and levels intact.
+
+### What is left before an iOS build can run
+
+1. First compile on a Mac. Everything here is still a prediction.
+2. **Audio.** `dsutil_mobile.cpp` is a stub on *both* platforms — the game is
+   silent on Android too. Shared work, not an iOS gap.
+3. Publish a manifest with `minIos` (`make-manifest.js --min-ios <n>`) before
+   pointing an iOS client at the live server.
+4. Signing: a development profile, or TestFlight. See the copyright section
+   above first — that decision comes before the work, not after.
