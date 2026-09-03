@@ -5157,3 +5157,42 @@ after `CUIGroup::Update` drew in one place and hit-tested in another.
 
 **Verified on LDPlayer:** the button sits beside the chat in the pad's own
 livery, and pressing it puts the character on the bike.
+
+## Riding cost half the frame rate, and it was the vehicle's shadow (2026-09-03)
+
+**Measured first, on the emulator, standing still in one spot.**
+
+| | fps | frame | opaque verts | alpha verts | off-screen draws |
+|---|---|---|---|---|---|
+| on foot | 34 | 32.6 ms | 71,538 | 27,558 | 6 |
+| mounted | 9 | 112.8 ms | 249,426 | 119,510 | 16 |
+| mounted, no vehicle shadow | 13 | **54 ms** | 108,498 | 64,660 | 6 |
+
+**Where the time went**, established before changing anything:
+
+* submitting draws is **2% of the frame in both states**, so it is not the CPU;
+* `/sdcard/ran/plainfs` - drop everything the fragment shader does after the
+  texture fetch - changed nothing, so it is not shading;
+* `/sdcard/ran/nulldraw` - skip the GL work of every draw - took the mounted
+  frame from **113 ms to 16.7 ms**. So ~96 ms of it is the GPU chewing geometry.
+
+The shadow pass draws the whole vehicle a second time into the shadow target,
+and a vehicle is a far heavier mesh than a character. Cutting it halves the cost
+of riding.
+
+**The engine's own LOD is a stub.** `USE_SKINMESH_LOD` is commented out in
+`DxSkinDefine.h`, and enabling it would achieve nothing: `g_dwLOD` is set - to 1
+for shadows, and by distance - but **nothing anywhere reads it to choose a
+mesh**. It is only ever set and counted into `g_dwHIGHDRAW_NUM`. Worth knowing
+before anyone reaches for it again.
+
+**Still open.** Riding is 54 ms against 32.6 on foot, so the vehicle's own
+on-screen geometry still costs ~21 ms: +37k opaque and +37k alpha vertices over
+being on foot. The alpha half is the suspicious part - ~37k alpha-blended
+vertices for a motorbike suggests its parts are going through the blended path
+rather than the opaque one, which would follow from DXT5 textures
+(`TextureManager` maps DXT5 to `EMTT_ALPHA_SOFT`). Not chased yet, and not
+guessed at: it needs the same measurement treatment.
+
+**Not verified on the Tab S9** - it has been off adb throughout. The emulator's
+GPU is not the tablet's, and the ratio may differ there.
