@@ -291,17 +291,14 @@ extern "C" void RanSplash_Begin(const char *dataRoot) {
         if (!g_s.art) return;                   // no art, no boot screen
     }
 
-    //  LOGIN_MARK in the ui config: outgui_character.dds at 335,416, 177x96.
-    //  Taken as a sub-rectangle of the sheet at draw time rather than shipped
-    //  as its own file, so there is one copy of it and the launcher's PNG and
-    //  this agree by construction.
+    //  The same file LOGIN_MARK now names in the ui config, whole rather than
+    //  as a sub-rectangle of a sheet: one copy of the logo, so the launcher's
+    //  PNG, the login screen and this cannot drift apart.
     unsigned sheetW = 0, sheetH = 0;
-    if (!g_s.cover) g_s.mark = loadTexture(dataRoot, "outgui_character.dds", &sheetW, &sheetH);
+    if (!g_s.cover) g_s.mark = loadTexture(dataRoot, "ranlegacy_mark.dds", &sheetW, &sheetH);
     if (g_s.mark && sheetW && sheetH) {
-        g_s.markU0 = 335.0f / sheetW;
-        g_s.markV0 = 416.0f / sheetH;
-        g_s.markDU = 177.0f / sheetW;
-        g_s.markDV =  96.0f / sheetH;
+        g_s.markU0 = 0.0f; g_s.markV0 = 0.0f;
+        g_s.markDU = 1.0f; g_s.markDV = 1.0f;
     } else {
         g_s.mark = 0;
     }
@@ -387,7 +384,8 @@ extern "C" void RanSplash_Step(void) {
     //  centred. dp is 160ths of an inch; this panel reports its own density, so
     //  the closest thing available here is a fraction of the width.
     if (g_s.mark) {
-        const float mw = W * 0.18f, mh = mw * (96.0f / 177.0f);
+        //  Square now, and the same fraction of the width the launcher uses.
+        const float mw = W * 0.137f, mh = mw;
         quad(g_s.mark, (W - mw) * 0.5f, H * 0.035f, mw, mh,
              g_s.markU0, g_s.markV0, g_s.markDU, g_s.markDV);
     }

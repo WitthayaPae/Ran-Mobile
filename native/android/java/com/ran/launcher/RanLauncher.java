@@ -147,8 +147,11 @@ public class RanLauncher extends Activity {
         ImageView mark = new ImageView(this);
         setDrawable(mark, "ran_mark");
         mark.setAdjustViewBounds(true);
+        //  170dp, not the 230 the old mark used: that one was a wide wordmark
+        //  at 177x96, this one is square, and 230dp square is a third of the
+        //  height of the page.
         FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
-                dp(230), ViewGroup.LayoutParams.WRAP_CONTENT);
+                dp(170), ViewGroup.LayoutParams.WRAP_CONTENT);
         mlp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         mlp.topMargin = dp(30);
         root.addView(mark, mlp);

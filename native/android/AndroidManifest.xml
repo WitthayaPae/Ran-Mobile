@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ran.native"
-    android:versionCode="27"
-    android:versionName="V011">
+    android:versionCode="29"
+    android:versionName="V013">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -36,7 +36,9 @@
          allowBackup=false: with it on, adb backup pulls the app's private
          data off the device without root. -->
     <application
-        android:label="RAN"
+        android:label="Ran Legacy M"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:allowBackup="false"
         android:requestLegacyExternalStorage="true"
@@ -48,7 +50,7 @@
              game directly, skipping the update check and the signed manifest
              with it. The login scripts go through the launcher instead. -->
         <activity android:name="com.ran.launcher.RanLauncher"
-            android:label="RAN"
+            android:label="Ran Legacy M"
             android:theme="@style/RanSplash"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|keyboard|navigation|uiMode|density"
             android:screenOrientation="sensorLandscape"
@@ -60,7 +62,7 @@
         </activity>
 
         <activity android:name="com.ran.launcher.RanActivity"
-            android:label="RAN"
+            android:label="Ran Legacy M"
             android:theme="@style/RanSplash"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|keyboard|navigation|uiMode|density"
             android:windowSoftInputMode="adjustNothing"

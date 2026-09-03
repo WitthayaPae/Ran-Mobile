@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--  Android 8+ masks the icon to whatever shape the launcher uses. Supplying
+      the foreground on its own, inside the 66-of-108 safe zone, lets it do that
+      without clipping the artwork; the black the logo was drawn on becomes the
+      background layer, so the icon still reads as the same coin.            -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

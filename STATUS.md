@@ -4885,3 +4885,52 @@ button afterwards and watching the icon still cycle.
 
 **Not yet checked on the Tab S9** - it dropped off adb again before this could be
 run there.
+
+## Rebranded to Ran Legacy M (2026-09-03)
+
+One square logo (1254x1254 JPEG, gold artwork flattened onto black) drives the
+launcher icon, the patch page, the boot screen and the client's own login mark.
+
+**Keying.** The source has no alpha and the logo's own metal is nearly black in
+places, so a luminance threshold punches holes through the middle of it. The
+black is removed by **flood-filling inwards from the border** instead - only
+black connected to the edge is background. 45% of the image comes out
+transparent and the internal darks survive. `tools/rcc-extract/make-icons.js`.
+
+**Where it went.**
+
+- `res/mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png` - the legacy icon, logo
+  composited back onto its black square.
+- `res/mipmap-*/ic_launcher_foreground.png` + `mipmap-anydpi-v26/ic_launcher.xml`
+  - adaptive, artwork inside the 66-of-108 safe zone over a black background
+  layer, so a launcher can mask it to any shape without clipping.
+- `res/drawable-nodpi/ran_mark.png` - the mark on the patch page. The launcher
+  drew the old wide wordmark at 230dp; a square logo at 230dp is a third of the
+  page, so that is now 170dp, and `compose-splash.js` matches it at 13.7% of
+  the width.
+- `textures/gui/ranlegacy_mark.dds` + `LOGIN_MARK` in `uioutercfg.xml`, repacked
+  into `Gui.rcc` - the logo on the login and server-select screens, 150x150
+  where the old wordmark was 177x96.
+
+**Why DXT5, and why that needed writing.** There was no DDS *encoder* in the
+tree, only decoders. It could not be skipped: `TextureManager` chooses how a
+texture is drawn from the format it comes back as, and `D3DFMT_A8R8G8B8` lands
+in the `EMTT_ALPHA_HARD` case - alpha test, no blending - which would cut the
+logo's glow into a jagged edge. DXT5 is `EMTT_ALPHA_SOFT`, what every other UI
+mark uses. `tools/rcc-extract/dds-encode.js` writes DXT5 with a full mip chain;
+fully transparent texels are left out of the colour fit so the black they were
+keyed from cannot drag the visible edge muddy.
+
+**Name.** `android:label` was "RAN" in three places, now "Ran Legacy M". There
+was no `android:icon` at all before this - the app was showing the stock Android
+robot.
+
+**Verified on LDPlayer:** the home screen shows the logo and "Ran Legacy M"; the
+patch page and the boot screen carry it; the server-select screen draws it with
+its glow blending against the sky, which is the DXT5 path doing its job.
+
+**Trap for next time.** `adb push` with an absolute device path needs
+`MSYS_NO_PATHCONV=1` under Git Bash. Without it the destination is rewritten to
+`C:/Program Files/Git/storage/...`; the push *reports success* and the device
+keeps the old file. The first Gui.rcc push did exactly that and the login screen
+was still showing the old wordmark for it.

@@ -87,7 +87,8 @@ for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
 //  between 18.0% and 19.1% of the screen width, so take the middle - the window
 //  background is on screen for a fraction of a second and a 1% difference in
 //  where it sits is not visible, while its absence very much was.
-const mw = Math.round(W * 0.185), mh = Math.round(mw * mark.h / mark.w);
+//  Matches the launcher's 170dp against a ~1240dp-wide tablet.
+const mw = Math.round(W * 0.137), mh = Math.round(mw * mark.h / mark.w);
 const mx = Math.round((W - mw) / 2), my = Math.round(H * 0.041);
 for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) {
   sample(mark, x * mark.w / mw, y * mark.h / mh, t);
