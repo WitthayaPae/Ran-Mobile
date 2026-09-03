@@ -53,6 +53,27 @@
     <dict>
         <key>UIColorName</key>               <string></string>
     </dict>
+    <!--  Loose icon files rather than an asset catalog: a catalog has to be
+          compiled by actool, which is Xcode-only, and the icons are generated
+          on the machine the artwork is on (make-ios-icons.js). Enough for
+          development and TestFlight. An App Store submission also wants a
+          1024px marketing icon in a catalog.  -->
+    <key>CFBundleIconFiles</key>
+    <array>
+        <string>AppIcon-20</string>
+        <string>AppIcon-29</string>
+        <string>AppIcon-40</string>
+        <string>AppIcon-58</string>
+        <string>AppIcon-60</string>
+        <string>AppIcon-76</string>
+        <string>AppIcon-80</string>
+        <string>AppIcon-87</string>
+        <string>AppIcon-120</string>
+        <string>AppIcon-152</string>
+        <string>AppIcon-167</string>
+        <string>AppIcon-180</string>
+    </array>
+
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>

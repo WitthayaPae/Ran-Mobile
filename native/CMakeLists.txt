@@ -195,6 +195,13 @@ if(RAN_IOS)
   set_source_files_properties(${IOS_FONTS} PROPERTIES
     MACOSX_PACKAGE_LOCATION Resources/fonts)
 
+  #  Icons go at the bundle ROOT, not in a subfolder: CFBundleIconFiles names
+  #  them without a path and iOS looks for them nowhere else.
+  file(GLOB IOS_ICONS ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/icons/*.png)
+  target_sources(ran PRIVATE ${IOS_ICONS})
+  set_source_files_properties(${IOS_ICONS} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources)
+
   set_target_properties(ran PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.ran.launcher
     MACOSX_BUNDLE_BUNDLE_NAME "Ran Legacy M"
