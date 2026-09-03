@@ -5008,3 +5008,41 @@ outside corner (`out/veh_z.png`).
 equipped, and with none `ReqSetVehicle(true)` returns early at
 `!m_sVehicle.IsActiveValue()` *without* a message - so a tap is correctly
 silent and proves nothing either way. Needs a character with a bike.
+
+## Auto-target prefers what the character is facing (2026-09-03)
+
+`MobileFindNearestMob` and `MobileFindNearestPvP` both took the strict nearest,
+which is often not what the player means: standing between two mobs, the one
+behind wins by a step and the character spins round to fight it.
+
+Both now track **two** answers in the same pass - the nearest thing in front and
+the nearest thing at all - and return the second, unchanged, when nothing is in
+front. So the change can only alter which target is picked when one is being
+faced; with none it is the old behaviour exactly, including all the dead-crow
+and `IsPK_TAR` filtering.
+
+Facing comes from `GLCharacter::m_vDir`, which is a persistent world heading -
+it keeps its value while standing still, so the preference works when stationary
+and not only while running.
+
+Two judgement calls, both in the code as comments:
+
+* **Flattened to XZ.** `m_vDir` is a heading, not a look direction. A mob up a
+  slope or down a stairwell is still in front, and comparing the full 3D vectors
+  would drop it for no reason the player can see.
+* **90 degree window** (`cos(45)` either side). Wider starts choosing things off
+  the shoulder that do not look aimed at; much narrower is hard to satisfy while
+  moving, and then the preference never fires and it is the old behaviour with
+  extra arithmetic.
+
+A target standing on top of the character counts as faced: there is no direction
+to test, and answering "not facing" would push the player at something further
+away.
+
+**Verified:** builds for both ABIs, and auto-target still selects in world -
+`Lv.2 Little Vulgarian 180/180` on the panel with the bar over the mob beside
+the character (`out/auto_test.png`).
+
+**Not verified:** that it prefers the faced one over a nearer one behind. That
+needs a controlled position between two candidates, which is what the player
+will see immediately in normal play.

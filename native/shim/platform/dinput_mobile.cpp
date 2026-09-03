@@ -272,7 +272,23 @@ extern "C" void RanInput_PointerButton(int button, int down) {
 //  drained there and the server list stopped responding to clicks entirely.
 //  Pumping from the frame loop makes it independent of how any given stage reads
 //  its input.
+//  See RanInput_KeyTap: a soft-keyboard key held for a couple of pumps so the
+//  game thread is certain to see it down before it is released.
+static int g_tapScan = -1;
+static int g_tapHold = 0;
+
 extern "C" void RanInput_PumpButtons(void) {
+    {
+        Lock lk;
+        if (g_tapScan >= 0 && --g_tapHold <= 0) {
+            const int scan = g_tapScan;
+            g_tapScan = -1;
+            //  Released outside the lock below would be neater, but RanInput_Key
+            //  takes the same non-recursive lock, so it is done inline.
+            g_keyState[scan] = 0x00;
+            pushKey((BYTE)scan, false);
+        }
+    }
     Lock lk;
     //  Hand the pointer back before anything else: last frame's event may have
     //  borrowed it. Straight assignment, no delta and no DIMOFS event - the
@@ -319,6 +335,23 @@ extern "C" int RanInput_TakeEnter(void) {
     const bool was = g_enterLatched;
     g_enterLatched = false;
     return was ? 1 : 0;
+}
+
+//  A key the soft keyboard sent, which has no separate release.
+//
+//  A hardware key arrives as a down now and an up frames later, and that gap is
+//  what the client reads: BasicChatRightBody wants DIK_RETURN *down* on a poll.
+//  The IME hands over a single action instead, so pressing and releasing it here
+//  in one call would leave g_keyState clear again before the client ever looked,
+//  and the chat would still not send. Held for two pumps instead - one to be
+//  sure the game thread polls it, one for slack - then released like any key.
+extern "C" void RanInput_Key(int scanCode, int down);   //  defined just below
+
+extern "C" void RanInput_KeyTap(int scanCode) {
+    RanInput_Key(scanCode, 1);
+    Lock lk;
+    g_tapScan = scanCode;
+    g_tapHold = 2;
 }
 
 extern "C" void RanInput_Key(int scanCode, int down) {

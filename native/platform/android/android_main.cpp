@@ -61,6 +61,7 @@ extern "C" int  RanUI_PointInControl(int x, int y);
 extern "C" void RanUI_EndEditIfOutside(int x, int y);
 extern "C" int  RanTouch_IsPinching(void);
 extern "C" void RanInput_Key(int scanCode, int down);
+extern "C" void RanInput_KeyTap(int scanCode);
 
 //  The on-screen controls. They see every pointer before the client does.
 #include "../../shim/platform/touch_ui.h"
@@ -346,6 +347,16 @@ Java_com_ran_launcher_RanActivity_nativeCommitText(JNIEnv *env, jclass, jstring 
         RanIME_InsertUtf8(sz);
         env->ReleaseStringUTFChars(text, sz);
     }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ran_launcher_RanActivity_nativeEnter(JNIEnv *, jclass) {
+    //  0x1C is DIK_RETURN. The client wants the same thing a hardware Return
+    //  gives it - the key down on a poll, plus the latch RanInput_TakeEnter
+    //  reports - and BasicChatRightBody needs both before it will send the
+    //  line. A tap rather than a down/up pair because the IME has no release
+    //  to give us; see RanInput_KeyTap.
+    RanInput_KeyTap(0x1C);
 }
 
 extern "C" JNIEXPORT void JNICALL

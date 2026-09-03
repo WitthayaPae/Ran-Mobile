@@ -61,6 +61,9 @@ public class RanActivity extends NativeActivity {
      *  hard keyboards end up in exactly the same place. */
     private static native void nativeCommitText(String text);
     private static native void nativeBackspace();
+    /*  Return, for sending a chat line. The soft keyboard's action key used to
+     *  just close the keyboard, so anything typed was dropped on the floor. */
+    private static native void nativeEnter();
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -177,10 +180,22 @@ public class RanActivity extends NativeActivity {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 final int k = event.getKeyCode();
                 if (k == KeyEvent.KEYCODE_DEL) { nativeBackspace(); return true; }
-                if (k == KeyEvent.KEYCODE_ENTER) { ranHideKeyboard(); return true; }
+                /*  Send it, and leave the keyboard alone: CUIEditBox::EndEdit
+                  *  calls RanIME_Hide itself once the client closes the line,
+                  *  so hiding here as well only fought with it - and hiding
+                  *  *instead* of sending is what dropped the message. */
+                if (k == KeyEvent.KEYCODE_ENTER) { nativeEnter(); return true; }
                 final int u = event.getUnicodeChar();
                 if (u > 0) { nativeCommitText(String.valueOf((char) u)); return true; }
             }
+            return true;
+        }
+
+        /*  Most keyboards deliver their action key as an editor action rather
+         *  than as a KeyEvent, so this is the path that actually runs for the
+         *  blue Done/Send key. Without it the button did nothing at all. */
+        @Override public boolean performEditorAction(int actionCode) {
+            nativeEnter();
             return true;
         }
 
