@@ -66,6 +66,9 @@ add_compile_definitions(
 set(RAN_COMMON_INCLUDES
   ${SHIM}/win
   ${SHIM}/d3d
+  #  ran_plat.h: the client logs through it, from files at three different
+  #  depths, so it is reached by include path rather than by ../../.. 
+  ${SHIM}/platform
   ${RAN_SRC}/Tik/DXInclude
   ${TP}/minilzo-2.10
   ${TP}/lua-5.0.3/include

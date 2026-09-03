@@ -19,6 +19,10 @@
 
 #include <dirent.h>
 #include <errno.h>
+#if defined(__APPLE__)
+#include <fcntl.h>               //  the /proc-free descriptor count
+#include <sys/resource.h>
+#endif
 #include <stdio.h>
 #include <sys/stat.h>
 #include <strings.h>
@@ -318,9 +322,18 @@ extern "C" void RanPath_ProbeVersionFile(void) {
                             "%s -> %s (errno %d)", paths[i], f ? "OK" : "FAILED", f ? 0 : errno);
         if (f) fclose(f);
     }
+    //  /proc is Linux. On iOS the same count comes from asking about every
+    //  descriptor up to the limit - cheap enough for a one-shot probe.
     int open = 0;
+#if defined(__APPLE__)
+    struct rlimit rl;
+    const int top = (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < 4096)
+                  ? (int)rl.rlim_cur : 4096;
+    for (int fd = 0; fd < top; ++fd) if (fcntl(fd, F_GETFD) != -1) ++open;
+#else
     DIR *d = opendir("/proc/self/fd");
     if (d) { while (readdir(d)) ++open; closedir(d); }
+#endif
     RanPlat_Log(RANLOG_INFO, "RanProbe", "open descriptors: %d", open);
 }
 

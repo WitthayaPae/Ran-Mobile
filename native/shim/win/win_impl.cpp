@@ -14,6 +14,9 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <errno.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>          //  hw.memsize, in place of _SC_PHYS_PAGES
+#endif
 #include <ctype.h>
 
 #include <string>
@@ -462,9 +465,21 @@ void GetSystemInfo(LPSYSTEM_INFO si) {
 void GlobalMemoryStatus(LPMEMORYSTATUS ms) {
     memset(ms, 0, sizeof(*ms));
     ms->dwLength = sizeof(*ms);
+    //  _SC_PHYS_PAGES and _SC_AVPHYS_PAGES are Linux extensions and do not
+    //  exist on Darwin; sysctl answers the same question. There is no
+    //  equivalent of AVPHYS_PAGES at all - iOS does not publish free memory -
+    //  so the client is told half the machine is free, which is the shape of
+    //  the only thing it uses the number for: is this a small machine.
+#if defined(__APPLE__)
+    uint64_t total = 0; size_t len = sizeof(total);
+    if (sysctlbyname("hw.memsize", &total, &len, NULL, 0) != 0) total = 0;
+    ms->dwTotalPhys = (SIZE_T)total;
+    ms->dwAvailPhys = (SIZE_T)(total / 2);
+#else
     long pages = sysconf(_SC_PHYS_PAGES), ps = sysconf(_SC_PAGESIZE);
     ms->dwTotalPhys = (SIZE_T)pages * (SIZE_T)ps;
     ms->dwAvailPhys = (SIZE_T)sysconf(_SC_AVPHYS_PAGES) * (SIZE_T)ps;
+#endif
 }
 //  Windows 7 Professional, and the product type matters.
 //
