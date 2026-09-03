@@ -120,9 +120,35 @@ what, not by when it was found.
    SDK, and `build-ios.sh` is what it would run. Both repos are on GitHub
    already. What a Mac (or a signing identity) *is* needed for is putting the
    build on a device.
-2. **Audio.** `shim/platform/dsutil_mobile.cpp` is a stub, and not only on iOS —
-   **the game is silent on Android too.** Shared work: one implementation behind
-   the existing class shapes, AAudio/OpenSL on Android and AudioQueue on iOS.
+2. **Audio — DONE 2026-09-04 on Android; iOS needs only a sink.** The game had
+   no sound at all, on either platform, and the missing backend was only the
+   last of three reasons:
+
+   * `CWnd::m_hWnd` was NULL in the shim, and `DxSoundMan::OneTimeSceneInit`
+     returns before doing anything when the handle is null — so the sound layer
+     was never entered.
+   * `timeSetEvent` was a stub returning 0. `BgmSound` drives its streaming
+     thread with a periodic multimedia timer that sets an event, so the thread
+     waited forever and not one block of music was ever decoded.
+   * The device's `option.ini` had every volume at `DSBVOLUME_MIN`. The engine
+     defaults are 0, which is `DSBVOLUME_MAX`.
+
+   Built: `audio_mix.cpp` (the portable mixer — WAV clips at 8/16/24/32-bit,
+   voices in DirectSound's own volume and pan units, ring voices for streaming,
+   an int accumulator so overlapping sounds do not clip against each other),
+   `audio_opensl.cpp` (the Android sink, two 20 ms buffers), `dsound_mobile.cpp`
+   (IDirectSound/IDirectSoundBuffer over the mixer — the music path needs a real
+   ring with a real play cursor), and a real `dsutil_mobile.cpp`.
+
+   Measured in the world on LDPlayer: 5 voices, peak 25972–32768 of 32767, the
+   ring taking 183 MB of non-zero decoded PCM. Silence on every build before it.
+
+   **iOS needs only a sink** — an AudioQueue file beside the OpenSL one; nothing
+   above it is platform-specific. Two known gaps on both platforms: no headroom
+   (the mix reaches full scale with music at default volume, as the PC does),
+   and nothing mutes audio when the app loses focus (`RanAudio_SetMuted` exists
+   and is not wired).
+
 3. **`minIos` in the manifest.** `make-manifest.js --min-ios <n>`. The iOS
    patcher refuses a manifest without it, deliberately, so this has to be
    published before an iOS client may talk to the live server.
