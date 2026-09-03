@@ -144,7 +144,7 @@ if(RAN_IOS)
     "-framework ImageIO" "-framework Foundation" "-framework UIKit"
     "-framework AudioToolbox" "-framework Security")
 else()
-  target_link_libraries(ranshim PUBLIC log android EGL GLESv3 jnigraphics)
+  target_link_libraries(ranshim PUBLIC log android EGL GLESv3 jnigraphics OpenSLES)
 endif()
 
 # ---- game libraries -------------------------------------------------------------

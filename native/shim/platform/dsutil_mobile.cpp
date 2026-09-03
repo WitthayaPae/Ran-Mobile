@@ -1,34 +1,65 @@
 // DirectSound wrapper (dsutil) — mobile implementation.
 //
-// PHASE 2 STATUS: silent. Every object is created and every call succeeds, so
-// the engine's whole sound-management layer above this (DxSoundMan, SSound,
-// BgmSound, StaticSoundMan, MovableSound) runs for real — it loads its sets,
-// tracks 3D positions, starts and stops sources — with nothing reaching a
-// speaker. That keeps the sound *logic* exercised during a headless boot
-// instead of stubbing it out wholesale.
+// Real sound, since 2026-09-04. What it was before, and why the shape below is
+// what it is: every object used to be created and every call used to succeed
+// with nothing reaching a speaker, which kept the engine's sound layer
+// (DxSoundMan, SuperSound, BgmSound, StaticSoundMan, MovableSound) running for
+// real during the headless port. None of that layer changed. What changed is
+// the bottom: a CSound now owns a decoded clip and a handful of voices in the
+// mixer, and the buffers it hands out are the IDirectSoundBuffer objects in
+// dsound_mobile.cpp.
 //
-// PHASE 4 replaces the bodies with OpenSL ES / AAudio. The class shapes here
-// are dsutil.h's, unchanged, so that swap touches this file only.
+// The music does not come through here at all - BgmSound calls
+// DirectSoundCreate8 itself and streams into a ring buffer.
 
 #include "stdafx.h"
 #include "ran_plat.h"
+#include "audio_mix.h"
 #include "dsutil.h"
 
 #include <string.h>
 #include <set>
 #include <string>
+#include <vector>
+#include <map>
 
-#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RanSound", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanSound", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanSound", __VA_ARGS__)
+
+extern "C" IDirectSoundBuffer *RanDSound_WrapClip ( int clip, unsigned bytes,
+                                                    int channels, int bits, unsigned rate );
+extern "C" int  RanAudioSink_Start ( void );
+extern "C" void RanAudioSink_Stop ( void );
 
 namespace {
-std::set<std::string> g_loaded;   // distinct wave files the boot asks for
+std::set<std::string> g_loaded;   // distinct wave files asked for
 unsigned g_plays = 0;
+unsigned g_failed = 0;
+bool     g_up = false;
+
+//  A clip per file, shared: the same footstep is created from many places and
+//  decoding it once matters when there are 832 of them.
+std::map<std::string, int> g_byPath;
+
+int clipFor ( const char *path )
+{
+    if (!path || !*path) return 0;
+    std::string key ( path );
+    std::map<std::string, int>::iterator it = g_byPath.find ( key );
+    if (it != g_byPath.end()) return it->second;
+
+    const int clip = RanAudio_LoadWav ( path );
+    g_byPath[key] = clip;
+    if (!clip) ++g_failed;
+    return clip;
+}
 }
 
 // Reported by the platform layer at shutdown: how much audio the run wanted.
 extern "C" void RanSound_LogStats(void) {
-    LOGI("sound — %zu distinct wave files requested, %u play calls (silent: phase 4)",
-         g_loaded.size(), g_plays);
+    LOGI("sound - %zu distinct wave files, %u play calls, %u that would not decode",
+         g_loaded.size(), g_plays, g_failed);
+    RanAudio_LogStats();
 }
 
 // ------------------------------------------------------------- CSoundManager
@@ -38,34 +69,71 @@ CSoundManager::~CSoundManager() {}
 HRESULT CSoundManager::EnumDevice(HWND, int) { return S_OK; }
 
 HRESULT CSoundManager::Initialize(HWND, DWORD, DWORD channels, DWORD freq, DWORD bits) {
-    LOGI("sound init — %lu ch, %lu Hz, %lu bit (silent backend)",
-         (unsigned long)channels, (unsigned long)freq, (unsigned long)bits);
+    if (!g_up) {
+        RanAudio_Init();
+        //  The sink is what actually opens the device. A failure here is not
+        //  fatal: the mixer keeps running and the game is simply silent, which
+        //  is what it was before any of this existed.
+        if (!RanAudioSink_Start())
+            LOGE("no audio device - the game will run silent");
+        g_up = true;
+    }
+    LOGI("sound init - asked for %lu ch, %lu Hz, %lu bit; mixing at %d Hz stereo",
+         (unsigned long)channels, (unsigned long)freq, (unsigned long)bits, RANAUDIO_RATE);
     return S_OK;
 }
 
 HRESULT CSoundManager::SetPrimaryBufferFormat(DWORD, DWORD, DWORD) { return S_OK; }
 
 HRESULT CSoundManager::Get3DListenerInterface(LPDIRECTSOUND3DLISTENER *ppDSListener) {
+    //  No DirectSound3D. The engine treats a missing listener as "no 3D" and
+    //  falls back to its own pan/volume maths in CharacterSound, which is what
+    //  the mixer wants anyway - it takes pan and volume, not world positions.
     if (ppDSListener) *ppDSListener = NULL;
-    return E_FAIL;      // callers treat a missing listener as "no 3D", not an error
+    return E_FAIL;
 }
 
 HRESULT CSoundManager::Create(CSound **ppSound, LPTSTR strWaveFileName, DWORD, GUID, DWORD numBuffers) {
     if (!ppSound) return E_INVALIDARG;
     if (strWaveFileName) g_loaded.insert(strWaveFileName);
-    *ppSound = new CSound(NULL, 0, numBuffers ? numBuffers : 1, NULL);
+
+    const int clip = clipFor ( strWaveFileName );
+    const DWORD buffers = numBuffers ? numBuffers : 1;
+
+    //  One IDirectSoundBuffer per simultaneous instance, exactly as the PC
+    //  build allocates them - SuperSound asks for a free one by index and then
+    //  sets volume and pan on it.
+    LPDIRECTSOUNDBUFFER *apBuf = new LPDIRECTSOUNDBUFFER[buffers];
+    const int frames = RanAudio_ClipFrames ( clip );
+    for (DWORD i = 0; i < buffers; ++i)
+        apBuf[i] = clip ? RanDSound_WrapClip ( clip, (unsigned)( frames * 4 ), 2, 16, RANAUDIO_RATE )
+                        : NULL;
+
+    *ppSound = new CSound(apBuf, (DWORD)( frames * 4 ), buffers, NULL);
     return S_OK;
 }
 
-HRESULT CSoundManager::CreateFromMemory(CSound **ppSound, BYTE *, ULONG, LPWAVEFORMATEX,
-                                        DWORD, GUID, DWORD numBuffers) {
+HRESULT CSoundManager::CreateFromMemory(CSound **ppSound, BYTE *pbData, ULONG ulDataSize,
+                                        LPWAVEFORMATEX, DWORD, GUID, DWORD numBuffers) {
     if (!ppSound) return E_INVALIDARG;
-    *ppSound = new CSound(NULL, 0, numBuffers ? numBuffers : 1, NULL);
+    const int clip = RanAudio_LoadWavMemory ( pbData, ulDataSize );
+    const DWORD buffers = numBuffers ? numBuffers : 1;
+    const int frames = RanAudio_ClipFrames ( clip );
+
+    LPDIRECTSOUNDBUFFER *apBuf = new LPDIRECTSOUNDBUFFER[buffers];
+    for (DWORD i = 0; i < buffers; ++i)
+        apBuf[i] = clip ? RanDSound_WrapClip ( clip, (unsigned)( frames * 4 ), 2, 16, RANAUDIO_RATE )
+                        : NULL;
+
+    *ppSound = new CSound(apBuf, (DWORD)( frames * 4 ), buffers, NULL);
     return S_OK;
 }
 
 HRESULT CSoundManager::CreateStreaming(CStreamingSound **ppStreamingSound, LPTSTR strWaveFileName,
                                        DWORD, GUID, DWORD, DWORD notifySize, HANDLE) {
+    //  Nothing in the client reaches this: the music streams through BgmSound's
+    //  own DirectSound buffer. Kept honest rather than removed - it is part of
+    //  dsutil's interface.
     if (!ppStreamingSound) return E_INVALIDARG;
     if (strWaveFileName) g_loaded.insert(strWaveFileName);
     *ppStreamingSound = new CStreamingSound(NULL, 0, NULL, notifySize);
@@ -80,9 +148,17 @@ CSound::CSound(LPDIRECTSOUNDBUFFER *apDSBuffer, DWORD dwDSBufferSize, DWORD dwNu
     : m_apDSBuffer(apDSBuffer), m_dwDSBufferSize(dwDSBufferSize), m_pWaveFile(pWaveFile),
       m_dwNumBuffers(dwNumBuffers), m_pbUseSound(NULL) {}
 
-CSound::~CSound() {}
+CSound::~CSound() {
+    if (m_apDSBuffer) {
+        for (DWORD i = 0; i < m_dwNumBuffers; ++i)
+            if (m_apDSBuffer[i]) m_apDSBuffer[i]->Release();
+        delete[] m_apDSBuffer;
+        m_apDSBuffer = NULL;
+    }
+}
 
 HRESULT CSound::RestoreBuffer(LPDIRECTSOUNDBUFFER, BOOL *pbWasRestored) {
+    //  Nothing can lose its buffer here: there is no device to lose it to.
     if (pbWasRestored) *pbWasRestored = FALSE;
     return S_OK;
 }
@@ -91,17 +167,88 @@ HRESULT CSound::Get3DBufferInterface(DWORD, LPDIRECTSOUND3DBUFFER *ppDS3DBuffer)
     return E_FAIL;
 }
 HRESULT CSound::FillBufferWithSound(LPDIRECTSOUNDBUFFER, BOOL) { return S_OK; }
-LPDIRECTSOUNDBUFFER CSound::GetFreeBuffer() { return NULL; }
-LPDIRECTSOUNDBUFFER CSound::GetBuffer(DWORD) { return NULL; }
-HRESULT CSound::Play(DWORD, DWORD) { ++g_plays; return S_OK; }
-HRESULT CSound::Stop() { return S_OK; }
-HRESULT CSound::Reset() { return S_OK; }
-BOOL    CSound::IsSoundPlaying() { return FALSE; }   // silent: nothing is ever playing
-LPDIRECTSOUNDBUFFER CSound::GetFreeBuffer(DWORD &BufferID) { BufferID = 0; return NULL; }
-HRESULT CSound::PlayBuffer(DWORD &BufferID, DWORD, DWORD) { BufferID = 0; ++g_plays; return S_OK; }
-HRESULT CSound::StopBuffer(DWORD) { return S_OK; }
-HRESULT CSound::ResetBuffer(DWORD) { return S_OK; }
-BOOL    CSound::IsSoundPlayingBuffer(DWORD) { return FALSE; }
+
+//  The first buffer that is not currently playing. When they are all busy the
+//  oldest is reused, which is what a fixed voice count means: a sound asked for
+//  a thirteenth time with twelve already going takes one over rather than being
+//  dropped silently.
+LPDIRECTSOUNDBUFFER CSound::GetFreeBuffer() {
+    DWORD id = 0;
+    return GetFreeBuffer ( id );
+}
+
+LPDIRECTSOUNDBUFFER CSound::GetFreeBuffer(DWORD &BufferID) {
+    BufferID = 0;
+    if (!m_apDSBuffer) return NULL;
+    for (DWORD i = 0; i < m_dwNumBuffers; ++i) {
+        if (!m_apDSBuffer[i]) continue;
+        DWORD status = 0;
+        m_apDSBuffer[i]->GetStatus ( &status );
+        if (!( status & DSBSTATUS_PLAYING )) { BufferID = i; return m_apDSBuffer[i]; }
+    }
+    return m_apDSBuffer[0];
+}
+
+LPDIRECTSOUNDBUFFER CSound::GetBuffer(DWORD id) {
+    if (!m_apDSBuffer || id >= m_dwNumBuffers) return NULL;
+    return m_apDSBuffer[id];
+}
+
+HRESULT CSound::Play(DWORD, DWORD dwFlags) {
+    DWORD id = 0;
+    return PlayBuffer ( id, 0, dwFlags );
+}
+
+HRESULT CSound::PlayBuffer(DWORD &BufferID, DWORD, DWORD dwFlags) {
+    LPDIRECTSOUNDBUFFER pBuf = GetFreeBuffer ( BufferID );
+    if (!pBuf) return DSERR_INVALIDPARAM;
+    ++g_plays;
+    pBuf->SetCurrentPosition ( 0 );
+    return pBuf->Play ( 0, 0, dwFlags );
+}
+
+HRESULT CSound::Stop() {
+    if (!m_apDSBuffer) return S_OK;
+    for (DWORD i = 0; i < m_dwNumBuffers; ++i)
+        if (m_apDSBuffer[i]) m_apDSBuffer[i]->Stop();
+    return S_OK;
+}
+
+HRESULT CSound::Reset() {
+    if (!m_apDSBuffer) return S_OK;
+    for (DWORD i = 0; i < m_dwNumBuffers; ++i)
+        if (m_apDSBuffer[i]) m_apDSBuffer[i]->SetCurrentPosition ( 0 );
+    return S_OK;
+}
+
+BOOL CSound::IsSoundPlaying() {
+    if (!m_apDSBuffer) return FALSE;
+    for (DWORD i = 0; i < m_dwNumBuffers; ++i) {
+        if (!m_apDSBuffer[i]) continue;
+        DWORD status = 0;
+        m_apDSBuffer[i]->GetStatus ( &status );
+        if (status & DSBSTATUS_PLAYING) return TRUE;
+    }
+    return FALSE;
+}
+
+HRESULT CSound::StopBuffer(DWORD id) {
+    LPDIRECTSOUNDBUFFER pBuf = GetBuffer ( id );
+    return pBuf ? pBuf->Stop() : S_OK;
+}
+
+HRESULT CSound::ResetBuffer(DWORD id) {
+    LPDIRECTSOUNDBUFFER pBuf = GetBuffer ( id );
+    return pBuf ? pBuf->SetCurrentPosition ( 0 ) : S_OK;
+}
+
+BOOL CSound::IsSoundPlayingBuffer(DWORD id) {
+    LPDIRECTSOUNDBUFFER pBuf = GetBuffer ( id );
+    if (!pBuf) return FALSE;
+    DWORD status = 0;
+    pBuf->GetStatus ( &status );
+    return ( status & DSBSTATUS_PLAYING ) ? TRUE : FALSE;
+}
 
 // ----------------------------------------------------------- CStreamingSound
 CStreamingSound::CStreamingSound(LPDIRECTSOUNDBUFFER pDSBuffer, DWORD dwDSBufferSize,
@@ -115,8 +262,10 @@ HRESULT CStreamingSound::HandleWaveStreamNotification(BOOL) { return S_OK; }
 HRESULT CStreamingSound::Reset() { return S_OK; }
 
 // ------------------------------------------------------------------ CWaveFile
-// Kept as a real (if empty) object: callers query format and size and would
-// otherwise dereference null.
+//  Real, now: it opens the file, reads the RIFF header and reports the format
+//  and size the caller asks about. The samples themselves go through the mixer
+//  rather than this class, so Read still hands back silence - nothing in the
+//  client reads a wave file through here.
 CWaveFile::CWaveFile() {
     m_pwfx = NULL; m_hmmio = NULL; m_pResourceBuffer = NULL;
     m_dwSize = 0; m_bIsReadingFromMemory = FALSE;
@@ -127,19 +276,19 @@ CWaveFile::CWaveFile() {
 CWaveFile::~CWaveFile() { Close(); }
 
 HRESULT CWaveFile::Open(LPTSTR strFileName, WAVEFORMATEX *pwfx, DWORD) {
-    (void)strFileName; (void)pwfx;
-    // A silent, valid 16-bit stereo 44.1 kHz format keeps every caller's maths sane.
+    (void)pwfx;
     if (!m_pwfx) {
         m_pwfx = new WAVEFORMATEX;
         memset(m_pwfx, 0, sizeof(*m_pwfx));
         m_pwfx->wFormatTag = WAVE_FORMAT_PCM;
         m_pwfx->nChannels = 2;
-        m_pwfx->nSamplesPerSec = 44100;
+        m_pwfx->nSamplesPerSec = RANAUDIO_RATE;
         m_pwfx->wBitsPerSample = 16;
         m_pwfx->nBlockAlign = 4;
-        m_pwfx->nAvgBytesPerSec = 44100 * 4;
+        m_pwfx->nAvgBytesPerSec = RANAUDIO_RATE * 4;
     }
-    m_dwSize = 0;
+    const int clip = clipFor ( strFileName );
+    m_dwSize = (DWORD) ( RanAudio_ClipFrames ( clip ) * 4 );
     return S_OK;
 }
 HRESULT CWaveFile::OpenFromMemory(BYTE *, ULONG size, WAVEFORMATEX *pwfx, DWORD) {
@@ -152,7 +301,7 @@ HRESULT CWaveFile::Close() {
     return S_OK;
 }
 HRESULT CWaveFile::Read(BYTE *pBuffer, DWORD dwSizeToRead, DWORD *pdwSizeRead) {
-    if (pBuffer && dwSizeToRead) memset(pBuffer, 0, dwSizeToRead);   // silence
+    if (pBuffer && dwSizeToRead) memset(pBuffer, 0, dwSizeToRead);
     if (pdwSizeRead) *pdwSizeRead = dwSizeToRead;
     return S_OK;
 }

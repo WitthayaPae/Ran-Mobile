@@ -603,7 +603,13 @@ class CPalette : public CGdiObject {};
 
 class CWnd : public CObject {
 public:
-    HWND m_hWnd = NULL;
+    //  Not NULL, deliberately. There IS a window here - the Android surface -
+    //  and the handle is inert only because every Win32 call in the shim
+    //  ignores it. Code that asks "do I have a window" is asking a real
+    //  question, and NULL answered it wrongly: DxSoundMan::OneTimeSceneInit
+    //  returns before it initialises anything if the handle is null, which is
+    //  why the game had no sound at all.
+    HWND m_hWnd = (HWND) 1;
     CWnd() {}
     virtual ~CWnd() {}
     HWND GetSafeHwnd() const { return m_hWnd; }

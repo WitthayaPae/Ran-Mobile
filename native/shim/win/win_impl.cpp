@@ -193,6 +193,82 @@ HANDLE CreateEventA(LPSECURITY_ATTRIBUTES, BOOL manual, BOOL initial, LPCSTR) {
     h->manualReset = manual != 0; h->signalled = initial != 0;
     return (HANDLE)h;
 }
+//  ------------------------------------------------------- multimedia timer
+//
+//  One caller and one shape: BgmSound asks for
+//      timeSetEvent(20, 10, (LPTIMECALLBACK)m_evtBlockFree, 0,
+//                   TIME_PERIODIC | TIME_CALLBACK_EVENT_SET)
+//  and waits on that event for its next block of music. So what is implemented
+//  is exactly that - a thread per timer that sets the event every delay - and a
+//  function callback says so once rather than pretending to work.
+//
+//  Kept simple deliberately: at 20 ms this thread wakes 50 times a second and
+//  does one SetEvent, which is cheaper than any shared-timer bookkeeping.
+namespace {
+struct MMTimer {
+    pthread_t thread;
+    HANDLE    event;
+    unsigned  delayMs;
+    volatile bool stop;
+    bool      used;
+};
+MMTimer g_mmTimers[8];
+pthread_mutex_t g_mmLock = PTHREAD_MUTEX_INITIALIZER;
+
+void *mmTimerThread(void *arg) {
+    MMTimer *t = (MMTimer *) arg;
+    while (!t->stop) {
+        struct timespec ts;
+        ts.tv_sec  = t->delayMs / 1000;
+        ts.tv_nsec = (long) ( t->delayMs % 1000 ) * 1000000L;
+        nanosleep(&ts, NULL);
+        if (t->stop) break;
+        SetEvent(t->event);
+    }
+    return NULL;
+}
+} // namespace
+
+extern "C" MMRESULT timeSetEvent(UINT delayMs, UINT, void *callback, DWORD_PTR, UINT flags) {
+    if (!( flags & TIME_CALLBACK_EVENT_SET )) {
+        static bool said = false;
+        if (!said) { said = true; RanPlat_Log(RANLOG_WARN, "RanTimer",
+            "timeSetEvent with a function callback is not implemented (flags %08x)",
+            (unsigned) flags); }
+        return 0;
+    }
+    if (!callback) return 0;
+
+    pthread_mutex_lock(&g_mmLock);
+    int slot = -1;
+    for (int i = 0; i < 8; ++i) if (!g_mmTimers[i].used) { slot = i; break; }
+    if (slot < 0) { pthread_mutex_unlock(&g_mmLock); return 0; }
+
+    MMTimer &t = g_mmTimers[slot];
+    t.used = true;
+    t.stop = false;
+    t.event = (HANDLE) callback;
+    t.delayMs = delayMs ? delayMs : 1;
+    pthread_mutex_unlock(&g_mmLock);
+
+    if (pthread_create(&t.thread, NULL, mmTimerThread, &t) != 0) {
+        t.used = false;
+        return 0;
+    }
+    //  Ids are 1-based: 0 is the failure value the caller checks.
+    return (MMRESULT) ( slot + 1 );
+}
+
+extern "C" MMRESULT timeKillEvent(UINT id) {
+    if (id == 0 || id > 8) return 0;
+    MMTimer &t = g_mmTimers[id - 1];
+    if (!t.used) return 0;
+    t.stop = true;
+    pthread_join(t.thread, NULL);
+    t.used = false;
+    return 0;
+}
+
 BOOL SetEvent(HANDLE hh) {
     RanHandle *h = (RanHandle *)hh; if (!h) return FALSE;
     pthread_mutex_lock(&h->mtx); h->signalled = true;

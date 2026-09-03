@@ -183,11 +183,12 @@ const GUID GUID_SysMouse =
 const DIDATAFORMAT c_dfDIKeyboard = { sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), 0x2, 256, 0, NULL };
 const DIDATAFORMAT c_dfDIMouse2   = { sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), 0x2, 20,  0, NULL };
 
-// DirectSound: the wrapper in dsutil_mobile.cpp never calls this (it goes
-// straight to the silent backend), but BgmSound references it directly.
+// DirectSound. BgmSound calls this directly and then drives the buffer itself -
+// Lock, Unlock, GetCurrentPosition - so what comes back has to be a real ring,
+// which is what dsound_mobile.cpp builds on top of the mixer.
+HRESULT WINAPI RanDSound_Create(LPDIRECTSOUND8 *ppDS8);
 HRESULT WINAPI DirectSoundCreate8(const GUID *, LPDIRECTSOUND8 *ppDS8, LPUNKNOWN) {
-    if (ppDS8) *ppDS8 = NULL;
-    return E_NOTIMPL;
+    return RanDSound_Create(ppDS8);
 }
 const GUID DS3DALG_HRTF_FULL =
     { 0xc2f5f0aa, 0xd2f0, 0x11d2, { 0x8e, 0xd9, 0x00, 0x60, 0x97, 0x11, 0x00, 0x00 } };

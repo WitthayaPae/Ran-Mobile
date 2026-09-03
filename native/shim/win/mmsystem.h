@@ -18,8 +18,13 @@ typedef DWORD FOURCC;
 #define MMIO_FINDCHUNK 0x0010
 #define MMIO_FINDRIFF 0x0020
 #ifdef __cplusplus
-inline MMRESULT timeKillEvent(UINT) { return 0; }
-inline MMRESULT timeSetEvent(UINT, UINT, void *, DWORD_PTR, UINT) { return 0; }
+//  Real, because the music depends on it: BgmSound drives its streaming
+//  thread with a periodic multimedia timer that sets an event, and a stub here
+//  meant the thread waited forever and never decoded a single block. See
+//  win_impl.cpp.
+extern "C" MMRESULT timeSetEvent(UINT delayMs, UINT resolutionMs, void *callback,
+                                 DWORD_PTR user, UINT flags);
+extern "C" MMRESULT timeKillEvent(UINT id);
 inline HMMIO mmioOpen(LPSTR, LPMMIOINFO, DWORD) { return NULL; }
 inline MMRESULT mmioClose(HMMIO, UINT) { return 0; }
 inline LONG mmioRead(HMMIO, char *, LONG) { return 0; }
