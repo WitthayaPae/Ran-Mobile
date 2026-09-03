@@ -12,21 +12,20 @@
 // the FVF, which is why it is computed rather than requested.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 
 #include "xfile_parse.h"
 #include "xmesh_build.h"
 
-#include <android/log.h>
 #include <string.h>
 #include <vector>
 #include <set>
-#include <android/log.h>
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "RanXMesh", __VA_ARGS__)
+#define LOGW(...) RanPlat_Log(RANLOG_WARN, "RanXMesh", __VA_ARGS__)
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanXMesh", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanXMesh", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanXMesh", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanXMesh", __VA_ARGS__)
 
 // The parsed node behind an ID3DXFileData, so LoadMeshFromXof can reach it.
 XNode *RanXFile_NodeOf(ID3DXFileData *data);

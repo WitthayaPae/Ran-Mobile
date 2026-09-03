@@ -11,14 +11,14 @@
 // are dsutil.h's, unchanged, so that swap touches this file only.
 
 #include "stdafx.h"
+#include "ran_plat.h"
 #include "dsutil.h"
 
-#include <android/log.h>
 #include <string.h>
 #include <set>
 #include <string>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RanSound", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RanSound", __VA_ARGS__)
 
 namespace {
 std::set<std::string> g_loaded;   // distinct wave files the boot asks for

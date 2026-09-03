@@ -27,7 +27,6 @@
 #include <GLES3/gl3.h>
 #include <GLES3/gl31.h>
 #include <EGL/egl.h>
-#include <android/log.h>
 #include <string.h>
 #include <map>
 #include <set>
@@ -38,8 +37,8 @@
 #include "gl_context.h"
 #include "gl_render.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanGL", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanGL", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanGL", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanGL", __VA_ARGS__)
 
 namespace {
 
@@ -2087,7 +2086,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
                 if (sp[1] > uy1) uy1 = sp[1];
             }
         }
-        __android_log_print(ANDROID_LOG_INFO, "RanUI",
+        RanPlat_Log(RANLOG_INFO, "RanUI",
             "tex=%u prim=%lu vc=%u box=(%.0f,%.0f)-(%.0f,%.0f) diff=%08X blend=%lu(%lu,%lu) "
             "cop=%lu,%lu,%lu aop=%lu,%lu,%lu",
             glTexture, (unsigned long)primCount, vertexCount, ux0, uy0, ux1, uy1, diff2,
@@ -2119,7 +2118,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         if (fvf & D3DFVF_PSIZE)  dOff += 4;
         unsigned diffuse = (fvf & D3DFVF_DIFFUSE)
             ? *(const unsigned *)((const char *)dumpVerts + dOff) : 0xFFFFFFFFu;
-        __android_log_print(ANDROID_LOG_INFO, "RanPal",
+        RanPlat_Log(RANLOG_INFO, "RanPal",
             "vblend=%d M0=(%.1f,%.1f,%.1f) M1=(%.1f,%.1f,%.1f) M2=(%.1f,%.1f,%.1f) M3=(%.1f,%.1f,%.1f)",
             g_vertexBlend,
             g_worldM[12], g_worldM[13], g_worldM[14],
@@ -2218,7 +2217,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             }
         }
         if (bmin[0] <= bmax[0]) {
-            __android_log_print(ANDROID_LOG_INFO, "RanBox",
+            RanPlat_Log(RANLOG_INFO, "RanBox",
                 "%s tex=%u vc=%u vblend=%d ndc=(%.2f %.2f)-(%.2f %.2f) "
                 "s0=%u(%.1f,%.1f,%.1f) s1=%u(%.1f,%.1f,%.1f) "
                 "s2=%u(%.1f,%.1f,%.1f) s3=%u(%.1f,%.1f,%.1f)",
@@ -2236,13 +2235,13 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         if (!glTexture && (g_colorArg1 == 2 || g_colorArg2 == 2)) {
             char szTrace[512];
             RanDiag_Backtrace(szTrace, sizeof(szTrace));
-            __android_log_print(ANDROID_LOG_WARN, "RanDraw",
+            RanPlat_Log(RANLOG_WARN, "RanDraw",
                 "untextured but sampling: fvf=%08X prim=%lu cop=%lu,%lu,%lu at%s",
                 (unsigned)fvf, (unsigned long)primCount, (unsigned long)g_colorOp,
                 (unsigned long)g_colorArg1, (unsigned long)g_colorArg2, szTrace);
         }
 
-        __android_log_print(ANDROID_LOG_INFO, "RanDraw",
+        RanPlat_Log(RANLOG_INFO, "RanDraw",
             "fvf=%08X stride=%u tex=%u prim=%lu idx=%u v0=(%.1f,%.1f,%.1f) ndc=(%.2f,%.2f,%.2f w=%.2f) "
             "diff=%08X vblend=%d blend=%lu(%lu,%lu) z=%lu zw=%lu cull=%lu atest=%lu/%lu light=%d/%d cop=%lu,%lu,%lu",
             (unsigned)fvf, stride, glTexture, (unsigned long)primCount, icount,
@@ -3597,7 +3596,7 @@ extern "C" void RanGLR_LogStats(void) {
 //  is usually the GPU refusing new textures, and glGetError is the only place
 //  that says so.
 extern "C" void RanGLR_LogTextureStats(void) {
-    __android_log_print(ANDROID_LOG_INFO, "RanTex", "uploads=%lu bytes=%lu lastErr=0x%04X",
+    RanPlat_Log(RANLOG_INFO, "RanTex", "uploads=%lu bytes=%lu lastErr=0x%04X",
                         g_texUploads, g_texBytes, g_texLastError);
 }
 

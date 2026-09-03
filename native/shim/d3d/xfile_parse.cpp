@@ -9,16 +9,16 @@
 // is fixed, so member data is packed in stream order and consumers cast it.
 
 #include "xfile_parse.h"
+#include "../platform/ran_plat.h"
 
 #include <zlib.h>
-#include <android/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <map>
 #include <set>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanXFile", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanXFile", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanXFile", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanXFile", __VA_ARGS__)
 
 namespace {
 

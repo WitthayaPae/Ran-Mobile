@@ -27,13 +27,13 @@
 //  loading pages for one wait.
 
 #include <GLES3/gl3.h>
-#include <android/log.h>
+#include "ran_plat.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanSplash", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanSplash", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanSplash", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanSplash", __VA_ARGS__)
 
 extern "C" int  RanGL_Width(void);
 extern "C" int  RanGL_Height(void);

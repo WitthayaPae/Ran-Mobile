@@ -14,6 +14,7 @@
 // data load and the real network path.
 
 #include "stdafx.h"
+#include "../../shim/platform/ran_plat.h"
 
 #include <sys/stat.h>
 #include <time.h>
@@ -40,11 +41,10 @@
 #include "ShaderConstant.h"
 #include "NsOCTree.h"
 
-#include <android/log.h>
 #include <string>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanApp", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanApp", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanApp", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanApp", __VA_ARGS__)
 
 extern "C" void RanShim_SetModulePath(const char *p);
 extern "C" void RanShim_SetClientSize(int w, int h);

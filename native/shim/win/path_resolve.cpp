@@ -15,6 +15,7 @@
 // readdir per component per open would dominate load time.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -24,9 +25,8 @@
 #include <map>
 #include <string>
 #include <mutex>
-#include <android/log.h>
 
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "RanPath", __VA_ARGS__)
+#define LOGW(...) RanPlat_Log(RANLOG_WARN, "RanPath", __VA_ARGS__)
 
 namespace {
 
@@ -169,14 +169,14 @@ extern "C" const char *RanPath_Resolve(const char *in) {
     // Loud on a cadence: if the boot ever appears to hang, the last line printed
     // here says exactly which path the engine was chasing.
     if (((g_walks + g_misses) % 200) == 0)
-        __android_log_print(ANDROID_LOG_INFO, "RanPath", "resolve #%lu %s -> %s%s",
+        RanPlat_Log(RANLOG_INFO, "RanPath", "resolve #%lu %s -> %s%s",
                             g_walks, req.c_str(), cur.c_str(), ok ? "" : "  (MISSING)");
     return g_cache.emplace(req, cur).first->second.c_str();
 }
 
 extern "C" void RanPath_LogStats(void) {
     std::lock_guard<std::mutex> guard(g_lock);
-    __android_log_print(ANDROID_LOG_INFO, "RanPath",
+    RanPlat_Log(RANLOG_INFO, "RanPath",
         "path cache — %zu entries, %lu direct hits, %lu case-walks, %lu not found",
         g_cache.size(), g_hits, g_walks, g_misses);
 }
@@ -199,12 +199,12 @@ extern "C" FILE *ran_fopen(const char *path, const char *mode) {
     if (strstr(path, "cVer") || strstr(path, "cver")) {
         long sz = -1;
         if (f) { fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET); }
-        __android_log_print(ANDROID_LOG_INFO, "RanOpen", "version file: %s -> %s size=%ld",
+        RanPlat_Log(RANLOG_INFO, "RanOpen", "version file: %s -> %s size=%ld",
                             path, f ? real : "FAILED", sz);
     }
     static unsigned n = 0;
     if (!f) {
-        __android_log_print(ANDROID_LOG_ERROR, "RanOpen", "%s %s -> FAILED (resolved: %s, errno %d)",
+        RanPlat_Log(RANLOG_ERROR, "RanOpen", "%s %s -> FAILED (resolved: %s, errno %d)",
                             mode, path, real ? real : "?", errno);
         //  A path that looks right but will not open usually has an invisible
         //  character on the end, so the bytes are dumped rather than the text.
@@ -214,21 +214,21 @@ extern "C" FILE *ran_fopen(const char *path, const char *mode) {
             size_t from = n > 6 ? n - 6 : 0;
             for (size_t i = from, k = 0; i < n && k + 3 < sizeof(hex); ++i, k += 3)
                 snprintf(hex + k, sizeof(hex) - k, "%02X ", (unsigned char)real[i]);
-            __android_log_print(ANDROID_LOG_ERROR, "RanOpen", "    len=%zu tail=%s", n, hex);
+            RanPlat_Log(RANLOG_ERROR, "RanOpen", "    len=%zu tail=%s", n, hex);
             //  Same bytes through a literal, to tell a bad string from a bad
             //  environment.
             char full[256] = {0};
             for (size_t i = 0, k = 0; i < n && k + 3 < sizeof(full); ++i, k += 3)
                 snprintf(full + k, sizeof(full) - k, "%02X ", (unsigned char)real[i]);
-            __android_log_print(ANDROID_LOG_ERROR, "RanOpen", "    hex=%s", full);
+            RanPlat_Log(RANLOG_ERROR, "RanOpen", "    hex=%s", full);
             FILE *again = fopen(real, mode);
-            __android_log_print(ANDROID_LOG_ERROR, "RanOpen", "    retry same string: %s (errno %d)",
+            RanPlat_Log(RANLOG_ERROR, "RanOpen", "    retry same string: %s (errno %d)",
                                 again ? "OK" : "FAILED", again ? 0 : errno);
             if (again) fclose(again);
         }
     } else if (n < 300) {
         ++n;
-        __android_log_print(ANDROID_LOG_INFO, "RanOpen", "%s %s -> %s", mode, path, real);
+        RanPlat_Log(RANLOG_INFO, "RanOpen", "%s %s -> %s", mode, path, real);
     }
     return f;
 }
@@ -236,14 +236,14 @@ extern "C" FILE *ran_fopen(const char *path, const char *mode) {
 // Called from CIniLoader's parse loop (RAN_MOBILE only) so a stall inside ini
 // parsing is visible instead of silent.
 extern "C" void RanLog_IniProgress(const char *file, unsigned lines) {
-    __android_log_print(ANDROID_LOG_INFO, "RanIni", "%s: %u lines", file ? file : "?", lines);
+    RanPlat_Log(RANLOG_INFO, "RanIni", "%s: %u lines", file ? file : "?", lines);
 }
 
 // Reports the result of a recursive file-tree scan (TextureManager and friends).
 // An empty tree is a silent failure on device: every later lookup misses and the
 // screen just stays blank, so the count is logged where the scan happens.
 extern "C" void RanLog_FileTree(const char *path, int count) {
-    __android_log_print(count ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, "RanTree",
+    RanPlat_Log(count ? RANLOG_INFO : RANLOG_ERROR, "RanTree",
                         "%s: %d files", path ? path : "?", count);
 }
 
@@ -251,20 +251,20 @@ extern "C" void RanLog_FileTree(const char *path, int count) {
 // a file under the user profile; here that path does not exist, so logcat is the
 // only place they can be seen.
 extern "C" void RanLog_Engine(const char *msg) {
-    __android_log_print(ANDROID_LOG_WARN, "RanEngine", "%s", msg ? msg : "");
+    RanPlat_Log(RANLOG_WARN, "RanEngine", "%s", msg ? msg : "");
 }
 
 // What a map load produced: frame count and leaf-node count. An empty screen
 // with a "successful" load is otherwise indistinguishable from a failed one.
 extern "C" void RanLog_Land(const char *file, int frames, int leafNodes) {
-    __android_log_print(frames ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, "RanLand",
+    RanPlat_Log(frames ? RANLOG_INFO : RANLOG_ERROR, "RanLand",
                         "%s: %d frames, %d leaf nodes", file ? file : "?", frames, leafNodes);
 }
 
 // What the .wld0 sidecar produced. The .wld holds only the octree skeleton; if
 // these counts are zero the map is loaded but has no geometry to draw.
 extern "C" void RanLog_StaticMesh(int solid, int alpha, int softAlpha) {
-    __android_log_print((solid || alpha || softAlpha) ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
+    RanPlat_Log((solid || alpha || softAlpha) ? RANLOG_INFO : RANLOG_ERROR,
                         "RanMesh", "static mesh: %d solid, %d alpha, %d soft-alpha",
                         solid, alpha, softAlpha);
 }
@@ -272,13 +272,13 @@ extern "C" void RanLog_StaticMesh(int solid, int alpha, int softAlpha) {
 // Stream position at each section boundary of a .wld load. A desync shows up as
 // the exact section whose byte count went wrong.
 extern "C" void RanLog_Section(const char *name, long pos) {
-    __android_log_print(ANDROID_LOG_INFO, "RanWld", "%-18s @ %ld", name ? name : "?", pos);
+    RanPlat_Log(RANLOG_INFO, "RanWld", "%-18s @ %ld", name ? name : "?", pos);
 }
 
 // A serialized element count. An absurd value is the signature of a stream that
 // desynced earlier, and names the section that did it.
 extern "C" void RanLog_Count(const char *what, unsigned count, long pos) {
-    __android_log_print(ANDROID_LOG_INFO, "RanWld", "%s: %u (@ %ld)", what ? what : "?", count, pos);
+    RanPlat_Log(RANLOG_INFO, "RanWld", "%s: %u (@ %ld)", what ? what : "?", count, pos);
 }
 
 // One line per static-mesh tree node visited, and whether the frustum kept it.
@@ -288,8 +288,8 @@ extern "C" void RanLog_Cull(int culled, float maxx, float maxy, float maxz,
     static int n = 0;
     if (n >= 12) return;
     ++n;
-    if (culled) __android_log_print(ANDROID_LOG_INFO, "RanCull", "  -> culled");
-    else __android_log_print(ANDROID_LOG_INFO, "RanCull",
+    if (culled) RanPlat_Log(RANLOG_INFO, "RanCull", "  -> culled");
+    else RanPlat_Log(RANLOG_INFO, "RanCull",
                              "node max(%.0f,%.0f,%.0f) min(%.0f,%.0f,%.0f)",
                              maxx, maxy, maxz, minx, miny, minz);
 }
@@ -302,7 +302,7 @@ extern "C" void RanLog_CV(float ex, float ey, float ez, float fov, float w, floa
     static int n = 0;
     if (n >= 3) return;
     ++n;
-    __android_log_print(ANDROID_LOG_INFO, "RanCV",
+    RanPlat_Log(RANLOG_INFO, "RanCV",
                         "eye(%.1f,%.1f,%.1f) fov=%.3f %.0fx%.0f near(%.3f,%.3f,%.3f,%.1f) left(%.3f,%.3f,%.3f,%.1f)",
                         ex, ey, ez, fov, w, h, na, nb, nc, nd, la, lb, lc, ld);
 }
@@ -314,21 +314,21 @@ extern "C" void RanPath_ProbeVersionFile(void) {
     const char *paths[] = { "/sdcard/ran/cVer.bin", "/sdcard/ran/param.ini" };
     for (int i = 0; i < 2; ++i) {
         FILE *f = fopen(paths[i], "rb");
-        __android_log_print(f ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR, "RanProbe",
+        RanPlat_Log(f ? RANLOG_INFO : RANLOG_ERROR, "RanProbe",
                             "%s -> %s (errno %d)", paths[i], f ? "OK" : "FAILED", f ? 0 : errno);
         if (f) fclose(f);
     }
     int open = 0;
     DIR *d = opendir("/proc/self/fd");
     if (d) { while (readdir(d)) ++open; closedir(d); }
-    __android_log_print(ANDROID_LOG_INFO, "RanProbe", "open descriptors: %d", open);
+    RanPlat_Log(RANLOG_INFO, "RanProbe", "open descriptors: %d", open);
 }
 
 // The login feedback, as the client sees it: the server's verdict, whether the
 // local version file could be read, and the two version pairs it compares.
 extern "C" void RanLog_Login(int result, int verFileOk, int clientPatch, int clientGame,
                              int serverPatch, int serverGame) {
-    __android_log_print(ANDROID_LOG_INFO, "RanLogin",
+    RanPlat_Log(RANLOG_INFO, "RanLogin",
                         "result=%d verFile=%s client=(%d,%d) server=(%d,%d)",
                         result, verFileOk ? "ok" : "UNREADABLE",
                         clientPatch, clientGame, serverPatch, serverGame);

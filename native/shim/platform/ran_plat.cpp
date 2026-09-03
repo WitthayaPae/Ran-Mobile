@@ -21,6 +21,33 @@ int        g_next = 0;
 
 }   // namespace
 
+//  The one genuinely platform-conditional thing in this file. __ANDROID__ is
+//  defined by the NDK; anything else gets stderr, which is what a Mac console
+//  and Xcode both read.
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+#include <stdarg.h>
+
+extern "C" void RanPlat_Log ( int level, const char *tag, const char *fmt, ... )
+{
+    va_list ap;
+    va_start ( ap, fmt );
+#ifdef __ANDROID__
+    const int pri = level == RANLOG_ERROR ? ANDROID_LOG_ERROR
+                  : level == RANLOG_WARN  ? ANDROID_LOG_WARN
+                                          : ANDROID_LOG_INFO;
+    __android_log_vprint ( pri, tag, fmt, ap );
+#else
+    fprintf ( stderr, "%s %s: ",
+              level == RANLOG_ERROR ? "E" : level == RANLOG_WARN ? "W" : "I",
+              tag ? tag : "Ran" );
+    vfprintf ( stderr, fmt, ap );
+    fputc ( 0x0A, stderr );
+#endif
+    va_end ( ap );
+}
+
 extern "C" void RanPlat_SetDiagRoot ( const char *dir )
 {
     if ( !dir || !*dir ) return;

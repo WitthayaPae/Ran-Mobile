@@ -1,16 +1,16 @@
 // TrueType outline reader + scanline rasteriser. See ttf_raster.h for scope.
 
 #include "ttf_raster.h"
+#include "../platform/ran_plat.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp, for matching the face name the client asked for
 #include <math.h>
 #include <dirent.h>
-#include <android/log.h>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanFont", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanFont", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanFont", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanFont", __VA_ARGS__)
 
 namespace {
 

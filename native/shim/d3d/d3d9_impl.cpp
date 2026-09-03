@@ -15,11 +15,11 @@
 
 extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <unwind.h>
 #include <dlfcn.h>
 #include <d3d9.h>
 #include <d3dx9.h>
-#include <android/log.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
 #include <vector>
 #include <string.h>
@@ -29,8 +29,8 @@ extern "C" void RanGLR_ResetShadowBudget(void);
 #include "../gl/gl_context.h"
 #include "../gl/gl_render.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanD3D", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  "RanD3D", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanD3D", __VA_ARGS__)
+#define LOGW(...) RanPlat_Log(RANLOG_WARN,  "RanD3D", __VA_ARGS__)
 
 namespace {
 
@@ -1457,7 +1457,7 @@ public:
           int on = m_renderState[D3DRS_LIGHTING] ? 1 : 0;
           static int lastN = -1;
           if (diag < 40 && (on != lastOn || n != lastN)) { ++diag; lastOn = on; lastN = n;
-            __android_log_print(ANDROID_LOG_INFO, "RanLight", "lighting=%d lights=%d ambient=%.2f,%.2f,%.2f matDiff=%.2f,%.2f,%.2f matAmb=%.2f,%.2f,%.2f",
+            RanPlat_Log(RANLOG_INFO, "RanLight", "lighting=%d lights=%d ambient=%.2f,%.2f,%.2f matDiff=%.2f,%.2f,%.2f matAmb=%.2f,%.2f,%.2f",
               on, n, globalAmbient[0], globalAmbient[1], globalAmbient[2],
               matDiffuse[0], matDiffuse[1], matDiffuse[2], matAmbient[0], matAmbient[1], matAmbient[2]); } }
         //  D3D adds specular after texturing; the renderer does the same.
@@ -1478,7 +1478,7 @@ public:
                               ((fc >> 8) & 0xFF) / 255.0f,
                               (fc & 0xFF) / 255.0f };
         { static int diag = 0; if (diag < 4) { ++diag;
-          __android_log_print(ANDROID_LOG_INFO, "RanFog", "enable=%u mode=%u color=%.2f,%.2f,%.2f start=%.1f end=%.1f density=%.3f",
+          RanPlat_Log(RANLOG_INFO, "RanFog", "enable=%u mode=%u color=%.2f,%.2f,%.2f start=%.1f end=%.1f density=%.3f",
             (unsigned)m_renderState[D3DRS_FOGENABLE], (unsigned)mode, fogColor[0], fogColor[1], fogColor[2],
             asFloat(m_renderState[D3DRS_FOGSTART]), asFloat(m_renderState[D3DRS_FOGEND]), asFloat(m_renderState[D3DRS_FOGDENSITY])); } }
         RanGLR_SetFog(m_renderState[D3DRS_FOGENABLE] ? 1 : 0, (int)mode, fogColor,

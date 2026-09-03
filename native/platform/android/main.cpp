@@ -2,9 +2,9 @@
 // Phase 1: link target only — it pulls the game libraries in so the linker
 // reports every platform symbol that still needs an implementation.
 #include "windows.h"
-#include <android/log.h>
+#include "../../shim/platform/ran_plat.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RAN", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RAN", __VA_ARGS__)
 
 extern "C" void RanShim_SetModulePath(const char *p);
 extern "C" void RanShim_SetClientSize(int w, int h);

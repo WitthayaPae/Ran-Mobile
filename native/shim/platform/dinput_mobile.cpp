@@ -15,14 +15,14 @@
 // event using the current position, and a phone gives both at once.
 
 #include "windows.h"
+#include "ran_plat.h"
 #include <dinput.h>
 
-#include <android/log.h>
 #include <pthread.h>
 #include <string.h>
 #include <deque>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RanInput", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RanInput", __VA_ARGS__)
 
 namespace {
 

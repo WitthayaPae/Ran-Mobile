@@ -18,7 +18,7 @@
 // both exist.
 
 #include <android_native_app_glue.h>
-#include <android/log.h>
+#include "../../shim/platform/ran_plat.h"
 #include <android/native_window.h>
 #include <android/input.h>
 #include <android/keycodes.h>
@@ -30,8 +30,8 @@
 #include <android/native_activity.h>
 #include <android/window.h>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanMain", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanMain", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanMain", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanMain", __VA_ARGS__)
 
 extern "C" int  RanApp_Boot(const char *dataRoot, int width, int height);
 extern "C" int  RanApp_Frame(void);

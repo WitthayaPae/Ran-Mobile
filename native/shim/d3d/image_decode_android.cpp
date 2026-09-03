@@ -14,16 +14,16 @@
 //  bytes, so the path real game textures take is untouched.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 
 #include "image_decode.h"
 
-#include <android/log.h>
 #include <dlfcn.h>
 #include <string.h>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanImg", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanImg", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanImg", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanImg", __VA_ARGS__)
 
 namespace {
 

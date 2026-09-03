@@ -16,7 +16,6 @@
 #include <EGL/egl.h>
 #include <unistd.h>
 #include <GLES3/gl3.h>
-#include <android/log.h>
 #include <pthread.h>
 #include <android/native_window.h>
 
@@ -28,8 +27,8 @@ static int g_depthBits = 24;
 static pthread_t g_ctxThread;
 static bool      g_ctxHeld = false;
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanGL", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanGL", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanGL", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanGL", __VA_ARGS__)
 
 namespace {
 

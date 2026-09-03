@@ -18,16 +18,16 @@
 // reported continuously — otherwise the network thread spins on it.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <winsock2.h>
 
 #include <poll.h>
 #include <errno.h>
 #include <pthread.h>
 #include <sys/socket.h>
-#include <android/log.h>
 #include <map>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RanNet", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RanNet", __VA_ARGS__)
 
 namespace {
 

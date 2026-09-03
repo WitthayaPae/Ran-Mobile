@@ -8,6 +8,7 @@
 // Saving is not implemented: nothing in the client writes .x files.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 #include <dxfile.h>
@@ -15,12 +16,11 @@
 #include "xfile_parse.h"
 
 
-#include <android/log.h>
 #include <string.h>
 #include <string>
 #include <vector>
 
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanXFile", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanXFile", __VA_ARGS__)
 
 // Reads a whole file through the path resolver.
 extern "C" FILE *ran_fopen(const char *path, const char *mode);

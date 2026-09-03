@@ -14,15 +14,15 @@
 // none of them, and a stub that pretends otherwise would be worse than absent.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include "ttf_raster.h"
 
-#include <android/log.h>
 #include <map>
 #include <string>
 #include <vector>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanGdi", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanGdi", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanGdi", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanGdi", __VA_ARGS__)
 
 namespace {
 

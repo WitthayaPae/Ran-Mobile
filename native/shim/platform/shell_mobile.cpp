@@ -16,13 +16,13 @@
 // success in a way that would make a caller act on invented data.
 
 #include "stdafx.h"
+#include "ran_plat.h"
 #include "DXInputString.h"
 #include "IMEEdit.h"
 #include "CommonWeb.h"
 
-#include <android/log.h>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RanShell", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RanShell", __VA_ARGS__)
 
 // ------------------------------------------------------- CIMEEdit (text entry)
 // Phase 4 replaces the body of these with calls into the Android IME. The

@@ -10,10 +10,10 @@
 //  threshold goes straight to the normal allocator.
 
 #include <stdlib.h>
+#include "../platform/ran_plat.h"
 #include <string.h>
 #include <new>
 
-#include <android/log.h>
 #include <dlfcn.h>
 #include <unwind.h>
 
@@ -37,7 +37,7 @@ _Unwind_Reason_Code collect(struct _Unwind_Context *ctx, void *arg) {
 }
 
 void reportAbsurd(size_t size) {
-    __android_log_print(ANDROID_LOG_ERROR, "RanAlloc",
+    RanPlat_Log(RANLOG_ERROR, "RanAlloc",
                         "absurd allocation: %zu bytes (0x%zx) — as text: \"%.8s\"",
                         size, size, (const char *)&size);
 
@@ -49,12 +49,12 @@ void reportAbsurd(size_t size) {
         Dl_info info;
         memset(&info, 0, sizeof(info));
         if (dladdr(pcs[i], &info) && info.dli_fname) {
-            __android_log_print(ANDROID_LOG_ERROR, "RanAlloc", "  #%02d %p %s (%s+%td)",
+            RanPlat_Log(RANLOG_ERROR, "RanAlloc", "  #%02d %p %s (%s+%td)",
                                 i, pcs[i], info.dli_fname,
                                 info.dli_sname ? info.dli_sname : "?",
                                 info.dli_saddr ? (char *)pcs[i] - (char *)info.dli_saddr : 0);
         } else {
-            __android_log_print(ANDROID_LOG_ERROR, "RanAlloc", "  #%02d %p", i, pcs[i]);
+            RanPlat_Log(RANLOG_ERROR, "RanAlloc", "  #%02d %p", i, pcs[i]);
         }
     }
 }

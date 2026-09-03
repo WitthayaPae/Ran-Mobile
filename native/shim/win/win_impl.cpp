@@ -1,5 +1,6 @@
 // Implementation of the Win32 subset the RAN client uses, on Android/POSIX.
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include "mfc_compat.h"
 #include "winsock2.h"
 #include "io.h"
@@ -14,13 +15,12 @@
 #include <sys/time.h>
 #include <errno.h>
 #include <ctype.h>
-#include <android/log.h>
 
 #include <string>
 #include <vector>
 #include <map>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RAN", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO, "RAN", __VA_ARGS__)
 
 static thread_local DWORD g_lastError = 0;
 

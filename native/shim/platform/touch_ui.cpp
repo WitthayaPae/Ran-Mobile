@@ -13,7 +13,6 @@
 #include "../platform/ran_plat.h"
 
 #include <GLES3/gl3.h>
-#include <android/log.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -29,8 +28,8 @@ extern "C" void RanInput_PointerWheel(int dz);
 //  ask, and a pad with no windows over it behaves exactly as it did before.
 extern "C" int RanUI_PointInControl(int x, int y) __attribute__((weak));
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanTouch", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanTouch", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanTouch", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanTouch", __VA_ARGS__)
 
 namespace {
 

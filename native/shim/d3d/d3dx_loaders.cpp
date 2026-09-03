@@ -12,8 +12,8 @@
 // clear "not implemented yet" into a mystery crash later.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3dx9.h>
-#include <android/log.h>
 #include "image_decode.h"
 
 //  Records which file a texture was decoded from, so the renderer can name it.
@@ -31,7 +31,7 @@ extern "C" void RanD3D_NoteCubeTexturePath(IDirect3DCubeTexture9 *tex, const cha
 #include <stdio.h>
 #include <string>
 
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "RanD3DX", __VA_ARGS__)
+#define LOGW(...) RanPlat_Log(RANLOG_WARN, "RanD3DX", __VA_ARGS__)
 
 namespace {
 std::set<std::string> g_seen;

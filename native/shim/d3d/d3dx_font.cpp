@@ -12,18 +12,18 @@
 // uses, so it inherits the GLES backend without special cases.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 
 #include "../win/ttf_raster.h"
 
-#include <android/log.h>
 #include <map>
 #include <string>
 #include <vector>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanD3DXFont", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanD3DXFont", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanD3DXFont", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanD3DXFont", __VA_ARGS__)
 
 // From gdi_text.cpp - the same codepage the GDI text path uses.
 extern "C" int RanText_GetCodePage(void);

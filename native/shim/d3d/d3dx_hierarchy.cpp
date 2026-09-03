@@ -26,7 +26,6 @@
 #include "xfile_parse.h"
 #include "xmesh_build.h"
 
-#include <android/log.h>
 #include <math.h>
 #include <string.h>
 #include <map>
@@ -35,8 +34,8 @@
 #include <vector>
 #include <set>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RanXH", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RanXH", __VA_ARGS__)
+#define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanXH", __VA_ARGS__)
+#define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanXH", __VA_ARGS__)
 
 namespace {
 

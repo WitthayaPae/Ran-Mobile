@@ -24,6 +24,15 @@ void        RanPlat_SetDiagRoot ( const char *dir );
 //  Prefer the two helpers below; they are what almost every use wants.
 const char *RanPlat_DiagPath ( const char *name );
 
+//  Log a line.
+//
+//  Every file in the shim had its own LOGI/LOGE wrapping __android_log_print,
+//  which is one #include and one symbol away from not building anywhere else.
+//  The wrappers stay - they are convenient - but they route through here now,
+//  so a second platform changes one function instead of thirty-eight macros.
+enum { RANLOG_INFO = 0, RANLOG_WARN = 1, RANLOG_ERROR = 2 };
+void        RanPlat_Log ( int level, const char *tag, const char *fmt, ... );
+
 //  Is the flag set? (the file exists)
 int         RanPlat_DiagExists ( const char *name );
 
