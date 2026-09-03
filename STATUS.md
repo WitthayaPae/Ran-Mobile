@@ -106,7 +106,73 @@ At the end of any session that changes something: update **Last updated**, the p
 and add an entry to the log below. Then update the status log in `NATIVE-PORT-PLAN.md` if
 the change was structural.
 
+## Open work
+
+Kept at the top because it is the list that matters. Ordered by what blocks
+what, not by when it was found.
+
+### iOS
+
+1. **First compile.** Every file under `native/platform/ios/`, plus
+   `shim/gl/gl_context_ios.mm` and `shim/d3d/image_decode_ios.mm`, is written
+   against documented APIs and has never seen a compiler. No Mac hardware is
+   needed for this — a GitHub Actions `macos-14` runner has Xcode and the iOS
+   SDK, and `build-ios.sh` is what it would run. Both repos are on GitHub
+   already. What a Mac (or a signing identity) *is* needed for is putting the
+   build on a device.
+2. **Audio.** `shim/platform/dsutil_mobile.cpp` is a stub, and not only on iOS —
+   **the game is silent on Android too.** Shared work: one implementation behind
+   the existing class shapes, AAudio/OpenSL on Android and AudioQueue on iOS.
+3. **`minIos` in the manifest.** `make-manifest.js --min-ios <n>`. The iOS
+   patcher refuses a manifest without it, deliberately, so this has to be
+   published before an iOS client may talk to the live server.
+4. **Signing.** A development profile, TestFlight, or sideloading. Read the
+   copyright section of `IOS-PORT-PLAN.md` first: that decision comes before the
+   work, not after.
+
+### Android
+
+5. **Riding costs half the frame rate, and the shadow fix was not the whole
+   story.** Measured on LDPlayer, 2026-09-03, mounted and standing still:
+
+   ```
+   FRAME sections: world 63.0ms  w:chars 60.3ms  world-eff 6.5ms  w:land 2.4ms
+                   interface 2.3ms  touch-hud 2.5ms  w:charshadow 0.0ms
+   frame budget: 72.6 ms total, 1.6 ms submitting draws (2%)
+   ```
+
+   So it is **not** drawing — submission is 2 ms — and it is not the shadow,
+   which is already skipped. It is CPU inside `m_Character.Render`, which is one
+   character: the player. Draw count barely moves (230 to 260 a frame) while
+   time per draw goes 35 us to 232 us.
+
+   The suspect, unverified: `GLCharacter::Render` (`Lib_Client/G-Logic/
+   GLCharacter.cpp`) has a `m_bVehicle` block that runs `NavigationMesh::
+   IsCollision` three times plus **two `while` loops of up to five more each**,
+   and two `LineOfSightTest` calls — every frame, to tilt the bike to the slope.
+   Read the PC mechanism before touching it.
+
+   One fix serves both platforms: it is in `SOURCE`, which iOS compiles from the
+   same tree. Guard it so the PC build is unchanged.
+
+6. **Tab S9 verification.** Everything since V016 has been checked on LDPlayer
+   only; the tablet has been off adb. The keyboard inset
+   (`RanPlat_ImeInsetPerMille`) in particular cannot be verified on the
+   emulator, which has no on-screen keyboard and reports 0.
+
+7. **Intermittent SIGSEGV** in `RanTexture::LockRect` by way of
+   `RanD3DXFont::glyphFor`. Unattributed, no tombstone kept. The font atlas is
+   locked and written from whichever thread is drawing, and the loading screen
+   draws from its own — a race there fits the shape, but nothing is measured
+   yet. Keep the next tombstone.
+
+8. **Publish the pending patch.** The store at `native/out/launcher_mobile` is
+   version 412 (APK V025, versionCode 42); the working build is well past it.
+
+---
+
 ## Log
+
 
 - **2026-09-03 (later)** — **The platform seams, and the iOS files they made possible.**
 

@@ -1,0 +1,80 @@
+#  Compile the client for iOS on a hosted Mac.
+#
+#  There is no Mac on the development machine, so this runner IS the compiler:
+#  it is what turns every file under native/platform/ios/ from "written against
+#  the documented API" into "known to build". Run it, read the errors, fix them
+#  here, run it again.
+#
+#  It does NOT sign and does NOT produce an installable build. Signing needs an
+#  Apple developer identity, and putting a build on a device needs that identity
+#  or a sideloading tool. Compiling needs neither.
+#
+#  Cost: macOS minutes bill at 10x on a private repository, so this is
+#  deliberately manual (workflow_dispatch) plus a push filter narrow enough that
+#  an Android-only change does not spend anything.
+name: iOS build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/platform/ios/**'
+      - 'native/shim/**'
+      - 'native/CMakeLists.txt'
+      - 'native/build-ios.sh'
+      - '.github/workflows/ios-build.yml'
+
+jobs:
+  build:
+    runs-on: macos-14           #  Xcode 15, iOS 17 SDK, arm64 runner
+    steps:
+      - name: Check out MOBILE
+        uses: actions/checkout@v4
+        with:
+          path: MOBILE
+
+      #  The client source is a separate repository, and CMake expects it as a
+      #  sibling: RAN_SRC is ${CMAKE_CURRENT_SOURCE_DIR}/../../SOURCE.
+      - name: Check out SOURCE
+        uses: actions/checkout@v4
+        with:
+          repository: WitthayaPae/RAN-ASURA-SOURCE
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: SOURCE
+
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          cmake --version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      #  Device slice, arm64, no signing. CODE_SIGNING_ALLOWED=NO is what lets a
+      #  runner with no identity finish the link.
+      - name: Configure and build
+        working-directory: MOBILE/native
+        run: |
+          chmod +x build-ios.sh
+          cmake -S . -B out/ios -G "Unix Makefiles" \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          cmake --build out/ios -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build.log
+
+      #  The whole point on a first run: the errors, kept even when the build
+      #  fails, so they can be worked through on the development machine.
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: MOBILE/native/build.log
+
+      - name: Keep the app bundle
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ran-ios-unsigned
+          path: MOBILE/native/out/ios/ran.app
