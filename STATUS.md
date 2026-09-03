@@ -141,28 +141,22 @@ what, not by when it was found.
 
 ### Android
 
-6. **Riding costs half the frame rate, and the shadow fix was not the whole
-   story.** Measured on LDPlayer, 2026-09-03, mounted and standing still:
+6. **Riding: the specular repaint is fixed, the model is not.** RESOLVED
+   2026-09-04 for the repaint. It was **not** the navmesh slope test I first
+   suspected - that never entered the top ten. It was `EMECF_SPECULAR2`, the
+   multipass cube-map specular, redrawing every vehicle piece whole:
 
    ```
-   FRAME sections: world 63.0ms  w:chars 60.3ms  world-eff 6.5ms  w:land 2.4ms
-                   interface 2.3ms  touch-hud 2.5ms  w:charshadow 0.0ms
-   frame budget: 72.6 ms total, 1.6 ms submitting draws (2%)
+   before  12.4 fps  80.8 ms   veh:parts 54.2ms  part:chareff 27.5ms  alpha 106,440 verts
+   after   17.2 fps  58.2 ms   veh:parts 30.6ms  part:chareff  3.5ms  alpha  29,577 verts
    ```
 
-   So it is **not** drawing — submission is 2 ms — and it is not the shadow,
-   which is already skipped. It is CPU inside `m_Character.Render`, which is one
-   character: the player. Draw count barely moves (230 to 260 a frame) while
-   time per draw goes 35 us to 232 us.
-
-   The suspect, unverified: `GLCharacter::Render` (`Lib_Client/G-Logic/
-   GLCharacter.cpp`) has a `m_bVehicle` block that runs `NavigationMesh::
-   IsCollision` three times plus **two `while` loops of up to five more each**,
-   and two `LineOfSightTest` calls — every frame, to tilt the bike to the slope.
-   Read the PC mechanism before touching it.
-
-   One fix serves both platforms: it is in `SOURCE`, which iOS compiles from the
-   same tree. Guard it so the PC build is unchanged.
+   The repaint now has a 4000-triangle budget (`specbudget` overrides it, 0
+   restores PC behaviour). **What remains is the model**: the BMW S1000RR body
+   is 26,580 triangles for one piece, and drawing it once is still ~24 ms here.
+   That is a LOD question, and `USE_SKINMESH_LOD` is still a stub - `g_dwLOD`
+   is set and never read. Fixing it would pay back on every character, not just
+   vehicles.
 
 7. **Tab S9 verification.** Everything since V016 has been checked on LDPlayer
    only; the tablet has been off adb. The keyboard inset
