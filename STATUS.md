@@ -5123,3 +5123,37 @@ disabled with `pm disable-user` on the emulator. Both kept stealing the
 foreground mid-test, and one whole round of "the button does not work" was
 actually taps landing in the Play Store. Re-enable with `pm enable` if the
 emulator is wanted for anything else.
+
+### The ride button is now one of the pad's own buttons
+
+It was a client UI control with a texture, so it could only ever look
+*approximately* like the joystick, the attack ring and the mode toggles - those
+are drawn by the overlay in GL, from the same palette and the same primitives.
+Approximately similar is exactly what it looked like: first a socket outline,
+then a 30 px item sprite stretched on a flat disc.
+
+It is now `RANTOUCH_SLOT_VEHICLE`, an overlay button with the same face, rim and
+press behaviour as auto-target and PK, and a motorcycle drawn with the same
+primitives `artSword` and `artChest` use - `drawRing`, `drawCapsule`, `artPoly`,
+in `kSteel` / `kBlade` / `kEdge` with `kGold` accents.
+
+The split: **the client says where, the overlay says how big and how it looks.**
+The button belongs beside the chat and the chat is dragged, so only the centre
+can come from the client; taking the radius and the drawing from the overlay is
+what makes it identical to its neighbours by construction instead of by eye.
+
+Two attempts it took to make the glyph read at button size, both worth keeping:
+
+* dark tyres on a dark face vanish - the wheels have to be the *light* part, or
+  it is a blob with two smudges;
+* filling the body pale is the same mistake - only the top edges are lit, and
+  the shape is three pieces (a tail humping over the rear wheel, a tank, a
+  fairing dropping to the front) because two pieces read as a bicycle.
+
+The press is handled where every other pad button is, as `nKey = DIK_V`. This
+also retires the client-side control, its two XML entries, its two DDS textures
+and their generator - and with them the ordering trap where a control positioned
+after `CUIGroup::Update` drew in one place and hit-tested in another.
+
+**Verified on LDPlayer:** the button sits beside the chat in the pad's own
+livery, and pressing it puts the character on the bike.

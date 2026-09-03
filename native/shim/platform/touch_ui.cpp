@@ -87,9 +87,16 @@ const int kSlotAuto     = RANTOUCH_SLOT_AUTO;
 const int kSlotPK       = RANTOUCH_SLOT_PK;
 const int kSlotPickup   = RANTOUCH_SLOT_PICKUP;
 const int kSlotCamLock  = RANTOUCH_SLOT_CAMLOCK;
+const int kSlotVehicle  = RANTOUCH_SLOT_VEHICLE;
 
-//  Attack, two page arrows, the auto-target and PK toggles, and pick-up.
-const int kButtonCount = 7;
+//  Attack, two page arrows, the auto-target and PK toggles, pick-up, camera
+//  lock, and the ride button.
+const int kButtonCount = 8;
+
+//  The ride button is placed by the client, not by layout(): it lives beside
+//  the chat window, which the player drags. Hidden until the client says where.
+bool  g_vehShow = false;
+float g_vehFracX = 0.0f, g_vehFracY = 0.0f;
 Button g_buttons[kButtonCount];
 
 //  Rims over the client's skill slots, in surface pixels. Filled in by the
@@ -721,6 +728,13 @@ void layout() {
     g_buttons[5].centre.y = attackY + g_unit * 0.52f + g_unit * 0.30f;
     g_buttons[5].radius   = modeR;
     g_buttons[5].slot     = kSlotPickup;
+
+    //  Same radius as the mode toggles, so it is the same button; only its
+    //  centre comes from somewhere else.
+    g_buttons[7].radius = modeR;
+    g_buttons[7].slot   = kSlotVehicle;
+    g_buttons[7].centre.x = g_vehFracX * (float) g_width;
+    g_buttons[7].centre.y = g_vehFracY * (float) g_height;
 }
 
 bool hit(const Vec2 &c, float r, float x, float y) {
@@ -806,6 +820,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
 
     for (int i = 0; i < kButtonCount; ++i) {
         Button &b = g_buttons[i];
+        if (b.slot == kSlotVehicle && !g_vehShow) continue;
         if (b.pointer < 0 && hit(b.centre, b.radius, x, y)) {
             b.pointer = id;
             b.down = true;
@@ -1290,6 +1305,72 @@ void artCrossed(float ox, float oy, float r, bool detail, float a) {
 }
 
 //  The chest.
+//  A motorcycle, side on, in the same steel-and-gold the other glyphs use.
+//
+//  Drawn rather than blitted so it is the same object as the attack ring and
+//  the mode toggles: same face, same rim, same palette, and it stays sharp at
+//  any button size instead of being a 30 px sprite stretched over a disc.
+void artBike(float ox, float oy, float r, float a) {
+    const Col dark  = alpha(kDark,   a);
+    const Col rim   = alpha(kSteel,  a);
+    const Col spoke = alpha(kBladeD, a);
+    const Col body  = alpha(kBlade,  a);
+    const Col bodyL = alpha(kEdge,   a);
+    const Col gold  = alpha(kGold,   a);
+    const Col goldH = alpha(kGoldH,  a);
+
+    const float RW = -0.56f, FW = 0.60f, WY = 0.36f;
+    const float TO = 0.38f, TI = 0.22f;
+
+    //  Wheels are the light part. Dark tyres on a dark face vanish at button
+    //  size - the first cut of this glyph read as a blob with two smudges.
+    drawRing(ox + r*RW, oy + r*WY, r*TI, r*TO, rim.r, rim.g, rim.b, rim.a);
+    drawRing(ox + r*FW, oy + r*WY, r*TI, r*TO, rim.r, rim.g, rim.b, rim.a);
+    drawRing(ox + r*RW, oy + r*WY, 0.0f, r*TI, dark.r, dark.g, dark.b, dark.a * 0.9f);
+    drawRing(ox + r*FW, oy + r*WY, 0.0f, r*TI, dark.r, dark.g, dark.b, dark.a * 0.9f);
+    drawCapsule(ox + r*(RW-TI), oy + r*WY, ox + r*(RW+TI), oy + r*WY, r*0.032f, spoke);
+    drawCapsule(ox + r*(FW-TI), oy + r*WY, ox + r*(FW+TI), oy + r*WY, r*0.032f, spoke);
+    drawRing(ox + r*RW, oy + r*WY, 0.0f, r*0.070f, gold.r, gold.g, gold.b, gold.a);
+    drawRing(ox + r*FW, oy + r*WY, 0.0f, r*0.070f, gold.r, gold.g, gold.b, gold.a);
+
+    //  Swing arm and fork.
+    drawCapsule(ox + r*RW, oy + r*WY, ox - r*0.04f, oy + r*0.14f, r*0.055f, body);
+    drawCapsule(ox + r*FW, oy + r*WY, ox + r*0.42f, oy - r*0.18f, r*0.060f, body);
+
+    //  Three pieces, which is what makes it a motorcycle rather than a bicycle:
+    //  a tail that humps up over the back wheel, a tank in the middle, and a
+    //  fairing dropping to the front.
+    const float tail[] = { -0.72f,-0.06f, -0.46f,-0.26f, -0.16f,-0.20f,
+                           -0.10f, 0.02f, -0.44f, 0.08f, -0.72f, 0.04f };
+    const float tank[] = { -0.20f,-0.20f,  0.10f,-0.30f,  0.34f,-0.24f,
+                            0.32f, 0.02f, -0.06f, 0.08f, -0.22f, 0.00f };
+    const float cowl[] = {  0.30f,-0.28f,  0.52f,-0.34f,  0.62f,-0.16f,
+                            0.54f, 0.06f,  0.38f, 0.02f,  0.32f,-0.12f };
+    artPoly(ox, oy, r, 0.0f, 1.0f, tail, 6, body,  a);
+    artPoly(ox, oy, r, 0.0f, 1.0f, tank, 6, body,  a);
+    artPoly(ox, oy, r, 0.0f, 1.0f, cowl, 6, body,  a);
+
+    //  Lit top edges only; filling any of them pale turns it back into a blob.
+    const float tailL[] = { -0.72f,-0.06f, -0.46f,-0.26f, -0.16f,-0.20f,
+                            -0.18f,-0.13f, -0.45f,-0.18f, -0.72f, 0.00f };
+    const float tankL[] = { -0.20f,-0.20f,  0.10f,-0.30f,  0.34f,-0.24f,
+                             0.33f,-0.17f,  0.10f,-0.23f, -0.19f,-0.13f };
+    const float cowlL[] = {  0.30f,-0.28f,  0.52f,-0.34f,  0.62f,-0.16f,
+                             0.55f,-0.14f,  0.50f,-0.26f,  0.33f,-0.21f };
+    artPoly(ox, oy, r, 0.0f, 1.0f, tailL, 6, bodyL, a);
+    artPoly(ox, oy, r, 0.0f, 1.0f, tankL, 6, bodyL, a);
+    artPoly(ox, oy, r, 0.0f, 1.0f, cowlL, 6, bodyL, a);
+
+    //  Bars, and the screen as the one gold flash up front.
+    drawCapsule(ox + r*0.18f, oy - r*0.44f, ox + r*0.44f, oy - r*0.36f, r*0.048f, rim);
+    const float scr[] = { 0.34f,-0.32f,  0.50f,-0.42f,  0.58f,-0.30f,  0.44f,-0.22f };
+    artPoly(ox, oy, r, 0.0f, 1.0f, scr, 4, goldH, a * 0.9f);
+
+    //  Exhaust along the bottom, warm against all that steel.
+    drawCapsule(ox - r*0.02f, oy + r*0.14f, ox - r*0.50f, oy + r*0.20f, r*0.055f, gold);
+    drawCapsule(ox - r*0.02f, oy + r*0.14f, ox - r*0.28f, oy + r*0.17f, r*0.022f, goldH);
+}
+
 void artChest(float ox, float oy, float r, float a, bool chev) {
     const float si = 0.0f, co = 1.0f;
     if (chev) {
@@ -1610,6 +1691,8 @@ void RanTouch_Render(void) {
 
     for (int i = 0; i < kButtonCount; ++i) {
         const Button &b = g_buttons[i];
+        //  Not placed by the client yet - outside the world, or no chat.
+        if (b.slot == kSlotVehicle && !g_vehShow) continue;
         //  A press shrinks the button and brightens its rim. It used to change
         //  alpha only, which is invisible against a moving scene.
         const float press = b.down ? 0.94f : 1.0f;
@@ -1658,6 +1741,8 @@ void RanTouch_Render(void) {
         if (pk)        artCrossed(b.centre.x, b.centre.y, R * 0.60f, false, b.toggled ? 1.0f : 0.80f);
         else if (loot) artChest(b.centre.x, b.centre.y + R * 0.30f, R * 0.46f,
                                 b.toggled ? 1.0f : 0.82f, true);
+        else if (b.slot == kSlotVehicle)
+                       artBike(b.centre.x, b.centre.y, R * 0.68f, b.toggled ? 1.0f : 0.90f);
         else           glyphMark(b, b.toggled ? 1.0f : 0.88f);
     }
 
@@ -1807,6 +1892,16 @@ extern "C" void RanTouch_GetAttackCircle(float *cx, float *cy, float *r) {
 }
 
 //  The tray owns the tab index; the overlay only draws it.
+extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show) {
+    g_vehShow  = show != 0;
+    g_vehFracX = cx;
+    g_vehFracY = cy;
+    if (g_inited) {
+        g_buttons[7].centre.x = cx * (float) g_width;
+        g_buttons[7].centre.y = cy * (float) g_height;
+    }
+}
+
 extern "C" void RanTouch_SetSkillPage(int page) {
     g_skillPage = (page >= 1 && page <= 9) ? page : 0;
 }

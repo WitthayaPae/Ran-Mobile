@@ -48,6 +48,7 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot);
 #define RANTOUCH_SLOT_PK          (-5)
 #define RANTOUCH_SLOT_PICKUP      (-6)
 #define RANTOUCH_SLOT_CAMLOCK     (-7)
+#define RANTOUCH_SLOT_VEHICLE     (-8)
 
 //  Where the client put its quick-skill slots, as fractions of the surface, so
 //  the overlay can draw a round rim over each one.
@@ -71,6 +72,15 @@ extern "C" void RanTouch_SetSkillCircles(int count, const float *cx,
 //  Light a toggle button up. The overlay does not decide whether auto-target or
 //  PK is on - the client owns that - so it has to be told what to draw.
 extern "C" void RanTouch_SetToggle(int slot, int on);
+
+//  Where to put the ride button, as a fraction of the surface, and whether to
+//  show it at all.
+//
+//  The client owns the position because the button belongs beside the chat and
+//  the chat is dragged and resized; the overlay owns the size and the drawing,
+//  so it comes out identical to the attack ring and the mode toggles rather
+//  than merely similar to them.
+extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
 
 //  Which skill page the tray is showing, 1..4, for the page readout.
 extern "C" void RanTouch_SetSkillPage(int page);
