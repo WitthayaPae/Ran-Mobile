@@ -126,13 +126,22 @@ what, not by when it was found.
 3. **`minIos` in the manifest.** `make-manifest.js --min-ios <n>`. The iOS
    patcher refuses a manifest without it, deliberately, so this has to be
    published before an iOS client may talk to the live server.
-4. **Signing.** A development profile, TestFlight, or sideloading. Read the
+4. **No S3TC on Apple GPUs.** The shipped textures are DXT1/3/5, and no Apple
+   GPU has ever exposed `GL_EXT_texture_compression_s3tc`. `haveS3TC()` in
+   `gl_render.cpp` already detects this by extension string and falls back to
+   decoding every block on the CPU, so iOS will *work* the day it builds - but
+   at 4x the texture memory and a CPU cost per load. The real answer is
+   transcoding the store to ASTC, which every iOS device since the A8
+   supports; that is a patch-store change, not a client one. Expect this to be
+   the first thing the simulator shows.
+
+5. **Signing.** A development profile, TestFlight, or sideloading. Read the
    copyright section of `IOS-PORT-PLAN.md` first: that decision comes before the
    work, not after.
 
 ### Android
 
-5. **Riding costs half the frame rate, and the shadow fix was not the whole
+6. **Riding costs half the frame rate, and the shadow fix was not the whole
    story.** Measured on LDPlayer, 2026-09-03, mounted and standing still:
 
    ```
@@ -155,18 +164,18 @@ what, not by when it was found.
    One fix serves both platforms: it is in `SOURCE`, which iOS compiles from the
    same tree. Guard it so the PC build is unchanged.
 
-6. **Tab S9 verification.** Everything since V016 has been checked on LDPlayer
+7. **Tab S9 verification.** Everything since V016 has been checked on LDPlayer
    only; the tablet has been off adb. The keyboard inset
    (`RanPlat_ImeInsetPerMille`) in particular cannot be verified on the
    emulator, which has no on-screen keyboard and reports 0.
 
-7. **Intermittent SIGSEGV** in `RanTexture::LockRect` by way of
+8. **Intermittent SIGSEGV** in `RanTexture::LockRect` by way of
    `RanD3DXFont::glyphFor`. Unattributed, no tombstone kept. The font atlas is
    locked and written from whichever thread is drawing, and the loading screen
    draws from its own — a race there fits the shape, but nothing is measured
    yet. Keep the next tombstone.
 
-8. **Publish the pending patch.** The store at `native/out/launcher_mobile` is
+9. **Publish the pending patch.** The store at `native/out/launcher_mobile` is
    version 412 (APK V025, versionCode 42); the working build is well past it.
 
 ---
