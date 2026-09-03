@@ -42,7 +42,17 @@
         </dict>
     </dict>
 
-    <key>UILaunchStoryboardName</key>        <string>LaunchScreen</string>
+    <!--  The launch screen, without a storyboard file: a storyboard has to be
+          compiled by ibtool, which would put a Mac-only step in the middle of
+          the CMake build for a screen that is on screen for one frame. The
+          UILaunchScreen dictionary (iOS 13+) needs no file at all.
+
+          Black on purpose - it hands straight over to RanSplash_Begin, which
+          draws the boot art. Same handover as Android's bootcover.bin.  -->
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>               <string></string>
+    </dict>
     <key>UIRequiredDeviceCapabilities</key>
     <array>
         <string>arm64</string>

@@ -15,6 +15,7 @@
 #import <OpenGLES/ES3/gl.h>
 
 #include "../../shim/platform/ran_plat.h"
+#include "ran_ios_patch.h"
 
 //  The same surface android_main.cpp uses. None of it is Android-specific.
 extern "C" {
@@ -322,6 +323,98 @@ extern "C" void RanIME_SetNumeric ( int numeric )
 //  variable rather than a JNI round trip, and needs no throttle.
 extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 
+//  ------------------------------------------------------------ patch screen
+//
+//  What RanLauncher's page is on Android: the only thing on screen until the
+//  data is up to date, and then it hands straight over to the game. Text only —
+//  the Android page's art is packed in Gui.rcc, which is itself part of what
+//  the patcher is downloading, so it cannot be drawn before the patch runs.
+
+@interface RanPatchViewController : UIViewController
+@property (nonatomic, strong) UILabel *status, *detail;
+@property (nonatomic, strong) UIProgressView *bar;
+@end
+
+@implementation RanPatchViewController
+
+- (BOOL)prefersStatusBarHidden { return YES; }
+
+- (void)viewDidLoad
+{
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.blackColor;
+
+    self.status = [UILabel new];
+    self.status.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
+    self.status.textColor = UIColor.whiteColor;
+    self.status.textAlignment = NSTextAlignmentCenter;
+
+    self.detail = [UILabel new];
+    self.detail.font = [UIFont systemFontOfSize:14];
+    self.detail.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
+    self.detail.textAlignment = NSTextAlignmentCenter;
+    self.detail.numberOfLines = 0;
+
+    self.bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:
+                            @[self.status, self.detail, self.bar]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 12;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:60],
+        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-60],
+    ]];
+
+    [self run];
+}
+
+- (void)run
+{
+    __weak RanPatchViewController *weakSelf = self;
+    RanIOS_RunPatch (
+        ^(NSString *status, NSString *detail, int permille) {
+            dispatch_async ( dispatch_get_main_queue(), ^{
+                RanPatchViewController *me = weakSelf;
+                if (!me) return;
+                //  nil leaves the line as it was: the file loop updates only the
+                //  detail, hundreds of times.
+                if (status) me.status.text = status;
+                if (detail) me.detail.text = detail;
+                me.bar.hidden = (permille < 0);
+                if (permille >= 0) [me.bar setProgress:permille / 1000.0f animated:NO];
+            });
+        },
+        ^(BOOL ok, NSString *error) {
+            dispatch_async ( dispatch_get_main_queue(), ^{
+                RanPatchViewController *me = weakSelf;
+                if (!me) return;
+                if (ok) { [me handOver]; return; }
+                //  A failed patch is a dead end, not a warning: the client would
+                //  read half-updated data. Same stance as the Java.
+                me.status.text = @"Update failed";
+                me.detail.text = error ?: @"unknown error";
+                me.bar.hidden = YES;
+                RanPlat_Log ( RANLOG_ERROR, "RanPatch", "%s",
+                              error ? error.UTF8String : "unknown error" );
+            });
+        });
+}
+
+//  Straight swap, no animation: on Android the equivalent transition showing a
+//  loading screen between the two was the thing the player disliked.
+- (void)handOver
+{
+    RanViewController *game = [RanViewController new];
+    g_vc = game;
+    self.view.window.rootViewController = game;
+}
+
+@end
+
 //  --------------------------------------------------------------- app entry
 
 @interface RanAppDelegate : UIResponder <UIApplicationDelegate>
@@ -338,9 +431,9 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     app.idleTimerDisabled = YES;                 //  FLAG_KEEP_SCREEN_ON
 
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    RanViewController *vc = [RanViewController new];
-    g_vc = vc;
-    self.window.rootViewController = vc;
+    //  The patcher first, exactly as the launcher activity comes before the
+    //  game activity on Android. It replaces itself with the game.
+    self.window.rootViewController = [RanPatchViewController new];
     [self.window makeKeyAndVisible];
     return YES;
 }

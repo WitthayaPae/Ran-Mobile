@@ -154,6 +154,15 @@ const arg = (name, fallback) => {
 };
 const versionArg = parseInt(arg('version', ''), 10);
 const minApk = parseInt(arg('min-apk', '1'), 10);
+/*  The iOS build gate, and deliberately absent unless asked for.
+ *
+ *  minApk is an Android versionCode and says nothing about an iOS build, so
+ *  the iOS patcher refuses a manifest that has no minIos of its own rather
+ *  than guessing - see MOBILE/native/platform/ios/ran_ios_patch.mm. Omitted by
+ *  default so that a publish made before iOS ships is byte-for-byte what it
+ *  was, and no Android client sees a pointless version bump.                 */
+const minIosArg = arg('min-ios', '');
+const minIos = minIosArg ? parseInt(minIosArg, 10) : null;
 /*  One name, every release: a download link to it never has to be reissued, and
     nobody has to work out which of several files is current. Which release it
     is lives inside, in versionCode and versionName.                           */
@@ -489,6 +498,7 @@ if (Number.isFinite(versionArg)) {
 
 let signed = 0;   //  signature length, 0 when the payload is unsigned
 const manifest = { version: version, minApk: minApk, files: files };
+if (minIos !== null) manifest.minIos = minIos;
 if (apk) manifest.apk = apk;
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
 
@@ -642,6 +652,7 @@ console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept +
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
             (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
+if (minIos !== null) console.log('           minIos: ' + minIos);
 console.log('upload   : ' + global.__uploadSummary);
 console.log('apk      : ' + (apk
   ? 'versionCode ' + apk.versionCode + ' "' + apk.versionName + '", ' + mb(apk.size)
