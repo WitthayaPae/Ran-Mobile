@@ -62,10 +62,8 @@ static int  g_imeInsetPerMille = 0;
 @end
 
 @interface RanViewController : UIViewController <UIKeyInput>
-@property (nonatomic, strong) EAGLContext   *gl;
 @property (nonatomic, strong) CADisplayLink *link;
 @property (nonatomic, assign) BOOL           booted;
-@property (nonatomic, assign) GLuint         fbo, colorRB, depthRB;
 @property (nonatomic, assign) CFTimeInterval lastTick;
 @end
 
@@ -85,24 +83,12 @@ static int  g_imeInsetPerMille = 0;
     [super viewDidLoad];
     self.view.multipleTouchEnabled = YES;
 
+    //  The layer is all the platform owes the shim. RanGL_Init makes the EAGL
+    //  context, the framebuffer and the renderbuffers, exactly as it makes the
+    //  EGL surface on Android - so there is one place that knows how a frame is
+    //  presented, and it is not this file.
     CAEAGLLayer *layer = (CAEAGLLayer *)self.view.layer;
-    layer.opaque = YES;
-    //  Nothing retained between frames: the client redraws the world every
-    //  frame, so a retained backing is memory for no gain.
-    layer.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking : @NO,
-                                  kEAGLDrawablePropertyColorFormat     : kEAGLColorFormatRGBA8 };
     layer.contentsScale = UIScreen.mainScreen.nativeScale;
-
-    //  ES 3.0: iOS has no 3.1. That is why the renderer treats the separate
-    //  attribute format as optional and falls back - see g_haveAttribFormat,
-    //  already exercised on Android drivers that lack it.
-    self.gl = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3];
-    if (!self.gl || ![EAGLContext setCurrentContext:self.gl]) {
-        RanPlat_Log ( RANLOG_ERROR, "RanIOS", "no ES3 context" );
-        return;
-    }
-
-    [self makeFramebuffer:layer];
 
     if (!RanGL_Init ( (__bridge void *)layer )) {
         RanPlat_Log ( RANLOG_ERROR, "RanIOS", "RanGL_Init failed" );
@@ -128,41 +114,10 @@ static int  g_imeInsetPerMille = 0;
     [self.link addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];
 }
 
-- (void)makeFramebuffer:(CAEAGLLayer *)layer
-{
-    glGenFramebuffers ( 1, &_fbo );
-    glBindFramebuffer ( GL_FRAMEBUFFER, _fbo );
-
-    glGenRenderbuffers ( 1, &_colorRB );
-    glBindRenderbuffer ( GL_RENDERBUFFER, _colorRB );
-    [self.gl renderbufferStorage:GL_RENDERBUFFER fromDrawable:layer];
-    glFramebufferRenderbuffer ( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                GL_RENDERBUFFER, _colorRB );
-
-    GLint w = 0, h = 0;
-    glGetRenderbufferParameteriv ( GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH,  &w );
-    glGetRenderbufferParameteriv ( GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &h );
-
-    //  24-bit depth with 8-bit stencil, because the shadow and water passes use
-    //  stencil - the same thing the EGL config asks for on Android.
-    glGenRenderbuffers ( 1, &_depthRB );
-    glBindRenderbuffer ( GL_RENDERBUFFER, _depthRB );
-    glRenderbufferStorage ( GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h );
-    glFramebufferRenderbuffer ( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                GL_RENDERBUFFER, _depthRB );
-    glFramebufferRenderbuffer ( GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                                GL_RENDERBUFFER, _depthRB );
-
-    RanPlat_Log ( RANLOG_INFO, "RanIOS", "drawable %dx%d", (int)w, (int)h );
-}
-
 //  The frame loop. android_main owns a while(); here CADisplayLink owns it and
 //  calls in. That is the one structural difference between the two files.
 - (void)tick:(CADisplayLink *)link
 {
-    [EAGLContext setCurrentContext:self.gl];
-    glBindFramebuffer ( GL_FRAMEBUFFER, _fbo );
-
     const CFTimeInterval now = link.timestamp;
     const float dt = self.lastTick > 0 ? (float)(now - self.lastTick) : 0.0f;
     self.lastTick = now;
@@ -182,8 +137,7 @@ static int  g_imeInsetPerMille = 0;
     RanInput_PumpButtons ();
     if (!RanApp_Frame ()) return;
 
-    glBindRenderbuffer ( GL_RENDERBUFFER, _colorRB );
-    [self.gl presentRenderbuffer:GL_RENDERBUFFER];
+    //  RanApp_Frame presents through RanGL_Present, as it does on Android.
 }
 
 - (void)keyboardFrame:(NSNotification *)n

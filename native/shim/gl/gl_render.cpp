@@ -24,9 +24,7 @@
 #include "../platform/ran_plat.h"
 #include <d3d9.h>
 
-#include <GLES3/gl3.h>
-#include <GLES3/gl31.h>
-#include <EGL/egl.h>
+#include "gl_platform.h"
 #include <string.h>
 #include <map>
 #include <set>
@@ -1192,16 +1190,16 @@ extern "C" int RanGLR_Init(void) {
     {
         const char *ext = (const char *)glGetString(GL_EXTENSIONS);
         if (ext && strstr(ext, "GL_EXT_buffer_storage"))
-            p_glBufferStorageEXT = (PFN_BUFSTORAGE)eglGetProcAddress("glBufferStorageEXT");
+            p_glBufferStorageEXT = (PFN_BUFSTORAGE)RanGL_ProcAddress("glBufferStorageEXT");
         g_havePersistentMap = p_glBufferStorageEXT != NULL;
         LOGI("persistent buffer mapping: %s",
              g_havePersistentMap ? "yes (streaming writes are a memcpy)" : "no");
     }
 
     //  ES 3.1 separate attribute format, if this driver has it.
-    p_glVertexAttribFormat  = (PFN_VAFORMAT)eglGetProcAddress("glVertexAttribFormat");
-    p_glVertexAttribBinding = (PFN_VABINDING)eglGetProcAddress("glVertexAttribBinding");
-    p_glBindVertexBuffer    = (PFN_BINDVB)eglGetProcAddress("glBindVertexBuffer");
+    p_glVertexAttribFormat  = (PFN_VAFORMAT)RanGL_ProcAddress("glVertexAttribFormat");
+    p_glVertexAttribBinding = (PFN_VABINDING)RanGL_ProcAddress("glVertexAttribBinding");
+    p_glBindVertexBuffer    = (PFN_BINDVB)RanGL_ProcAddress("glBindVertexBuffer");
     g_haveAttribFormat = p_glVertexAttribFormat && p_glVertexAttribBinding && p_glBindVertexBuffer;
     LOGI("separate attribute format: %s", g_haveAttribFormat ? "yes" : "no (ES 3.0 path)");
 
@@ -2743,12 +2741,12 @@ bool gpuTimerReady() {
         g_gpuTimerChecked = true;
         const char *ext = (const char *)glGetString(GL_EXTENSIONS);
         if (ext && strstr(ext, "GL_EXT_disjoint_timer_query")) {
-            p_glGenQueriesEXT = (PFN_GENQUERIES)eglGetProcAddress("glGenQueriesEXT");
-            p_glDeleteQueriesEXT = (PFN_DELETEQUERIES)eglGetProcAddress("glDeleteQueriesEXT");
-            p_glBeginQueryEXT = (PFN_BEGINQUERY)eglGetProcAddress("glBeginQueryEXT");
-            p_glEndQueryEXT = (PFN_ENDQUERY)eglGetProcAddress("glEndQueryEXT");
-            p_glGetQueryObjectui64vEXT = (PFN_GETQUERYOBJECTUI64V)eglGetProcAddress("glGetQueryObjectui64vEXT");
-            p_glGetQueryObjectuivEXT = (PFN_GETQUERYOBJECTUIV)eglGetProcAddress("glGetQueryObjectuivEXT");
+            p_glGenQueriesEXT = (PFN_GENQUERIES)RanGL_ProcAddress("glGenQueriesEXT");
+            p_glDeleteQueriesEXT = (PFN_DELETEQUERIES)RanGL_ProcAddress("glDeleteQueriesEXT");
+            p_glBeginQueryEXT = (PFN_BEGINQUERY)RanGL_ProcAddress("glBeginQueryEXT");
+            p_glEndQueryEXT = (PFN_ENDQUERY)RanGL_ProcAddress("glEndQueryEXT");
+            p_glGetQueryObjectui64vEXT = (PFN_GETQUERYOBJECTUI64V)RanGL_ProcAddress("glGetQueryObjectui64vEXT");
+            p_glGetQueryObjectuivEXT = (PFN_GETQUERYOBJECTUIV)RanGL_ProcAddress("glGetQueryObjectuivEXT");
             g_gpuTimerOn = p_glGenQueriesEXT && p_glBeginQueryEXT && p_glEndQueryEXT &&
                            p_glGetQueryObjectui64vEXT && p_glGetQueryObjectuivEXT;
         }

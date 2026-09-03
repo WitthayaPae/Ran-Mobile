@@ -1,3 +1,7 @@
+//  Android only. iOS has no EGL: gl_context_ios.mm answers the same RanGL_*
+//  API on EAGL, and the recursive source glob compiles whichever one the
+//  platform defines.
+#ifdef __ANDROID__
 // EGL / OpenGL ES 3 context for the D3D9 shim.
 //
 // Owns the connection between the Android surface and the renderer. The GL
@@ -448,3 +452,5 @@ extern "C" void RanGL_Present(void) {
     g_swapSeconds += (double)(ts1.tv_sec - ts0.tv_sec) +
                      (double)(ts1.tv_nsec - ts0.tv_nsec) * 1e-9;
 }
+
+#endif  //  __ANDROID__

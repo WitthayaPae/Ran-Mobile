@@ -12,7 +12,7 @@
 #include "touch_ui.h"
 #include "../platform/ran_plat.h"
 
-#include <GLES3/gl3.h>
+#include "../gl/gl_platform.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>

@@ -26,7 +26,7 @@
 //  data root holding them is still downloading, and the difference read as two
 //  loading pages for one wait.
 
-#include <GLES3/gl3.h>
+#include "../gl/gl_platform.h"
 #include "ran_plat.h"
 #include <stdio.h>
 #include <stdlib.h>
