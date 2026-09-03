@@ -21,6 +21,7 @@
 // unlocks, so upload happens on first use after a change rather than per-frame.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 
 #include <GLES3/gl3.h>
@@ -822,25 +823,25 @@ GLenum cmpFunc(DWORD d3d) {
 extern "C" void RanD3D_ProbeTextures(void);
 
 extern "C" void RanGLR_RefreshDiagnostics(void) {
-    struct { const char *path; bool *flag; const char *what; } diag[] = {
-        { "/sdcard/ran/nulldraw",  &g_nullDraw,    "every GL call a draw makes" },
-        { "/sdcard/ran/nouniform", &g_skipUniform, "uniform uploads" },
-        { "/sdcard/ran/notex",     &g_skipTex,     "texture binds and sampler state" },
-        { "/sdcard/ran/noattr",    &g_skipAttr,    "vertex attribute setup" },
-        { "/sdcard/ran/nostream",  &g_skipStream,  "streaming buffer writes" },
-        { "/sdcard/ran/noblend",   &g_skipBlend,   "vertex blending (each group rides its first bone)" },
-        { "/sdcard/ran/cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
-        { "/sdcard/ran/noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
-        { "/sdcard/ran/nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
-        { "/sdcard/ran/plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
-        { "/sdcard/ran/reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
+    struct { const char *name; bool *flag; const char *what; } diag[] = {
+        { "nulldraw",  &g_nullDraw,    "every GL call a draw makes" },
+        { "nouniform", &g_skipUniform, "uniform uploads" },
+        { "notex",     &g_skipTex,     "texture binds and sampler state" },
+        { "noattr",    &g_skipAttr,    "vertex attribute setup" },
+        { "nostream",  &g_skipStream,  "streaming buffer writes" },
+        { "noblend",   &g_skipBlend,   "vertex blending (each group rides its first bone)" },
+        { "cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
+        { "noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
+        { "nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
+        { "plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
+        { "reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
     };
 
     //  A one-shot readback of every loaded texture. Same re-arm as the draw
     //  dump: delete the file and touch it again.
     {
         static bool s_probe = false;
-        const bool on = (access("/sdcard/ran/texprobe", F_OK) == 0);
+        const bool on = (RanPlat_DiagExists("texprobe"));
         if (on != s_probe) {
             s_probe = on;
             if (on) RanD3D_ProbeTextures();
@@ -849,8 +850,8 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
 
     {
         int probe = 0;
-        FILE *f = (access("/sdcard/ran/fsprobe", F_OK) == 0)
-                      ? fopen("/sdcard/ran/fsprobe", "rb") : NULL;
+        FILE *f = (RanPlat_DiagExists("fsprobe"))
+                      ? RanPlat_DiagOpen("fsprobe") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) probe = atoi(buf);
@@ -865,7 +866,7 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
     {
         //  Delete the file and touch it again to take another frame.
         static bool s_logArmed = false;
-        const bool on = (access("/sdcard/ran/drawlog", F_OK) == 0);
+        const bool on = (RanPlat_DiagExists("drawlog"));
         if (on != s_logArmed) {
             s_logArmed = on;
             //  Two, because the clear that starts the logged frame takes one:
@@ -879,8 +880,8 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         int limit = -1;
         //  access() first: the file resolver logs every failed open, and this is
         //  polled once a second whether the file is there or not.
-        FILE *f = (access("/sdcard/ran/drawlimit", F_OK) == 0)
-                      ? fopen("/sdcard/ran/drawlimit", "rb") : NULL;
+        FILE *f = (RanPlat_DiagExists("drawlimit"))
+                      ? RanPlat_DiagOpen("drawlimit") : NULL;
         if (f) {
             char buf[32] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) limit = atoi(buf);
@@ -897,7 +898,7 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
     {
         //  access(), not fopen(): the resolver logs every failed open, and these
         //  are probed once a second whether the file is there or not.
-        const bool on = (access("/sdcard/ran/drawdump", F_OK) == 0);
+        const bool on = (RanPlat_DiagExists("drawdump"));
         if (on != g_drawDump) {
             g_drawDump = on;
             if (on) {
@@ -911,7 +912,7 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         }
     }
     for (size_t i = 0; i < sizeof(diag) / sizeof(diag[0]); ++i) {
-        const bool on = (access(diag[i].path, F_OK) == 0);
+        const bool on = RanPlat_DiagExists(diag[i].name) != 0;
         if (on != *diag[i].flag) {
             *diag[i].flag = on;
             LOGI("diagnostic: %s %s", on ? "skipping" : "restored", diag[i].what);
@@ -2990,7 +2991,7 @@ bool haveS3TC() {
         //  launch every DXT texture is decoded here instead of handed to the
         //  driver. It exists to tell "the file is wrong" apart from "the driver
         //  mishandles this format", which no amount of reading the file can.
-        if (access("/sdcard/ran/nos3tc", F_OK) == 0) {
+        if (RanPlat_DiagExists("nos3tc")) {
             g_haveS3TC = false;
             LOGI("S3TC (DXT) textures: decoded on CPU (nos3tc)");
             return g_haveS3TC;
@@ -3710,8 +3711,8 @@ extern "C" void RanGLR_ResetShadowBudget(void) {
     static int s_polled = 0;
     if ((s_polled++ % 120) == 0) {
         //  Same as above: do not make the resolver log a miss every time.
-        FILE *f = (access("/sdcard/ran/shadowcount", F_OK) == 0)
-                      ? fopen("/sdcard/ran/shadowcount", "rb") : NULL;
+        FILE *f = (RanPlat_DiagExists("shadowcount"))
+                      ? RanPlat_DiagOpen("shadowcount") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {

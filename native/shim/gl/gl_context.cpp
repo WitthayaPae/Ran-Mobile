@@ -10,6 +10,7 @@
 // without touching the D3D translation.
 
 #include "gl_context.h"
+#include "../platform/ran_plat.h"
 #include "../platform/touch_ui.h"
 
 #include <EGL/egl.h>
@@ -62,7 +63,7 @@ void setSwapPreserved(bool on) {
     if (g_forcePreserved) on = true;
     //  /sdcard/ran/nopreserveswap: never preserve, even for the loading screen.
     //  For telling a preservation problem apart from something else.
-    if (access("/sdcard/ran/nopreserveswap", F_OK) == 0) on = false;
+    if (RanPlat_DiagExists("nopreserveswap")) on = false;
     if (on == g_swapPreserved) return;
     if (eglSurfaceAttrib(g_display, g_surface, EGL_SWAP_BEHAVIOR,
                          on ? EGL_BUFFER_PRESERVED : EGL_BUFFER_DESTROYED) != EGL_TRUE)
@@ -211,8 +212,8 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     {
         //  Read once at startup, so a miss here costs one log line, not one a
         //  second - but keep it consistent with the other switches.
-        FILE *f = (access("/sdcard/ran/renderscale", F_OK) == 0)
-                      ? fopen("/sdcard/ran/renderscale", "rb") : NULL;
+        FILE *f = (RanPlat_DiagExists("renderscale"))
+                      ? RanPlat_DiagOpen("renderscale") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
@@ -289,7 +290,7 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     //  draws a progress bar and nothing else between swaps.
     //
     //  /sdcard/ran/preserveswap forces it on everywhere, to compare.
-    g_forcePreserved = (access("/sdcard/ran/preserveswap", F_OK) == 0);
+    g_forcePreserved = (RanPlat_DiagExists("preserveswap"));
     setSwapPreserved(g_forcePreserved);
     //  What the driver actually gave us. eglChooseConfig treats EGL_SAMPLES as a
     //  minimum, so a multisampled config satisfies a request for none - and on a
@@ -309,7 +310,7 @@ extern "C" int RanGL_Init(void *nativeWindow) {
 
     //  /sdcard/ran/novsync releases the frame rate from the display, to find
     //  out whether the GPU could go faster or is simply the limit.
-    eglSwapInterval(g_display, (access("/sdcard/ran/novsync", F_OK) == 0) ? 0 : 1);
+    eglSwapInterval(g_display, (RanPlat_DiagExists("novsync")) ? 0 : 1);
 
     g_ready = true;
     return 1;
@@ -413,7 +414,7 @@ extern "C" void RanGL_Present(void) {
     {
         static int s_left = 0;
         static bool s_armed = false;
-        const bool on = (access("/sdcard/ran/presentlog", F_OK) == 0);
+        const bool on = (RanPlat_DiagExists("presentlog"));
         if (on != s_armed) { s_armed = on; if (on) s_left = 150; }
         if (s_left > 0) {
             --s_left;

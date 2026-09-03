@@ -19,6 +19,7 @@
 //  group's AttribId still names the original material.
 
 #include "windows.h"
+#include "../platform/ran_plat.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 
@@ -67,8 +68,8 @@ DWORD paletteLimit() {
     static DWORD s_limit = 0;
     if (s_limit) return s_limit;
     s_limit = 16;
-    FILE *f = (access("/sdcard/ran/bonepalette", F_OK) == 0)
-                  ? fopen("/sdcard/ran/bonepalette", "rb") : NULL;
+    FILE *f = (RanPlat_DiagExists("bonepalette"))
+                  ? RanPlat_DiagOpen("bonepalette") : NULL;
     if (f) {
         char buf[16] = { 0 };
         if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {

@@ -10,6 +10,7 @@
 //  them and calls the client's own movement and attack paths. That keeps SOURCE
 //  byte-identical to the PC build and keeps this file portable.
 #include "touch_ui.h"
+#include "../platform/ran_plat.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -1547,7 +1548,7 @@ void RanTouch_Render(void) {
         const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
         if (now - s_check >= 1.0) {
             s_check = now;
-            s_off = (access("/sdcard/ran/nohud", F_OK) == 0);
+            s_off = (RanPlat_DiagExists("nohud"));
         }
         if (s_off) return;
     }
