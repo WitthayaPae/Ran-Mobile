@@ -142,3 +142,57 @@ That is a decision to make *before* the work, not after:
 
 Android has been forgiving here because the APK is distributed directly. iOS has no
 equivalent door.
+
+## Progress — 2026-09-03
+
+Written on Windows. **None of the iOS code has been compiled**: there is no Mac here, so
+every iOS file below is unverified and the first `build-ios.sh` run should be expected to
+need fixing. What *is* verified is that none of it disturbs Android or PC — the Android
+build was reconfigured from scratch and rebuilt for both ABIs after every change
+(`errors: 0  failed: 0`), the APK repacked, installed on LDPlayer, and the game logged in
+and played (world screenshot, 57 fps).
+
+**Platform seams landed first** (these are real, compiled, device-verified changes; they
+are what made an iOS entry point possible at all):
+
+* `shim/platform/ran_plat.{h,cpp}` — diagnostic paths, logging, font directory. 60
+  `/sdcard/ran/...` literals and 70 log calls across 24 files now go through it.
+* `RanImage_DecodePlatform` — one declaration, one implementation per platform, each
+  behind its own `#ifdef`.
+* `RanAndroid_ImeInsetPerMille` → **`RanPlat_ImeInsetPerMille`**. It is called from
+  `SOURCE/Lib_Client/DxGameStage.cpp` (inside `RAN_MOBILE`), so an Android name had leaked
+  into shared client code. Verified after the rename: chat still raises the keyboard on
+  LDPlayer (`mInputShown=true`). The inset *value* is still untested — the emulator has no
+  on-screen keyboard, so it reports 0; that needs the Tab S9.
+
+**New iOS files** (uncompiled):
+
+| File | What it is |
+|---|---|
+| `platform/ios/ran_ios_main.mm` | The entry point: `UIApplicationMain`, EAGL ES3 context, `CADisplayLink` frame loop mirroring `android_main.cpp`, touch slots into `RanTouch_*`, `UIKeyInput` into `RanIME_InsertUtf8`/`RanIME_Backspace`, keyboard inset from `UIKeyboardWillChangeFrame`. |
+| `platform/ios/ran_ios_plat.mm` | Data root (Application Support, excluded from backup), diag root, font dir. `RanIOS_InstallPlatformPaths()` runs before anything in the shim. |
+| `platform/ios/Info.plist.in` | Landscape-only, fullscreen, ES3 required, and the ATS exception the plain-HTTP patch host needs. |
+| `platform/ios/fonts/` | NotoSansThai Regular+Bold (OFL), Roboto Regular+Bold (Apache 2.0), with licence texts. Named exactly as the Android system files, because `RanFont_Resolve` picks by filename. |
+| `shim/d3d/image_decode_ios.mm` | ImageIO decoder. BGRA via `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little`, then un-premultiplied — `CGBitmapContext` will not take unpremultiplied 8-bit alpha at all. |
+| `build-ios.sh` | Configure + build, or `--xcode` to generate a project. |
+
+**CMake** grew one `if(RAN_IOS)` branch per Android-specific line — the shim glob (`.mm`
+on iOS), the link libraries (frameworks instead of `log`/`android`/`EGL`/`GLESv3`), and the
+app target (`add_executable(MACOSX_BUNDLE)` instead of the NativeActivity `.so`).
+`RAN_IOS` is set only by `CMAKE_SYSTEM_NAME=iOS`, so the Android configure is unchanged.
+
+`platform/android/ran_app.cpp` is **not** Android code — it is the boot driver
+(`RanApp_Boot`/`Frame`/`Shutdown`). The iOS target names it explicitly rather than moving
+it, so the Android file list stays exactly as it was.
+
+### Still to do
+
+1. First compile on a Mac. Everything above is a prediction until then.
+2. Audio: `dsound` on iOS has no implementation yet (AudioQueue or AVAudioEngine).
+3. Manifest gains per-platform build blocks (`apk` + `ios`, `minBuild`) before an iOS
+   client is allowed to talk to the live server. Until then an iOS build would be offered
+   an APK it cannot install.
+4. Launcher/patch UI — the Java `RanLauncher` has no iOS counterpart yet.
+5. `LaunchScreen` storyboard referenced by the plist does not exist yet.
+6. ANGLE, before any submission: `OpenGLES` is deprecated on iOS 12+ and still works, but
+   is not a foundation to ship on.

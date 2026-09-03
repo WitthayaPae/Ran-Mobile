@@ -373,7 +373,7 @@ Java_com_ran_launcher_RanActivity_nativeBackspace(JNIEnv *, jclass) {
 //  asked for, and whatever wants to stay visible moves itself.
 //
 //  Throttled: this is a JNI round trip and the caller is a per-frame layout pass.
-extern "C" int RanAndroid_ImeInsetPerMille(void) {
+extern "C" int RanPlat_ImeInsetPerMille(void) {
     static int  s_cached = 0;
     static long s_lastMs = -1000;
 

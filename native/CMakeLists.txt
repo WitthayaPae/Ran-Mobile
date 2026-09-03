@@ -24,6 +24,14 @@ if(RAN_ASAN)
     message(STATUS "AddressSanitizer: on")
 endif()
 
+#  Which mobile platform. Android is the default because it is what build.sh
+#  drives; iOS is selected by the toolchain (-DCMAKE_SYSTEM_NAME=iOS), so
+#  nothing about the Android build changes.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  set(RAN_IOS ON)
+  message(STATUS "target: iOS")
+endif()
+
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
@@ -107,7 +115,16 @@ target_include_directories(vorbis PUBLIC ${TP}/vorbis-1.3.7/include PRIVATE ${TP
 target_link_libraries(vorbis PUBLIC ogg)
 
 # ---- shim runtime (Win32 emulation, D3D9-on-GLES, D3DX) ------------------------
+#
+#  On iOS the platform files are Objective-C++ (.mm) - ImageIO and UIKit have no
+#  C interface worth using. Each is guarded by its own #ifdef, exactly as the
+#  Android ones are, so the glob can stay indiscriminate.
 file(GLOB_RECURSE SHIM_SRC ${SHIM}/*.cpp)
+if(RAN_IOS)
+  enable_language(OBJCXX)
+  file(GLOB_RECURSE SHIM_SRC_MM ${SHIM}/*.mm)
+  list(APPEND SHIM_SRC ${SHIM_SRC_MM})
+endif()
 add_library(ranshim STATIC ${SHIM_SRC})
 # Temporary: split the frame between engine time and draw submission.
 # Per-draw timing for the frame-budget line. Two clock reads per draw, so it
@@ -115,7 +132,17 @@ add_library(ranshim STATIC ${SHIM_SRC})
 target_compile_definitions(ranshim PRIVATE RAN_TIME_DRAWS)
 target_include_directories(ranshim PUBLIC ${RAN_COMMON_INCLUDES} ${ENGINE_INCLUDES})
 target_compile_options(ranshim PRIVATE -include ${RAN_SRC}/Lib_Engine/StdAfx.h)
-target_link_libraries(ranshim PUBLIC log android EGL GLESv3 jnigraphics)
+if(RAN_IOS)
+  #  The iOS equivalents of log/android/EGL/GLESv3/jnigraphics: the GL context
+  #  comes from EAGL (OpenGLES), the image decoder from ImageIO, and logging
+  #  from NSLog in Foundation.
+  target_link_libraries(ranshim PUBLIC
+    "-framework OpenGLES" "-framework QuartzCore" "-framework CoreGraphics"
+    "-framework ImageIO" "-framework Foundation" "-framework UIKit"
+    "-framework AudioToolbox")
+else()
+  target_link_libraries(ranshim PUBLIC log android EGL GLESv3 jnigraphics)
+endif()
 
 # ---- game libraries -------------------------------------------------------------
 function(ran_lib name)
@@ -141,7 +168,39 @@ ran_lib(Lib_ClientUI)
 # The NativeActivity: android_main + the boot driver. native_app_glue ships with
 # the NDK and has to be compiled into the app itself.
 file(GLOB APP_SRC ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/*.cpp)
-if(APP_SRC)
+if(RAN_IOS)
+  #  ran_app.cpp - the boot driver, RanApp_Boot/Frame/Shutdown - is not Android
+  #  code; it only lives under platform/android because that was the only
+  #  platform. Named explicitly here rather than moved, so the Android build
+  #  keeps compiling exactly the same file list.
+  file(GLOB IOS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/*.mm
+                    ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/*.cpp)
+  add_executable(ran MACOSX_BUNDLE
+    ${IOS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/ran_app.cpp)
+  target_include_directories(ran PRIVATE
+    ${RAN_COMMON_INCLUDES} ${ENGINE_INCLUDES} ${CLIENT_INCLUDES})
+  target_compile_options(ran PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-include${SEMI}${RAN_SRC}/Lib_Client/stdafx.h>)
+  target_link_libraries(ran PRIVATE
+    Lib_ClientUI Lib_Client Lib_Engine Lib_Network Lib_Helper ranshim
+    ranzlib minilzo lua50 vorbis ogg m)
+  #  Fonts ship in the bundle, because iOS will not let an app open the system
+  #  faces as files and RanFont_Resolve works by scanning a directory. The
+  #  filenames matter: the resolver picks by name ("Thai", "Roboto-", "Bold"),
+  #  so these are named exactly as the Android system files it was written
+  #  against. Both licences are redistributable - OFL and Apache 2.0 - and the
+  #  licence texts ship beside them.
+  file(GLOB IOS_FONTS ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/fonts/*)
+  target_sources(ran PRIVATE ${IOS_FONTS})
+  set_source_files_properties(${IOS_FONTS} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources/fonts)
+
+  set_target_properties(ran PROPERTIES
+    MACOSX_BUNDLE_GUI_IDENTIFIER com.ran.launcher
+    MACOSX_BUNDLE_BUNDLE_NAME "Ran Legacy M"
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/Info.plist.in
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
+elseif(APP_SRC)
   set(GLUE "${CMAKE_ANDROID_NDK}/sources/android/native_app_glue")
   add_library(ran SHARED ${APP_SRC} ${GLUE}/android_native_app_glue.c)
   target_include_directories(ran PRIVATE

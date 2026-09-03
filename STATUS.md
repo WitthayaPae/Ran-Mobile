@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-08-25 (session 3)
+- **Last updated:** 2026-09-03
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -107,6 +107,55 @@ and add an entry to the log below. Then update the status log in `NATIVE-PORT-PL
 the change was structural.
 
 ## Log
+
+- **2026-09-03 (later)** — **The platform seams, and the iOS files they made possible.**
+
+  Everything Android-specific that shared code was reaching for now goes through a seam,
+  and an iOS target exists that uses those seams. **No iOS code has been compiled** —
+  there is no Mac here — so every file under `platform/ios/` and
+  `shim/d3d/image_decode_ios.mm` is a prediction until the first `build-ios.sh` run.
+
+  What *is* verified is that Android is untouched by it: after every change the Android
+  build was reconfigured from scratch and rebuilt for **both ABIs**
+  (`errors: 0  failed: 0`), the APK repacked and installed on LDPlayer, and the game
+  logged in and played at 57 fps.
+
+  | Seam | Was | Now |
+  |---|---|---|
+  | Diagnostic flag files | 60 `/sdcard/ran/...` literals | `RanPlat_DiagPath` / `DiagExists` / `DiagOpen` |
+  | Logging | 70 `__android_log_print` calls in 24 files | `RanPlat_Log` |
+  | Fonts | `/system/fonts` hardcoded | `RanPlat_SetFontDir` |
+  | Image decode | `AImageDecoder` called directly | `RanImage_DecodePlatform`, one per platform |
+  | Keyboard inset | **`RanAndroid_ImeInsetPerMille`**, called from `SOURCE` | **`RanPlat_ImeInsetPerMille`** |
+
+  The last one mattered: an Android name had leaked into shared client code
+  (`Lib_Client/DxGameStage.cpp`, inside `RAN_MOBILE`). Renamed, rebuilt and re-verified
+  on device — tapping the chat line still raises the keyboard (`mInputShown=true`). The
+  inset **value** is still unverified: LDPlayer has no on-screen keyboard, so it reports
+  0. That needs the Tab S9.
+
+  New iOS files: `ran_ios_main.mm` (UIApplicationMain, EAGL ES3 context, CADisplayLink
+  frame loop mirroring `android_main.cpp`, touch slots into `RanTouch_*`, UIKeyInput into
+  `RanIME_InsertUtf8` / `RanIME_Backspace`, keyboard inset from
+  `UIKeyboardWillChangeFrame`), `ran_ios_plat.mm`, `Info.plist.in`,
+  `image_decode_ios.mm` (ImageIO), `build-ios.sh`, and four redistributable fonts in the
+  bundle (NotoSansThai OFL, Roboto Apache 2.0) named exactly as the Android system files,
+  because `RanFont_Resolve` picks by filename. CMake grew one `if(RAN_IOS)` branch per
+  Android-specific line, and `RAN_IOS` is set only by `CMAKE_SYSTEM_NAME=iOS`. Full
+  detail and what remains: `IOS-PORT-PLAN.md`.
+
+  **Damage report, honestly:** the tree-wide `sed -i` used for the rename also rewrote
+  the build artefacts under `native/out/` — including one published patch blob (the V025
+  APK, patch v412). sed is not binary-safe and the round trip is lossy: 4,169 bytes were
+  lost to line-ending translation. The build artefacts were regenerated; the blob was
+  re-downloaded from the patch host and its SHA-256 verified against its own filename.
+  Nothing was lost and nothing on the server was touched. The lesson: never run
+  `sed -i` across a tree that holds build output.
+
+  While there, `shim/platform/ran_plat.cpp` turned out to hold a **literal NUL byte**
+  inside what should have been a `'\0'` character literal — legal C++, compiled fine, but
+  it made the file binary to every text tool. Fixed to the two-character escape.
+
 
 - **2026-09-02** — **One flag moved every label and armed a crash: the outline fix.**
 
