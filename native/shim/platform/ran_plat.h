@@ -33,6 +33,17 @@ const char *RanPlat_DiagPath ( const char *name );
 enum { RANLOG_INFO = 0, RANLOG_WARN = 1, RANLOG_ERROR = 2 };
 void        RanPlat_Log ( int level, const char *tag, const char *fmt, ... );
 
+//  Where the platform keeps font files, and the face to fall back to.
+//
+//  Android hands out /system/fonts and the client picks a file from it by
+//  script, because the face the client asks for - Tahoma, a Thai face - does
+//  not exist there. iOS has no such directory at all: system fonts are not
+//  files an app may open, so the app has to carry its own and point this at
+//  the bundle. The picking logic does not care which, so it stays portable.
+void        RanPlat_SetFontDir ( const char *dir, const char *fallbackFile );
+const char *RanPlat_FontDir ( void );
+const char *RanPlat_FontFallback ( void );      //  full path, ready to open
+
 //  Is the flag set? (the file exists)
 int         RanPlat_DiagExists ( const char *name );
 

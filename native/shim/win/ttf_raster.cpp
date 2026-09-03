@@ -505,7 +505,7 @@ int RanFont_WinEmForCellHeight(const char *faceName, int cellPx) {
 std::string RanFont_Resolve(const char *faceName, int codePage, bool bold) {
     static std::vector<std::string> files;
     if (files.empty()) {
-        DIR *d = opendir("/system/fonts");
+        DIR *d = opendir(RanPlat_FontDir());
         if (d) {
             struct dirent *e;
             while ((e = readdir(d)) != NULL) {
@@ -516,7 +516,7 @@ std::string RanFont_Resolve(const char *faceName, int codePage, bool bold) {
             }
             closedir(d);
         }
-        LOGI("/system/fonts: %d files", (int)files.size());
+        LOGI("%s: %d files", RanPlat_FontDir(), (int)files.size());
     }
 
     // The face name the client asks for ("Tahoma", a Thai face, ...) does not
@@ -541,11 +541,11 @@ std::string RanFont_Resolve(const char *faceName, int codePage, bool bold) {
             if (n.find("Serif") != std::string::npos) continue;
             bool isBold = n.find("Bold") != std::string::npos;
             if (pass == 0 && isBold != bold) continue;
-            best = std::string("/system/fonts/") + n;
+            best = std::string(RanPlat_FontDir()) + "/" + n;
             break;
         }
     }
-    if (best.empty()) best = "/system/fonts/Roboto-Regular.ttf";
+    if (best.empty()) best = RanPlat_FontFallback();
     (void)faceName;
     return best;
 }

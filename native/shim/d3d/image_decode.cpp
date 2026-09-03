@@ -415,6 +415,6 @@ bool RanImage_Decode(const void *data, size_t size, RanImage &out) {
     // TGA last: it has no magic number, so it must not shadow the others.
     if (decodeTGA(p, size, out)) return true;
     // Anything else the platform knows — JPEG map textures come through here.
-    if (RanImage_DecodeAndroid(p, size, out)) return true;
+    if (RanImage_DecodePlatform(p, size, out)) return true;
     return false;
 }

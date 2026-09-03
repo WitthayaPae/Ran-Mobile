@@ -26,5 +26,10 @@ bool RanImage_Decode(const void *data, size_t size, RanImage &out);
 bool RanImage_DecodeCube(const void *data, size_t size, RanImage outFaces[6]);
 
 // Whatever the platform decoder understands (JPEG, WebP, ...), tried only after
-// the readers above decline. Defined in image_decode_android.cpp.
-bool RanImage_DecodeAndroid(const void *data, size_t size, RanImage &out);
+// the readers above decline.
+//
+// One per platform, each guarded so the recursive source glob can compile the
+// whole tree: image_decode_android.cpp uses AImageDecoder, image_decode_ios.cpp
+// uses ImageIO. The DDS, TGA and PNG readers above are ours and portable, so
+// this is only reached for the formats a platform library knows better.
+bool RanImage_DecodePlatform(const void *data, size_t size, RanImage &out);

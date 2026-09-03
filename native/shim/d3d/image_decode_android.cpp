@@ -1,3 +1,6 @@
+//  Android only. The glob compiles every .cpp in the tree, so each platform
+//  decoder guards itself and the others fall out empty.
+#ifdef __ANDROID__
 //  Everything Android itself can decode — JPEG above all.
 //
 //  The shipped texture set is nearly all DDS, but a handful of map textures are
@@ -73,7 +76,7 @@ const Api &api() {
 
 } // namespace
 
-bool RanImage_DecodeAndroid(const void *data, size_t size, RanImage &out) {
+bool RanImage_DecodePlatform(const void *data, size_t size, RanImage &out) {
     const Api &a = api();
     if (!a.ready || !data || !size) return false;
 
@@ -118,3 +121,5 @@ bool RanImage_DecodeAndroid(const void *data, size_t size, RanImage &out) {
     out.levels[0].swap(pixels);
     return true;
 }
+
+#endif  //  __ANDROID__
