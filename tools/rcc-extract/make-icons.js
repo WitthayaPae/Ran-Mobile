@@ -24,18 +24,52 @@ const W = src.w, H = src.h;
 const lum = (i) => (src.px[i] * 77 + src.px[i + 1] * 151 + src.px[i + 2] * 28) >> 8;
 const kBlack = 26;                       //  corners measure 0; the glow starts well above this
 
+//  A source that already carries alpha is believed, and the flood fill is not
+//  run at all. Keying is a repair for a flattened image; doing it anyway to a
+//  cut-out would only re-cut the edge the artist already made, worse and
+//  harder, and it cannot recover the soft glow that alpha holds.
 const bg = new Uint8Array(W * H);
-const stack = [];
-for (let x = 0; x < W; x++) { stack.push(x, 0); stack.push(x, H - 1); }
-for (let y = 0; y < H; y++) { stack.push(0, y); stack.push(W - 1, y); }
-while (stack.length) {
-  const y = stack.pop(), x = stack.pop();
-  if (x < 0 || y < 0 || x >= W || y >= H) continue;
-  const k = y * W + x;
-  if (bg[k]) continue;
-  if (lum(k * 4) > kBlack) continue;
-  bg[k] = 1;
-  stack.push(x + 1, y); stack.push(x - 1, y); stack.push(x, y + 1); stack.push(x, y - 1);
+let hasAlpha = false;
+for (let k = 0; k < W * H; k++) if (src.px[k * 4 + 3] !== 255) { hasAlpha = true; break; }
+
+if (hasAlpha) {
+  console.log('source carries alpha - using it as given');
+  for (let k = 0; k < W * H; k++) if (src.px[k * 4 + 3] === 0) bg[k] = 1;
+} else {
+  //  Which background is it?
+  //
+  //  Two kinds of flattened source turn up. One is the artwork burned onto
+  //  black. The other is an editor's transparency chequerboard baked in - two
+  //  near-neutral greys, around 253 and 242, alternating in squares. Keying
+  //  black against a chequerboard removes nothing, which is exactly what
+  //  happened the first time one arrived: the fill reported the logo's bounds
+  //  as the whole image and the chequer went into the icon.
+  //
+  //  The test is the corner, and the rule for the light case is neutral AND
+  //  bright: both chequer tones are within a couple of levels of grey, while
+  //  the logo is gold and saturated even at its brightest, so its highlights
+  //  survive even where they run to the edge.
+  const light = lum(0) > 200;
+  const neutral = (i) => {
+    const r = src.px[i], g = src.px[i + 1], b = src.px[i + 2];
+    return Math.max(r, g, b) - Math.min(r, g, b) < 14;
+  };
+  const isBg = light ? (i) => lum(i) > 225 && neutral(i)
+                     : (i) => lum(i) <= kBlack;
+  console.log('flat source - keying the ' + (light ? 'chequerboard' : 'black') +
+              ' by flood fill from the border');
+  const stack = [];
+  for (let x = 0; x < W; x++) { stack.push(x, 0); stack.push(x, H - 1); }
+  for (let y = 0; y < H; y++) { stack.push(0, y); stack.push(W - 1, y); }
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop();
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const k = y * W + x;
+    if (bg[k]) continue;
+    if (!isBg(k * 4)) continue;
+    bg[k] = 1;
+    stack.push(x + 1, y); stack.push(x - 1, y); stack.push(x, y + 1); stack.push(x, y - 1);
+  }
 }
 
 //  Keyed copy, and the logo's bounding box within it.
@@ -44,6 +78,7 @@ let minX = W, minY = H, maxX = -1, maxY = -1;
 for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
   const k = y * W + x;
   if (bg[k]) { keyed.px[k * 4 + 3] = 0; continue; }
+  if (keyed.px[k * 4 + 3] < 8) continue;      //  near-transparent is not artwork
   if (x < minX) minX = x; if (x > maxX) maxX = x;
   if (y < minY) minY = y; if (y > maxY) maxY = y;
 }
