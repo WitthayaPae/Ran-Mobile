@@ -5196,3 +5196,18 @@ guessed at: it needs the same measurement treatment.
 
 **Not verified on the Tab S9** - it has been off adb throughout. The emulator's
 GPU is not the tablet's, and the ratio may differ there.
+
+### Reverted: auto-target no longer prefers what the character is facing
+
+Tried in play and it did not feel right, so it is out. `git revert` of the
+facing commit, and the diff against the version before that change is empty -
+`MobileFindNearestMob` and `MobileFindNearestPvP` are byte-identical to what
+they were, nearest-only, with all the dead-crow and `IsPK_TAR` filtering intact.
+
+Verified after the revert: pressing auto-target still selects - `Lv.2 Little
+Vulgarian 180/180 (100%)` on the panel - and the world runs at 36 fps.
+
+Worth keeping in mind if it ever comes up again: the idea is sound on paper and
+the implementation was cheap (two candidates tracked in one pass, falling back
+to nearest when nothing is in front). What made it wrong was play feel, not
+correctness, and that is not something the code can tell you.
