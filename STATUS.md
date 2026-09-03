@@ -5046,3 +5046,43 @@ the character (`out/auto_test.png`).
 **Not verified:** that it prefers the faced one over a nearer one behind. That
 needs a controlled position between two candidates, which is what the player
 will see immediately in normal play.
+
+## Vehicle button, and skill icons that would not centre or respond (2026-09-03)
+
+**The toggle did nothing.** The button called `ReqSetVehicle` directly. That
+looked equivalent to pressing V and is not: `InnerInterface`'s `DIK_V` handler
+refuses while a trade is open, enforces a one second cooldown through
+`m_fVehicleDelay` - printing `VEHICLE_SET_FB_DELAY` when it bites - and resets
+that timer afterwards. Going straight to the request skipped all three, so a
+press inside the cooldown did nothing *and said nothing*. It now taps DIK_V
+(0x2F) through `RanInput_KeyTap`, which is the pattern the other mobile buttons
+already use: express the action as the key press the client is written to react
+to, and nothing downstream has to know a finger did it.
+
+**The icon was an empty socket.** The first cut used the vehicle equip slot out
+of `GUI_Inven_Slots.dds`, which is a socket outline rather than a picture of
+anything. `tools/rcc-extract/make-vehicle-button.js` now composes the game's own
+motorcycle icon onto a round face in the touch-button idiom - dark chrome, a lit
+rim, amber when pressed - and writes `mobile_vehicle.dds` / `_f.dds` as DXT5.
+
+The sheet coordinates were measured, not eyeballed: `sc_bike_gui.dds` has 32x32
+cells whose borders in the bike row sit at x=418/421 and 453/456, so the red
+sportbike's content is x 422..452, y 213..241. The first attempt guessed 413 and
+pulled in the border and half the neighbouring cell.
+
+**Skill icons rode low, and taps missed.** The icons were centred on
+`QUICK_SKILL_IMAGE` while their ring is drawn from the slot, and the two boxes
+do not share a centre: `BASIC_QUICK_SKILL_TRAY_SLOT0` is **41x38** and
+`QUICK_SKILL_IMAGE` is **35x35 at (3,3)**, so the image centre is 1.5 units
+below the slot centre. Every icon sat low in its ring - and since the slot rect
+is what receives the press, a tap aimed at the art could land outside it, which
+is why tapping "did nothing". Both the ring and the icon now come from the slot.
+
+**Verified on LDPlayer:** icons sit centred in their rings; tapping slot 1 puts
+it on cooldown, raises the skill tooltip and casts (world changes by 91/pixel).
+The motorcycle button draws correctly beside the chat.
+
+**Not verified:** that the toggle mounts. The test character has no vehicle, and
+`ReqSetVehicle` returns early with no message when `m_sVehicle.IsActiveValue()`
+is false. It now takes exactly the PC path, so if a bike is equipped and the map
+allows it, it behaves as V does on PC - including the cooldown message.
