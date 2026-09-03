@@ -4974,3 +4974,37 @@ nothing it needs can come from there - and putting it in `CLIENT/` would ship
 it now that the mark is the Ran Legacy logo instead of a crop of a client sheet,
 and leaving the old job in would have quietly put the RAN ONLINE wordmark back
 the next time anyone ran the extractor.
+
+## Ride/dismount button beside the chat (2026-09-03)
+
+No keyboard on a phone, and the vehicle is otherwise only reachable by opening
+the equipment window and double-clicking the slot every time.
+
+`GLCharacter::ReqSetVehicle(bool)` is the request the PC path already uses and
+`m_bVehicle` is the current state, so the button is a straight toggle of the
+two. It re-checks nothing on purpose: that function already refuses when the map
+forbids vehicles, the battery is flat, or the character is attacking, casting or
+falling - and prints the reason itself.
+
+The control is a child of `CBasicChat`, positioned **every frame** against the
+chat's outside edge rather than laid out once, because the chat is dragged and
+resized and a button left where the chat used to be is worse than no button.
+Groups do not clip their children, so sitting outside the parent's rect draws
+and hit-tests normally. The press also raises
+`UIMSG_MOUSEIN_BLOCK_CHARACTER_MOVE` so it cannot double as a tap on the ground
+behind the chat, and it takes the same `SetTouchPad` as the chat grip - 35x35
+layout units is about 33dp, under the 48 a finger wants, at the screen edge
+where a thumb is least precise.
+
+The art is the game's own vehicle equip slot (`GUI_Inven_Slots.dds` @70,35),
+added to `uiinnercfg01.xml` as `MOBILE_VEHICLE_BUTTON` / `_F` and repacked into
+`Gui.rcc`. Only RAN_MOBILE code names those ids, so the entries are inert for
+the PC build.
+
+**Verified:** the button draws in the right place, parked on the chat's bottom
+outside corner (`out/veh_z.png`).
+
+**Not verified:** that it actually mounts. The test character has no vehicle
+equipped, and with none `ReqSetVehicle(true)` returns early at
+`!m_sVehicle.IsActiveValue()` *without* a message - so a tap is correctly
+silent and proves nothing either way. Needs a character with a bike.
