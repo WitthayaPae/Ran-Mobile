@@ -5086,3 +5086,40 @@ The motorcycle button draws correctly beside the chat.
 `ReqSetVehicle` returns early with no message when `m_sVehicle.IsActiveValue()`
 is false. It now takes exactly the PC path, so if a bike is equipped and the map
 allows it, it behaves as V does on PC - including the cooldown message.
+
+### Why the vehicle button drew but did not respond
+
+Measured, not reasoned. The chain, probe by probe:
+
+1. the touch reaches the overlay at **393,685** with `inClientUI=1` - the UI
+   works in logical pixels, half the 786,1371 the screenshot showed, and the
+   overlay correctly yields to the client;
+2. the chat group dispatches `VEHICLE_BUTTON` every frame, so the control is
+   registered and reachable;
+3. the message was **0x80 MOUSEOUT** while the button's own logged rect was
+   **370,664..412,706** - which contains 393,685.
+
+Rect right, answer wrong. The only thing that explains both is *when* the rect
+is set: `CBasicChat::Update` placed the button **after** calling
+`CUIGroup::Update`, and that call is where children run their own
+`MouseUpdate`. So the hit test used the rect from before the move while the draw
+used the rect after it - tested in one place, painted in another. The placement
+now runs above `CUIGroup::Update`.
+
+Then it works in both directions, confirmed on screen and in the log:
+
+    DIK_V seen: active=1 riding=1 delay=17.76 trade=0
+    ReqSetVehicle(0) -> 0x00000000      (dismount)
+    DIK_V seen: active=1 riding=0 delay=28.32
+    ReqSetVehicle(1) -> 0x00000000      (mount, character is on the bike)
+
+**Lesson worth keeping:** a control repositioned from its parent's `Update` has
+to be moved *before* the base-class call, or its hit rect trails its art by a
+frame - and if the control sits outside the parent, "a frame behind" means "a
+whole button away".
+
+**LDPlayer note:** `com.android.vending` and `com.android.ld.appstore` were
+disabled with `pm disable-user` on the emulator. Both kept stealing the
+foreground mid-test, and one whole round of "the button does not work" was
+actually taps landing in the Play Store. Re-enable with `pm enable` if the
+emulator is wanted for anything else.
