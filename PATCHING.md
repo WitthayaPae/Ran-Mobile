@@ -832,3 +832,65 @@ delivering an update; the `apk` block is.
 A player whose installed APK predates the self-updater cannot be updated by it.
 That build has no `offerApk`, so it ignores the manifest's `apk` block entirely.
 Those players need one APK by hand; everyone after that is a patch away.
+
+## Publishing a small change: what actually has to be uploaded
+
+**Not the whole store.** `launcher_mobile/` is 4.8 GB and almost all of it is
+already on the server. The store is content-addressed - a blob's name *is* the
+SHA-256 of its contents - so a blob the server already has cannot be the wrong
+bytes and can never need replacing. A publish only has to send:
+
+* the blobs this run added, and
+* `manifest.json` and `manifest.sig`, which are rewritten every time.
+
+Every publish now stages exactly that into **`MOBILE/native/out/upload/`**, laid
+out like the server, and lists it in `MOBILE/native/out/UPLOAD.txt`. Uploading
+is "copy the contents of `out/upload/` into `launcher_mobile/`".
+
+Measured, changing one texture:
+
+    blobs    : 0 linked, 1 copied, 23367 already present
+    upload   : 1 new blob(s), 0.1 MB + manifest  ->  out/upload
+
+    87536      blobs/e32c879e...
+    3595153    manifest.json
+    97         manifest.sig
+
+**3.6 MB instead of 4.8 GB.**
+
+The APK is a blob too - the launcher fetches it from `blobs/<sha256>` like
+everything else - so a build with no code change adds nothing, and one with a
+new APK simply shows up as one large blob in the same set.
+
+### Order
+
+Blobs before the manifest, always: a client that polls mid-upload should see the
+*old* manifest and a store that has grown, never a new manifest naming a blob
+that has not landed. The layout gives this for free - `blobs/` sorts before
+`manifest.json`, so any tool that walks the tree alphabetically does the right
+thing.
+
+### When it stages nothing
+
+A first deployment, or any run where more than 4000 blobs or 1 GB is new, prints
+"too large to stage, send launcher_mobile/ whole" and writes no `upload/`. There
+is nothing useful to stage when the delta *is* the store, and copying 4.8 GB
+beside itself would be worse than useless.
+
+### Staging copies rather than links
+
+Deliberate. The store warns when a blob shares an inode with `CLIENT/`, because
+an in-place edit there would rewrite the blob under its own hash and corrupt it
+silently. That check is a link count, so hard-linking into the staging directory
+tripped it on every new blob and made a real warning meaningless. The delta is
+small by definition, so copying is cheap - and when it is not small, nothing is
+staged at all.
+
+### The manifest is now the big half of a small patch
+
+3.43 MB of one-line JSON for 23,368 files, sent every publish. It gzips to
+**0.99 MB**, and the launcher does not set `Accept-Encoding`, so
+`HttpURLConnection` adds `gzip` itself and decompresses transparently. Turning
+gzip on for `.json` on the patch host takes a small patch from ~3.6 MB to
+~1.1 MB with no client change at all. Worth doing; not done here, because it is
+a change to the server rather than to this tree.

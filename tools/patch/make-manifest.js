@@ -216,16 +216,22 @@ function sha256(abs) {
  *  A content-addressed store has to be immutable to be worth anything, so it
  *  gets its own copy of the bytes. --link restores the old behaviour for a
  *  throwaway store where the disk matters more than the guarantee.            */
+//  Blobs this run put into the store that were not there before. This is the
+//  whole upload: the store is content-addressed, so a blob the server already
+//  has is byte-identical to the one here and never needs sending again.
+const NEW_BLOBS = new Set();
+
 function place(abs, dest) {
   if (fs.existsSync(dest)) return 'kept';
   if (argv.includes('--link')) {
-    try { fs.linkSync(abs, dest); return 'linked'; } catch (e) {}
+    try { fs.linkSync(abs, dest); NEW_BLOBS.add(path.basename(dest)); return 'linked'; } catch (e) {}
   }
   //  Write beside and rename, so an interrupted run cannot leave a short blob
   //  sitting under a name that says it is complete.
   const tmp = dest + '.tmp';
   fs.copyFileSync(abs, tmp);
   fs.renameSync(tmp, dest);
+  NEW_BLOBS.add(path.basename(dest));
   return 'copied';
 }
 
@@ -521,6 +527,80 @@ fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null,
   }
 }
 
+/*  The upload set.
+ *
+ *  Uploading the whole store is 4.8 GB and almost all of it is already on the
+ *  server. Because the store is content-addressed, a blob that is present is by
+ *  definition the right bytes - nothing that already exists there can ever need
+ *  replacing. So a publish only has to send the blobs this run added, plus the
+ *  manifest and its signature, which are rewritten every time.
+ *
+ *  Staged as a directory laid out exactly like the server's, so uploading is
+ *  "copy this over launcher_mobile/" with no picking through a list.
+ *
+ *  By copy, deliberately, not by hard link. The store already warns when a blob
+ *  shares an inode with CLIENT/, because an in-place edit there would rewrite
+ *  the blob under its own hash and corrupt it silently; that check is a link
+ *  count, so linking into the staging directory would trip it on every new blob
+ *  and make a real warning meaningless. The delta is small by definition, so
+ *  the copy is cheap - and when it is not small, nothing is staged at all.
+ *
+ *  Order matters and the layout gives it for free: blobs/ sorts before
+ *  manifest.json, so any tool that walks the tree alphabetically sends the data
+ *  before the manifest that points at it. A client that polls mid-upload then
+ *  sees the old manifest and a store that has grown, which is harmless - never
+ *  a new manifest naming a blob that has not landed.                          */
+const UP = path.join(path.dirname(OUT), 'upload');
+{
+  let newBytes = 0;
+  for (const h of NEW_BLOBS) {
+    const src = path.join(OUT, 'blobs', h);
+    if (fs.existsSync(src)) newBytes += fs.statSync(src).size;
+  }
+  //  A first deployment, or one so large that staging would mean copying the
+  //  store beside itself. There is nothing useful to stage: the answer is to
+  //  send launcher_mobile/ as it stands.
+  const wholesale = NEW_BLOBS.size > 4000 || newBytes > 1024 * 1024 * 1024;
+
+  fs.rmSync(UP, { recursive: true, force: true });
+  const lines = [];
+  let staged = 0, stagedBytes = 0;
+
+  if (wholesale) {
+    lines.push('# Store version ' + version + ' - upload launcher_mobile/ whole.');
+    lines.push('# ' + NEW_BLOBS.size + ' new blob(s), ' + mb(newBytes) + ': too much of the store');
+    lines.push('# is new for a delta to be worth staging.');
+    global.__uploadSummary = NEW_BLOBS.size + ' new blob(s), ' + mb(newBytes) +
+                             ' - too large to stage, send launcher_mobile/ whole';
+  } else {
+    fs.mkdirSync(path.join(UP, 'blobs'), { recursive: true });
+    for (const h of NEW_BLOBS) {
+      const src = path.join(OUT, 'blobs', h);
+      if (!fs.existsSync(src)) continue;
+      fs.copyFileSync(src, path.join(UP, 'blobs', h));
+      staged++; stagedBytes += fs.statSync(src).size;
+    }
+    for (const n of ['manifest.json', 'manifest.sig']) {
+      const src = path.join(OUT, n);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(UP, n));
+    }
+    lines.push('# Upload set for store version ' + version);
+    lines.push('# Copy the contents of out/upload/ into launcher_mobile/ on the server.');
+    lines.push('# Everything else there is already correct - the store is content-addressed,');
+    lines.push('# so a blob that is present cannot be the wrong bytes.');
+    lines.push('#');
+    lines.push('# ' + staged + ' new blob(s), ' + mb(stagedBytes) + ', plus the manifest and its signature.');
+    lines.push('');
+    for (const h of Array.from(NEW_BLOBS).sort()) lines.push('blobs/' + h);
+    lines.push('manifest.json');
+    lines.push('manifest.sig');
+    global.__uploadSummary = staged + ' new blob(s), ' + mb(stagedBytes) +
+                             ' + manifest  ->  out/upload';
+  }
+  fs.writeFileSync(path.join(path.dirname(OUT), 'UPLOAD.txt'),
+                   lines.join(String.fromCharCode(10)) + String.fromCharCode(10));
+}
+
 const uniq = new Set(files.map(f => f.sha256)).size;
 console.log('                                        ');
 console.log('files    : ' + files.length + '  (' + uniq + ' unique blobs)');
@@ -529,6 +609,7 @@ console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept +
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
             (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
+console.log('upload   : ' + global.__uploadSummary);
 console.log('apk      : ' + (apk
   ? 'versionCode ' + apk.versionCode + ' "' + apk.versionName + '", ' + mb(apk.size)
   : 'none offered'));
@@ -568,8 +649,13 @@ if (changes) {
 }
 
 console.log('');
-console.log('upload the contents of ' + OUT);
+console.log('upload the contents of ' + UP);
 console.log('to http://<host>/launcher_mobile/');
+console.log('');
+console.log('that is the whole upload - see out/UPLOAD.txt. Sending all of');
+console.log(OUT);
+console.log('would work too and is what a first deployment needs, but every');
+console.log('blob already on the server is byte-identical to the one here.');
 
 /* --------------------------------------------------------------------- fsck
    Every blob re-hashed and checked against its own name. Slow - it reads the
