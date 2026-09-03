@@ -894,3 +894,30 @@ staged at all.
 gzip on for `.json` on the patch host takes a small patch from ~3.6 MB to
 ~1.1 MB with no client change at all. Worth doing; not done here, because it is
 a change to the server rather than to this tree.
+
+### The upload set accumulates until you confirm it landed
+
+`NEW_BLOBS` is what a run added to the *local* store, which is not the same
+question as what the server is missing. Publish twice without uploading in
+between and the second run adds nothing for the first run's blobs - they are
+already in the store - so a set rebuilt from scratch each run would list only
+the second run's. Uploading that would leave the server with a manifest naming
+blobs it has never been sent, and clients would fail on a file that looks
+perfectly fine here.
+
+So `out/upload/` **grows** until it is cleared:
+
+    MAKE-PATCH.bat --uploaded
+
+Run that only after a successful upload. Skipping it is safe - the next set
+still carries the same files, and re-sending a blob the server already has is a
+no-op because the name is the hash. Running it too early is not: the server ends
+up missing blobs the manifest names.
+
+The summary line says which it is:
+
+    upload   : 2 blob(s), 0.2 MB + manifest -> out/upload  (accumulated since v401)
+               [clear with --uploaded once it is up]
+
+`out/upload` and `out/UPLOAD.txt` are in the sweep's keep-set for this reason -
+sweeping them would drop exactly the pending blobs.

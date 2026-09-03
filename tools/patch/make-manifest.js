@@ -562,7 +562,31 @@ const UP = path.join(path.dirname(OUT), 'upload');
   //  send launcher_mobile/ as it stands.
   const wholesale = NEW_BLOBS.size > 4000 || newBytes > 1024 * 1024 * 1024;
 
-  fs.rmSync(UP, { recursive: true, force: true });
+  /*  The set ACCUMULATES until it is uploaded, and is cleared only by
+   *  --uploaded.
+   *
+   *  NEW_BLOBS is what this run added to the *local* store, which is not the
+   *  same question as what the server is missing. Publish twice without
+   *  uploading and the second run adds nothing for the first run's blobs -
+   *  they are already in the store - so a set that was rebuilt each time would
+   *  list only the second run's, and uploading it would leave the server with
+   *  a manifest naming blobs it has never been sent. Clients would then fail
+   *  on a file that looks perfectly fine here.
+   *
+   *  Growing the set instead is always safe: re-sending a blob the server
+   *  already has is a no-op, because the name is the hash.                    */
+  const sinceFile = path.join(UP, '.since');
+  if (argv.includes('--uploaded')) {
+    fs.rmSync(UP, { recursive: true, force: true });
+    fs.rmSync(path.join(path.dirname(OUT), 'UPLOAD.txt'), { force: true });
+    console.log('upload   : set cleared - the server is up to date as of version ' + version);
+  }
+  let since = version;
+  if (fs.existsSync(sinceFile)) {
+    const v = parseInt(fs.readFileSync(sinceFile, 'utf8'), 10);
+    if (v > 0) since = v;
+  }
+
   const lines = [];
   let staged = 0, stagedBytes = 0;
 
@@ -578,24 +602,33 @@ const UP = path.join(path.dirname(OUT), 'upload');
       const src = path.join(OUT, 'blobs', h);
       if (!fs.existsSync(src)) continue;
       fs.copyFileSync(src, path.join(UP, 'blobs', h));
-      staged++; stagedBytes += fs.statSync(src).size;
     }
+    //  Only the newest manifest matters - it is the one the client reads.
     for (const n of ['manifest.json', 'manifest.sig']) {
       const src = path.join(OUT, n);
       if (fs.existsSync(src)) fs.copyFileSync(src, path.join(UP, n));
     }
-    lines.push('# Upload set for store version ' + version);
+    fs.writeFileSync(sinceFile, String(since));
+    //  Count what is actually staged, which after a second publish without an
+    //  upload is more than this run added.
+    for (const h of fs.readdirSync(path.join(UP, 'blobs'))) {
+      staged++; stagedBytes += fs.statSync(path.join(UP, 'blobs', h)).size;
+    }
+    lines.push('# Upload set for store version ' + version +
+               (since !== version ? ' (accumulated since version ' + since + ')' : ''));
     lines.push('# Copy the contents of out/upload/ into launcher_mobile/ on the server.');
     lines.push('# Everything else there is already correct - the store is content-addressed,');
     lines.push('# so a blob that is present cannot be the wrong bytes.');
     lines.push('#');
     lines.push('# ' + staged + ' new blob(s), ' + mb(stagedBytes) + ', plus the manifest and its signature.');
     lines.push('');
-    for (const h of Array.from(NEW_BLOBS).sort()) lines.push('blobs/' + h);
+    for (const h of fs.readdirSync(path.join(UP, 'blobs')).sort()) lines.push('blobs/' + h);
     lines.push('manifest.json');
     lines.push('manifest.sig');
-    global.__uploadSummary = staged + ' new blob(s), ' + mb(stagedBytes) +
-                             ' + manifest  ->  out/upload';
+    global.__uploadSummary = staged + ' blob(s), ' + mb(stagedBytes) +
+                             ' + manifest  ->  out/upload' +
+                             (since !== version ? '   (accumulated since v' + since + ')' : '') +
+                             (staged ? '   [clear with --uploaded once it is up]' : '');
   }
   fs.writeFileSync(path.join(path.dirname(OUT), 'UPLOAD.txt'),
                    lines.join(String.fromCharCode(10)) + String.fromCharCode(10));

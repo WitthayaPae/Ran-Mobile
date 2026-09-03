@@ -214,7 +214,12 @@ function sweepOut() {
   const apk = apkName();
   return sweep(path.join(NATIVE, 'out'),
                new Set(['launcher_mobile', apk, apk + '.idsig',
-                        'arm64-v8a', 'x86_64', 'ref', 'PAYLOAD.txt']),
+                        'arm64-v8a', 'x86_64', 'ref', 'PAYLOAD.txt',
+                        //  The pending upload set. It accumulates across runs
+                        //  and is cleared only by --uploaded, so sweeping it
+                        //  here would silently drop blobs that are in the
+                        //  manifest but not yet on the server.
+                        'upload', 'UPLOAD.txt']),
                'out/');
 }
 
