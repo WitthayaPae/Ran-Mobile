@@ -65,31 +65,55 @@ function sample(img, fx, fy, o) {
 }
 
 const dir  = path.join(__dirname, '..', '..', 'native', 'android', 'res', 'drawable-nodpi');
-const art  = decode(path.join(dir, 'ran_loading.png'));
-const mark = decode(path.join(dir, 'ran_mark.png'));
+const art   = decode(path.join(dir, 'ran_loading.png'));
+const mark  = decode(path.join(dir, 'ran_mark.png'));
+const top   = decode(path.join(dir, 'ld_top.png'));
+const under = decode(path.join(dir, 'ld_under.png'));
 
 //  Both activities upscale the same 1024x512 source, so a 720p composite is
 //  exactly as sharp on screen as a 1440p one and a quarter of the APK weight.
 const W = 1280, H = 720;
 const out = Buffer.alloc(W * H * 4);
 
-//  CENTER_CROP: scale by whichever axis needs the larger factor, centre the rest.
-const s = Math.max(W / art.w, H / art.h);
-const dw = art.w * s, dh = art.h * s, ox = (W - dw) / 2, oy = (H - dh) / 2;
+//  The same 1024x768 split the game's loading screen uses: a band of 128/768
+//  top and bottom, the art cover-cropped into the two thirds between them.
+const bandH = Math.round(H * 128 / 768);
+const midY = bandH, midH = H - 2 * bandH;
+
+const s = Math.max(W / art.w, midH / art.h);
+const dw = art.w * s, dh = art.h * s;
+const ox = (W - dw) / 2, oy = midY + (midH - dh) / 2;
 const t = [0, 0, 0, 0];
-for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+for (let y = midY; y < midY + midH; y++) for (let x = 0; x < W; x++) {
   sample(art, (x - ox) / s, (y - oy) / s, t);
   const d = (y * W + x) * 4;
   out[d] = t[0]; out[d + 1] = t[1]; out[d + 2] = t[2]; out[d + 3] = 255;
 }
+
+//  The bands are stretched to width, as FIT_XY does on the page and as the
+//  client does in its own loading screen.
+function stretchBand(src, dstY) {
+  for (let y = 0; y < bandH; y++) for (let x = 0; x < W; x++) {
+    sample(src, x * src.w / W, y * src.h / bandH, t);
+    const d = ((dstY + y) * W + x) * 4;
+    const a = t[3] / 255;
+    out[d]     = Math.round(out[d] * (1 - a) + t[0] * a);
+    out[d + 1] = Math.round(out[d + 1] * (1 - a) + t[1] * a);
+    out[d + 2] = Math.round(out[d + 2] * (1 - a) + t[2] * a);
+    out[d + 3] = 255;
+  }
+}
+stretchBand(top, 0);
+stretchBand(under, H - bandH);
 
 //  The mark: 230dp wide, 30dp from the top, centred. Both test devices land
 //  between 18.0% and 19.1% of the screen width, so take the middle - the window
 //  background is on screen for a fraction of a second and a 1% difference in
 //  where it sits is not visible, while its absence very much was.
 //  Matches the launcher's 170dp against a ~1240dp-wide tablet.
-const mw = Math.round(W * 0.137), mh = Math.round(mw * mark.h / mark.w);
-const mx = Math.round((W - mw) / 2), my = Math.round(H * 0.041);
+//  Matches the page: in the top band, 82% of its height.
+const mh = Math.round(bandH * 0.82), mw = Math.round(mh * mark.w / mark.h);
+const mx = Math.round((W - mw) / 2), my = Math.round((bandH - mh) / 2);
 for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) {
   sample(mark, x * mark.w / mw, y * mark.h / mh, t);
   const a = t[3] / 255;

@@ -136,13 +136,45 @@ public class RanLauncher extends Activity {
         mPage = root;
         root.setBackgroundColor(Color.parseColor("#0B0E10"));
 
+        /*  Laid out like the game's own loading screen.
+         *
+         *  LoadingThread.cpp works in a 1024x768 virtual space: ld_top drawn
+         *  1024x128 at (0,0), the art 1024x512 at (0,128), ld_under 1024x128 at
+         *  (0,640). So each band is 128/768 of the height whatever the panel
+         *  is, and the art has the middle two thirds. Matching that is the
+         *  point - the player sees this screen and then, a moment later, the
+         *  client's map loader draws the same one.                            */
+        final int bandH = Math.round(screenHeightPx() * 128.0f / 768.0f);
+
         ImageView art = new ImageView(this);
         setDrawable(art, "ran_loading");
-        //  Fill the panel and crop, rather than letterbox: the art is 2:1 and
-        //  a tablet is not, and black bars around it look like a broken asset.
+        //  Fill the middle band and crop, rather than letterbox: black bars
+        //  around it look like a broken asset.
         art.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        root.addView(art, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        alp.topMargin = bandH;
+        alp.bottomMargin = bandH;
+        root.addView(art, alp);
+
+        //  The bands themselves are stretched to width, as the client does -
+        //  they are a frame, not a picture, and their ends are what has to meet
+        //  the edges of the screen.
+        ImageView topBand = new ImageView(this);
+        setDrawable(topBand, "ld_top");
+        topBand.setScaleType(ImageView.ScaleType.FIT_XY);
+        FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, bandH);
+        tlp.gravity = Gravity.TOP;
+        root.addView(topBand, tlp);
+
+        ImageView underBand = new ImageView(this);
+        setDrawable(underBand, "ld_under");
+        underBand.setScaleType(ImageView.ScaleType.FIT_XY);
+        FrameLayout.LayoutParams ulp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, bandH);
+        ulp.gravity = Gravity.BOTTOM;
+        root.addView(underBand, ulp);
 
         ImageView mark = new ImageView(this);
         setDrawable(mark, "ran_mark");
@@ -150,21 +182,29 @@ public class RanLauncher extends Activity {
         //  170dp, not the 230 the old mark used: that one was a wide wordmark
         //  at 177x96, this one is square, and 230dp square is a third of the
         //  height of the page.
-        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(
-                dp(170), ViewGroup.LayoutParams.WRAP_CONTENT);
+        /*  In the top band, which is empty by design - it is where the client
+         *  puts the map name on its own loading screen. Below it the logo
+         *  landed on the group's heads, which read as clutter rather than a
+         *  title. Sized off the band rather than in dp so it keeps its margin
+         *  on any panel.                                                      */
+        final int markH = Math.round(bandH * 0.82f);
+        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(markH, markH);
         mlp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        mlp.topMargin = dp(30);
+        mlp.topMargin = (bandH - markH) / 2;
         root.addView(mark, mlp);
 
         /*  The text and the bar sit in a band along the bottom. A little scrim
          *  behind them, because the art is bright sky in places and white text
          *  on it is unreadable.                                                */
+        /*  The status sits on the bottom band now, so it needs no scrim of its
+         *  own - the band is already dark, and a second dark rectangle over it
+         *  only made a seam.                                                  */
         LinearLayout band = new LinearLayout(this);
         band.setOrientation(LinearLayout.VERTICAL);
-        band.setBackgroundColor(Color.parseColor("#B4000000"));
-        band.setPadding(dp(24), dp(12), dp(24), dp(14));
+        band.setGravity(Gravity.CENTER_VERTICAL);
+        band.setPadding(dp(24), 0, dp(24), 0);
         FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT, bandH);
         blp.gravity = Gravity.BOTTOM;
         root.addView(band, blp);
 
@@ -310,6 +350,16 @@ public class RanLauncher extends Activity {
     }
 
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
+
+    /*  The whole panel, not the part left over after the system bars: this
+     *  window is immersive and the picture it hands to the client covers the
+     *  game surface, which is the whole panel.                                */
+    private int screenHeightPx() {
+        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+        return dm.heightPixels > 0 ? dm.heightPixels
+                                   : getResources().getDisplayMetrics().heightPixels;
+    }
 
     /*  By name, not by R.drawable: this APK is linked by aapt2 without --java,
      *  so there is no generated R class to compile against. A missing drawable

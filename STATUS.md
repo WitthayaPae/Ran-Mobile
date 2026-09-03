@@ -4934,3 +4934,43 @@ its glow blending against the sky, which is the DXT5 path doing its job.
 `C:/Program Files/Git/storage/...`; the push *reports success* and the device
 keeps the old file. The first Gui.rcc push did exactly that and the login screen
 was still showing the old wordmark for it.
+
+## The patch page is now the game's loading screen (2026-09-03)
+
+New background art (`ran_old_film.dds`, 4096x2828 DXT5, the sepia class group
+shot) and the two panels the client's own loading screen uses.
+
+The proportions are not invented. `LoadingThread.cpp` lays that screen out in a
+1024x768 virtual space:
+
+    ld_top.dds   @ 0,0   1024x140   drawn 1024x128 at (0,0)
+    the art                         drawn 1024x512 at (0,128)
+    ld_under.dds @ 0,7   1024x140   drawn 1024x128 at (0,640)
+
+so each band is **128/768 of the height** whatever the panel is, and the art has
+the middle two thirds. The launcher page and `compose-splash.js` both build to
+exactly that, which is the point of it: the player sees this screen and then,
+moments later, the client's map loader draws the same one.
+
+The bands stretch to width (`FIT_XY`) because they are a frame, not a picture -
+their ends have to meet the edges of the screen - while the art is cover-cropped
+into the middle.
+
+**The logo moved into the top band.** Below it, it landed on the group's heads
+and read as clutter. The band is empty by design; it is where the client puts
+the map name. It is sized at 82% of the band rather than in dp, so it keeps its
+margin on any panel.
+
+**The status band lost its scrim.** It used to paint `#B4000000` behind the text;
+over `ld_under` that was a second dark rectangle on a dark panel and showed as a
+seam. The text and bar now sit directly on the band.
+
+`ran_old_film.dds` lives in `MOBILE/art/`, not `CLIENT/`: it is drawn from the
+APK - the launcher paints this screen *while* provisioning the data root, so
+nothing it needs can come from there - and putting it in `CLIENT/` would ship
+11.5 MB to every player for a file the game never reads.
+
+`extract-launcher-art.js` no longer writes `ran_mark.png`. `make-icons.js` owns
+it now that the mark is the Ran Legacy logo instead of a crop of a client sheet,
+and leaving the old job in would have quietly put the RAN ONLINE wordmark back
+the next time anyone ran the extractor.

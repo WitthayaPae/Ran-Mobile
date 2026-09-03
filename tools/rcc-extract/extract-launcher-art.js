@@ -14,10 +14,21 @@
 //  Source pieces, the same ones splash.cpp composites for the in-game loading
 //  screen, so the two look like one screen rather than two:
 //
-//      loading_002.dds                     the lobby art
-//      outgui_character.dds @ 335,416      LOGIN_MARK, the RAN mark on the
-//                                          login page (from the ui config, not
-//                                          eyeballed)
+//  The pieces, and where the numbers come from - LoadingThread.cpp lays the
+//  in-game loading screen out in a 1024x768 virtual space:
+//
+//      ld_top.dds    @ 0,0   1024x140   drawn 1024x128 at (0,0)
+//      the art                          drawn 1024x512 at (0,128)
+//      ld_under.dds  @ 0,7   1024x140   drawn 1024x128 at (0,640)
+//
+//  so each band is 128/768 of the height. The patch page is built to the same
+//  proportions, which is the point: it is the same screen the player sees a
+//  moment later when the client loads a map.
+//
+//  ran_mark.png is NOT written here any more - make-icons.js owns it, because
+//  the mark is now the Ran Legacy logo rather than a crop of a client sheet.
+//  Leaving the old job in would silently put the RAN ONLINE wordmark back the
+//  next time anyone ran this.
 //
 const fs = require('fs');
 const path = require('path');
@@ -36,6 +47,8 @@ function findRoot(dir) {
 }
 const ROOT = findRoot(__dirname);
 const GUI  = path.join(ROOT, 'CLIENT/textures/gui');
+const ART  = path.join(ROOT, 'MOBILE/art');
+const u    = require('./imgutil.js');
 const RES  = path.join(ROOT, 'MOBILE/native/android/res/drawable-nodpi');
 
 /* ------------------------------------------------------------------ png out */
@@ -78,8 +91,8 @@ function encodePNG(w, h, rgba) {
 }
 
 /* ------------------------------------------------------------------- source */
-function loadDds(name) {
-  const p = path.join(GUI, name);
+function loadDds(name, dir) {
+  const p = path.join(dir || GUI, name);
   if (!fs.existsSync(p)) throw new Error('missing ' + p);
   const img = dds.decode(fs.readFileSync(p));
   if (!img || !img.data) throw new Error('cannot decode ' + name);
@@ -103,14 +116,24 @@ function crop(img, x0, y0, w, h) {
 fs.mkdirSync(RES, { recursive: true });
 
 const jobs = [
-  { out: 'ran_loading.png', src: 'loading_002.dds' },
-  { out: 'ran_mark.png',    src: 'outgui_character.dds', x: 335, y: 416, w: 177, h: 96 },
+  //  The page art. 4096x2828 is far more than the panel can show and would put
+  //  11 MB of PNG in the APK, so it is taken down to something the largest
+  //  panel still cannot out-resolve.
+  { out: 'ran_loading.png', src: 'ran_old_film.dds', dir: ART, max: 1600 },
+  //  The two bands, cropped to the rect LoadingThread actually samples.
+  { out: 'ld_top.png',      src: 'ld_top.dds',   x: 0, y: 0, w: 1024, h: 140 },
+  { out: 'ld_under.png',    src: 'ld_under.dds', x: 0, y: 7, w: 1024, h: 140 },
 ];
 
 for (const j of jobs) {
-  const img = loadDds(j.src);
-  const w = j.w || img.width, h = j.h || img.height;
-  const rgba = (j.w ? crop(img, j.x, j.y, j.w, j.h) : img.data);
+  const img = loadDds(j.src, j.dir);
+  let w = j.w || img.width, h = j.h || img.height;
+  let rgba = (j.w ? crop(img, j.x, j.y, j.w, j.h) : img.data);
+  if (j.max && w > j.max) {
+    const sc = j.max / w, nw = j.max, nh = Math.round(h * sc);
+    rgba = u.resize({ w: w, h: h, px: rgba }, nw, nh).px;
+    w = nw; h = nh;
+  }
   const png = encodePNG(w, h, rgba);
   fs.writeFileSync(path.join(RES, j.out), png);
   console.log('  ' + j.out.padEnd(18) + w + 'x' + h + '  ' +
