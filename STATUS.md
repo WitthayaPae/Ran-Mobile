@@ -4842,3 +4842,46 @@ the boot screen read 189 against the page's 176.
 
 In world afterwards on the Tab S9: 120 fps, and the PVP reward chest renders
 with its texture.
+
+## The chat resize grip was unhittable, not broken (2026-09-03)
+
+`CHAT_LEFT_BAR_TOP` - the little arrow at the chat's top-left - is what resizes
+the chat: it posts `UIMSG_MOUSEIN_LEFTBAR_DRAG`, and `CBasicChat::Update` then
+moves the window's top edge to follow the pointer. It is **19x15 layout units**.
+The client lays out at half the panel width, so on a Tab S9 that is 38x30
+physical pixels, about 18x14dp against the 48dp a finger needs - and it has to
+be dragged, not tapped.
+
+The drag was never broken. `adb shell input swipe` from the middle of the grip
+expands the chat exactly as on PC, verified before changing anything.
+
+`CUIControl::SetTouchPad` (RAN_MOBILE only) widens just the rectangle
+`MouseUpdate` tests, leaving the artwork alone. It defaults to zero, so every
+other control keeps the identical test.
+
+**Both gates have to be widened.** Padding the grip alone looked like it did
+nothing. The probe said why:
+
+    from inside the old rect:  LEFT_BAR drag msg=0x01000042 mousein=1  -> 22 drag frames
+    from the padded zone:      LEFT_BAR drag msg=0x01000082 mousein=0  ->  0 drag frames
+
+The grip posted the message and `CBasicChat::TranslateUIMessage` dropped it,
+because that case also requires the **LEFT_BAR group** to report `UIMSG_MOUSEIN`
+and the group is the same 19 units wide. Padding both to 18 units gives a
+55x51-unit target, a little over 48dp each way.
+
+Downwards it reaches y=33 inside the left bar and the chat-state buttons there
+start at y=41, so nothing else loses a tap - confirmed by tapping the chat-mode
+button afterwards and watching the icon still cycle.
+
+**Measured on LDPlayer**, collapsed mean luminance 69 against expanded 33:
+
+    from (875,1145) right+below:  70 -> 32   expands
+    from (845,1160) below:        73 -> 32   expands
+    from (890,1115) right:        76 -> 33   expands
+    from (875,1075) above:        70 -> 44   expands
+    from (808,1115) left:         71 -> 103  no - that is off the chat window
+                                             entirely and the tap goes to the world
+
+**Not yet checked on the Tab S9** - it dropped off adb again before this could be
+run there.
