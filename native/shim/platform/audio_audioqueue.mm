@@ -93,6 +93,8 @@ extern "C" int RanAudioSink_Start ( void )
     st = AudioQueueStart ( g_queue, NULL );
     if (st != noErr) { LOGE ( "AudioQueueStart failed: %d", (int) st ); g_running = false; return 0; }
 
+    RanAudio_SetSinkLatency ( kFramesPerBuffer * kBuffers );
+
     LOGI ( "AudioQueue out: %d Hz stereo, %d x %d frames",
            RANAUDIO_RATE, kBuffers, kFramesPerBuffer );
     return 1;

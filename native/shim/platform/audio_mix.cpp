@@ -50,6 +50,18 @@ std::vector<Voice>   g_voices;
 bool     g_ready = false;
 bool     g_muted = false;
 unsigned g_played = 0, g_underruns = 0;
+//  Frames the sink has taken but not yet played. See RanAudio_SetSinkLatency.
+int      g_sinkLatency = 0;
+//  When the last mix block was produced, and how many frames it covered.
+//
+//  A hardware play cursor moves sample by sample. Ours only moves when the sink
+//  asks for a block, 20 ms at a time, and a caller polling at the same period
+//  can see it standing still. The music streamer reads a stalled cursor as "a
+//  whole lap has been consumed" and refills the ENTIRE buffer - six seconds of
+//  music rewritten under the playhead, which is the tearing and repeating.
+//  So the reported position is interpolated between blocks, against the clock.
+double   g_blockTime = 0.0;
+int      g_blockFrames = 0;
 
 //  DirectSound gives volume in hundredths of a decibel, 0 loudest,
 //  -10000 silent. Anything at or below the floor is off, not very quiet.
@@ -427,7 +439,26 @@ extern "C" unsigned RanAudio_VoicePosition ( int voice )
         const unsigned frameBytes = !v->ring.empty()
             ? (unsigned) ( v->ringChannels * ( v->ringBits / 8 ) )
             : ( clipOf ( v->clip ) ? clipOf ( v->clip )->bytesPerFrameSrc : 4 );
-        at = (unsigned) ( v->pos * frameBytes );
+
+        //  Held back by what the sink still holds, and carried forward from the
+        //  last block by the clock so it never appears to stand still between
+        //  blocks - which is what a hardware cursor does.
+        double ahead = 0.0;
+        if (g_blockTime > 0.0) {
+            struct timespec ts;
+            clock_gettime ( CLOCK_MONOTONIC, &ts );
+            const double dt = ( (double) ts.tv_sec + (double) ts.tv_nsec * 1e-9 ) - g_blockTime;
+            ahead = dt * (double) RANAUDIO_RATE;
+            if (ahead < 0.0) ahead = 0.0;
+            if (ahead > (double) g_blockFrames) ahead = (double) g_blockFrames;
+        }
+        double pos = v->pos - (double) g_sinkLatency + ahead;
+        if (!v->ring.empty()) {
+            const double ringFrames = (double) ( v->ring.size() / ( frameBytes ? frameBytes : 1 ) );
+            while (pos < 0.0) pos += ringFrames;
+        } else if (pos < 0.0) pos = 0.0;
+
+        at = (unsigned) ( pos * frameBytes );
     }
     pthread_mutex_unlock ( &g_lock );
     return at;
@@ -436,6 +467,13 @@ extern "C" unsigned RanAudio_VoicePosition ( int voice )
 //  882 frames is the sink block on both platforms; see audio_opensl.cpp and
 //  audio_audioqueue.mm.
 extern "C" int RanAudio_SafetyFrames ( void ) { return 882 * 3; }
+
+extern "C" void RanAudio_SetSinkLatency ( int frames )
+{
+    g_sinkLatency = frames > 0 ? frames : 0;
+    LOGI ( "sink holds %d frames (%.0f ms) - the reported play cursor lags by that much",
+           g_sinkLatency, g_sinkLatency * 1000.0 / RANAUDIO_RATE );
+}
 
 extern "C" void RanAudio_SetMuted ( int muted ) { g_muted = ( muted != 0 ); }
 
@@ -448,6 +486,12 @@ extern "C" void RanAudio_LogStats ( void )
 
 extern "C" void RanAudio_Mix ( short *out, int frames )
 {
+    {
+        struct timespec ts;
+        clock_gettime ( CLOCK_MONOTONIC, &ts );
+        g_blockTime = (double) ts.tv_sec + (double) ts.tv_nsec * 1e-9;
+        g_blockFrames = frames;
+    }
     memset ( out, 0, (size_t) frames * 2 * sizeof(short) );
     if (!g_ready || g_muted) return;
 
@@ -595,6 +639,33 @@ extern "C" void RanAudio_Mix ( short *out, int frames )
                        s_maxVoices, s_peak, s_over, s_clipped, s_gain, who.c_str() );
             }
             s_blocks = 0; s_peak = 0; s_maxVoices = 0; s_clipped = 0; s_over = 0;
+        }
+    }
+
+    //  With the "audiodump" flag present, the first ten seconds of what the
+    //  mixer actually produced are written to the diagnostic directory as raw
+    //  16-bit stereo PCM. Listening is the only way to settle what a defect
+    //  sounds like, and this is the closest thing to listening that a log can
+    //  do: the file can be pulled and measured.
+    {
+        static FILE *s_dump = NULL;
+        static long  s_left = 0;
+        static bool  s_armed = false;
+        const bool on = RanPlat_DiagExists ( "audiodump" ) != 0;
+        if (on && !s_armed) {
+            s_armed = true;
+            s_dump = RanPlat_DiagOpenWrite ( "mix.pcm" );
+            s_left = (long) RANAUDIO_RATE * 10;          //  ten seconds of frames
+            if (s_dump) LOGI ( "audio dump started" );
+        } else if (!on && s_armed) {
+            s_armed = false;
+            if (s_dump) { fclose ( s_dump ); s_dump = NULL; LOGI ( "audio dump closed" ); }
+        }
+        if (s_dump && s_left > 0) {
+            const long n = frames < s_left ? frames : s_left;
+            fwrite ( out, sizeof(short) * 2, (size_t) n, s_dump );
+            s_left -= n;
+            if (s_left <= 0) { fclose ( s_dump ); s_dump = NULL; LOGI ( "audio dump complete" ); }
         }
     }
 

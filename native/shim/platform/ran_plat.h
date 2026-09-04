@@ -24,6 +24,9 @@ void        RanPlat_SetDiagRoot ( const char *dir );
 //  Prefer the two helpers below; they are what almost every use wants.
 const char *RanPlat_DiagPath ( const char *name );
 
+//  A diagnostic file opened for WRITING, for dumps the device produces.
+FILE       *RanPlat_DiagOpenWrite ( const char *name );
+
 //  Log a line.
 //
 //  Every file in the shim had its own LOGI/LOGE wrapping __android_log_print,

@@ -80,6 +80,16 @@ void RanAudio_Mix ( short *out, int frames );
 //  block in flight, the one about to be asked for, and scheduling jitter.
 int  RanAudio_SafetyFrames ( void );
 
+//  How much audio the sink has accepted but not yet played, in frames.
+//
+//  A real DirectSound buffer reports the HARDWARE play cursor, which lags what
+//  the mixer has produced by whatever is still in flight. Reporting the mixed
+//  position instead tells a streaming writer that more has been played than it
+//  has, so it refills audio the device has not reached - the music cutting out
+//  and repeating. The sink declares its queue depth here and the reported
+//  cursor is held back by it.
+void RanAudio_SetSinkLatency ( int frames );
+
 //  Master volume, applied after every voice. The options screen sets sfx and
 //  music separately, and both arrive as DirectSound centibels on the voices, so
 //  this is only the mute the platform asks for when the app loses focus.

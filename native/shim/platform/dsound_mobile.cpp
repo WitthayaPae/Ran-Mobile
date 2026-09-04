@@ -55,6 +55,28 @@ public:
     STDMETHOD(GetCurrentPosition)(LPDWORD pPlay, LPDWORD pWrite)
     {
         const unsigned at = m_voice ? RanAudio_VoicePosition ( m_voice ) : 0;
+        //  Every step the caller sees. A cursor that ever moves BACKWARDS
+        //  without wrapping makes the streamer think a lap has passed and refill
+        //  the whole buffer, which is the music racing through the track.
+        if (m_voice && m_bytes) {
+            static unsigned s_prev = 0; static bool s_have = false;
+            static unsigned s_back = 0, s_calls = 0, s_wraps = 0;
+            if (s_have) {
+                ++s_calls;
+                if (at < s_prev) {
+                    //  A real wrap lands near the start after being near the end.
+                    if (s_prev > m_bytes - m_bytes / 8 && at < m_bytes / 8) ++s_wraps;
+                    else {
+                        ++s_back;
+                        if (s_back <= 5 && RanPlat_DiagExists ( "audiolog" ))
+                            LOGI ( "cursor went BACKWARDS: %u -> %u", s_prev, at );
+                    }
+                }
+                if (s_calls % 300 == 0 && RanPlat_DiagExists ( "audiolog" ))
+                    LOGI ( "cursor: %u reads, %u wraps, %u backward steps", s_calls, s_wraps, s_back );
+            }
+            s_prev = at; s_have = true;
+        }
         if (pPlay)  *pPlay = at;
         //  The write cursor is the first byte it is safe to write, and
         //  everything between the play cursor and it is in flight.
@@ -107,6 +129,35 @@ public:
         if (offset >= m_bytes) offset %= m_bytes;
         if (bytes > m_bytes) bytes = m_bytes;
 
+        //  What the client asks for, and how often. One refill should be one
+        //  timer tick of audio; anything else says the loop is not running at
+        //  the rate it thinks it is.
+        {
+            static double s_last = 0.0, s_sum = 0.0, s_bytes = 0.0; static unsigned s_n = 0;
+            struct timespec ts; clock_gettime ( CLOCK_MONOTONIC, &ts );
+            const double now = ts.tv_sec + ts.tv_nsec * 1e-9;
+            if (s_last > 0.0) { s_sum += now - s_last; s_bytes += bytes; ++s_n; }
+            s_last = now;
+            if (s_n >= 100 && RanPlat_DiagExists ( "audiolog" )) {
+                LOGI ( "refill: every %.1f ms, %.0f bytes each (%.0f bytes/s, real time is %u)",
+                       s_sum * 1000.0 / s_n, s_bytes / s_n,
+                       s_bytes / ( s_sum > 0 ? s_sum : 1 ), (unsigned) m_fmt.nAvgBytesPerSec );
+                s_sum = 0.0; s_bytes = 0.0; s_n = 0;
+            }
+        }
+        //  A raw trace of the first refills: where the client is writing, how
+        //  much, and where the play cursor is at that moment.
+        {
+            static unsigned s_traced = 0;
+            //  Every 50th refill for the whole session, not just the start: the
+            //  first half second is healthy and the fault appears later.
+            if (( ++s_traced % 50 ) == 0 && RanPlat_DiagExists ( "audiolog" )) {
+                const unsigned pl = m_voice ? RanAudio_VoicePosition ( m_voice ) : 0;
+                LOGI ( "lock #%u: writeCursor %u + %u bytes, play at %u, gap %u",
+                       s_traced, offset, bytes, pl,
+                       ( pl + m_bytes - offset ) % m_bytes );
+            }
+        }
         m_lockOffset = offset;
         m_lockBytes  = bytes;
         const DWORD first = ( offset + bytes <= m_bytes ) ? bytes : ( m_bytes - offset );
@@ -185,10 +236,51 @@ public:
                            ? ( play >= from && play < to )
                            : ( play >= from || play < ( to - m_bytes ) );
             static unsigned s_writes = 0, s_hits = 0;
+            static unsigned s_minLead = 0xFFFFFFFF, s_starved = 0;
             ++s_writes;
             if (hit) ++s_hits;
-            if (s_writes % 200 == 0 && RanPlat_DiagExists ( "audiolog" ))
-                LOGI ( "ring: %u writes, %u landed on the play cursor", s_writes, s_hits );
+
+            //  How much audio is ahead of the play head after this write.
+            //
+            //  The client fills from its own write cursor up to the play
+            //  cursor, so what is ahead of the play head is everything else in
+            //  the ring. If that ever falls to nothing the mixer is reading
+            //  bytes the writer has not reached this lap - stale audio, then a
+            //  gap: the music cutting out and repeating.
+            const unsigned end = ( m_lockOffset + m_lockBytes ) % m_bytes;
+            const unsigned lead = ( end + m_bytes - play ) % m_bytes;
+            if (lead < s_minLead) s_minLead = lead;
+            if (lead < m_fmt.nAvgBytesPerSec / 20) ++s_starved;   //  under 50 ms
+
+            //  How fast the play cursor actually moves, against the clock.
+            //  It should advance exactly nAvgBytesPerSec per second; the
+            //  client sizes every refill from it, so if it runs fast the whole
+            //  track is decoded in seconds.
+            {
+                static unsigned s_lastPlay = 0;
+                static double   s_lastTime = 0.0;
+                static double   s_bytes = 0.0;
+                struct timespec ts; clock_gettime ( CLOCK_MONOTONIC, &ts );
+                const double now = ts.tv_sec + ts.tv_nsec * 1e-9;
+                if (s_lastTime > 0.0) {
+                    s_bytes += (double) ( ( play + m_bytes - s_lastPlay ) % m_bytes );
+                    if (now - s_lastTime > 2.0 && RanPlat_DiagExists ( "audiolog" )) {
+                        LOGI ( "cursor: %.0f bytes/s (format says %u)",
+                               s_bytes / ( now - s_lastTime ), (unsigned) m_fmt.nAvgBytesPerSec );
+                        s_bytes = 0.0; s_lastTime = now;
+                    }
+                } else s_lastTime = now;
+                s_lastPlay = play;
+            }
+
+            if (s_writes % 200 == 0 && RanPlat_DiagExists ( "audiolog" )) {
+                LOGI ( "ring: %u writes, %u on the cursor, min lead %u bytes (%.0f ms), "
+                       "%u writes under 50 ms of lead",
+                       s_writes, s_hits, s_minLead,
+                       m_fmt.nAvgBytesPerSec ? s_minLead * 1000.0 / m_fmt.nAvgBytesPerSec : 0.0,
+                       s_starved );
+                s_minLead = 0xFFFFFFFF;
+            }
             m_lockBytes = 0;
         }
         static unsigned s_calls = 0, s_bytes = 0, s_nonzero = 0;

@@ -105,6 +105,9 @@ extern "C" int RanAudioSink_Start ( void )
     //  so an unprimed queue never starts.
     for (int i = 0; i < kBuffers; ++i) queueCallback ( g_queue, NULL );
 
+    //  Everything enqueued is audio the device has not played yet.
+    RanAudio_SetSinkLatency ( kFramesPerBuffer * kBuffers );
+
     LOGI ( "OpenSL ES out: %d Hz stereo, %d x %d frames",
            RANAUDIO_RATE, kBuffers, kFramesPerBuffer );
     return 1;

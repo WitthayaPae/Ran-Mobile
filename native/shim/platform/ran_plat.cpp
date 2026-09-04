@@ -96,6 +96,11 @@ extern "C" int RanPlat_DiagExists ( const char *name )
     return access ( RanPlat_DiagPath ( name ), F_OK ) == 0 ? 1 : 0;
 }
 
+extern "C" FILE *RanPlat_DiagOpenWrite ( const char *name )
+{
+    return fopen ( RanPlat_DiagPath ( name ), "wb" );
+}
+
 extern "C" FILE *RanPlat_DiagOpen ( const char *name )
 {
     return fopen ( RanPlat_DiagPath ( name ), "rb" );
