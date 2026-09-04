@@ -191,13 +191,51 @@ what, not by when it was found.
    emulator, which has no on-screen keyboard and reports 0.
 
 8. **Intermittent SIGSEGV** in `RanTexture::LockRect` by way of
-   `RanD3DXFont::glyphFor`. Unattributed, no tombstone kept. The font atlas is
-   locked and written from whichever thread is drawing, and the loading screen
-   draws from its own — a race there fits the shape, but nothing is measured
-   yet. Keep the next tombstone.
+   `RanD3DXFont::glyphFor`. Still unattributed, no tombstone kept.
+
+   A DIFFERENT crash was caught and addressed on 2026-09-04: SIGSEGV in
+   `DxSkinAniMan::DoInterimClean` from `DxGlobalStage::ChangeStage`, faulting
+   at offset 8 of a bad pointer. That clean-up erased map entries by a name read
+   back **out of the object it had just freed**, so any mismatch between that
+   name and the key the map was built with left a freed pointer in the map for
+   the next stage change to walk. Fixed by erasing with the key, and by skipping
+   pointers already freed. Not reproduced: `DoInterimClean` does not run on the
+   login-to-world path, and reaching it again means another live-server login.
+   The new log lines say what each pass frees and whether a key ever mismatches.
 
 9. **Publish the pending patch.** The store at `native/out/launcher_mobile` is
    version 412 (APK V025, versionCode 42); the working build is well past it.
+
+10. **A corrupted path reaches `ran_fopen` 16 times a session.** Open lead, not
+    yet explained, and harmless so far — the open fails and nothing visible
+    breaks.
+
+    ```
+    rb /storage/emulated/0/Android/data/com.enm -> FAILED (errno 2)
+       len=40  hex=2F 73 74 6F ... 63 6F 6D 2E 65 6E 6D
+    ```
+
+    What is established:
+
+    * It is 33 bytes of `/storage/emulated/0/Android/data/` plus the seven bytes
+      `com.enm`. There is no such directory — the real entries there are
+      `com.ran.native`, `com.ran.mobile`, `com.ldmnq.launcher3` and two Google
+      packages. So it is a corrupted string, not a missing file.
+    * The string is already corrupt when `ran_fopen` receives it: the requested
+      and the resolved path are the same bytes, so the resolver did not make it.
+    * The resolver's cache is **not** the culprit: it is mutex-guarded, and
+      `std::map` keeps node addresses stable, so the `const char*` it hands back
+      cannot dangle.
+    * It is always preceded by `piece material got no texture: (no name)`, i.e.
+      a material whose texture name is empty. `TextureContainer::LoadImageData`
+      then looks the empty name up in `g_FileTree` and opens whatever comes back.
+      That is the most likely source: an empty lookup matching a junk entry.
+
+    Next step when it is worth the time: log the requested path together with a
+    `_Unwind_Backtrace` when it matches this shape, which names the caller in one
+    run. Related: the D3DX material-string lifetime bug already fixed once
+    (`pTextureFilename` must live in the returned buffer).
+
 
 ---
 
