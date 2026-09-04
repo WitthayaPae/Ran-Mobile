@@ -142,7 +142,7 @@ if(RAN_IOS)
   target_link_libraries(ranshim PUBLIC
     "-framework OpenGLES" "-framework QuartzCore" "-framework CoreGraphics"
     "-framework ImageIO" "-framework Foundation" "-framework UIKit"
-    "-framework AudioToolbox" "-framework Security")
+    "-framework AudioToolbox" "-framework AVFoundation" "-framework Security")
 else()
   target_link_libraries(ranshim PUBLIC log android EGL GLESv3 jnigraphics OpenSLES)
 endif()

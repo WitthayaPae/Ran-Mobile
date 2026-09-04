@@ -46,6 +46,11 @@ void RanInput_KeyTap ( int scanCode );
 void RanIME_InsertUtf8 ( const char *utf8 );
 void RanIME_Backspace ( void );
 
+//  The audio sink, so the app delegate can stop the sound when it goes away -
+//  the mixer runs on the audio callback thread and would otherwise play on
+//  over whatever the player switched to.
+void RanAudioSink_Pause ( int paused );
+
 const char *RanIOS_DataRoot ( void );
 void        RanIOS_InstallPlatformPaths ( void );
 }
@@ -376,6 +381,11 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 @end
 
 @implementation RanAppDelegate
+//  Sound follows the app, exactly as APP_CMD_PAUSE / APP_CMD_RESUME do on
+//  Android.
+- (void)applicationDidEnterBackground:(UIApplication *)app { RanAudioSink_Pause ( 1 ); }
+- (void)applicationWillEnterForeground:(UIApplication *)app { RanAudioSink_Pause ( 0 ); }
+
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts
 {
     //  Before anything in the shim runs, so it never goes looking for

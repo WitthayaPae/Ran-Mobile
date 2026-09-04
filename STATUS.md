@@ -143,8 +143,9 @@ what, not by when it was found.
    Measured in the world on LDPlayer: 5 voices, peak 25972–32768 of 32767, the
    ring taking 183 MB of non-zero decoded PCM. Silence on every build before it.
 
-   **iOS needs only a sink** — an AudioQueue file beside the OpenSL one; nothing
-   above it is platform-specific. Two known gaps on both platforms: no headroom
+   **iOS sink written** (`audio_audioqueue.mm`, uncompiled like the rest of the
+   iOS work) with the same background-pause behaviour; nothing above the sink
+   is platform-specific. Two known gaps on both platforms: no headroom
    (the mix reaches full scale with music at default volume, as the PC does),
    and nothing mutes audio when the app loses focus (`RanAudio_SetMuted` exists
    and is not wired).
