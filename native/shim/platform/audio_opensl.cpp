@@ -110,6 +110,16 @@ extern "C" int RanAudioSink_Start ( void )
     return 1;
 }
 
+//  The app went to the background. Pausing the player stops the buffer-queue
+//  callback, so the mixer is not run at all - a muted mixer would still cost a
+//  wakeup 50 times a second for nothing.
+extern "C" void RanAudioSink_Pause ( int paused )
+{
+    if (!g_play) return;
+    (*g_play)->SetPlayState ( g_play, paused ? SL_PLAYSTATE_PAUSED : SL_PLAYSTATE_PLAYING );
+    LOGI ( "audio %s", paused ? "paused" : "resumed" );
+}
+
 extern "C" void RanAudioSink_Stop ( void )
 {
     g_running = false;

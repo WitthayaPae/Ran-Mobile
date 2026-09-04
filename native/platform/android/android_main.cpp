@@ -37,6 +37,7 @@ extern "C" int  RanApp_Boot(const char *dataRoot, int width, int height);
 extern "C" int  RanApp_Frame(void);
 extern "C" void RanApp_Shutdown(void);
 extern "C" void RanSound_LogStats(void);
+extern "C" void RanAudioSink_Pause(int paused);
 
 // GL backend (shim/gl). The context is created on this thread — the only thread
 // that ever touches GL.
@@ -809,6 +810,17 @@ void onAppCmd(android_app *app, int32_t cmd) {
         //  notification, the recents switcher) restores them for good.
         case APP_CMD_GAINED_FOCUS:
             goFullscreen(app);
+            break;
+
+        //  Sound follows the activity, not the window. The frame loop already
+        //  blocks when the surface goes away, but the audio thread does not -
+        //  it is the mixer callback that drives it - so without this the music
+        //  keeps playing over whatever the player switched to.
+        case APP_CMD_PAUSE:
+            RanAudioSink_Pause(1);
+            break;
+        case APP_CMD_RESUME:
+            RanAudioSink_Pause(0);
             break;
 
         case APP_CMD_INIT_WINDOW:
