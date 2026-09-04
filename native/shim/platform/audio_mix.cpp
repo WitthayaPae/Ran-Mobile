@@ -20,6 +20,8 @@ extern "C" FILE *ran_fopen ( const char *path, const char *mode );
 namespace {
 
 struct Clip {
+    std::string name;            //  basename, for the report - a voice list of
+                                 //  numbers says nothing about what is playing
     std::vector<short> pcm;      //  interleaved, always 2 channels after load
     int      channels;           //  what the file had, kept for byte maths
     int      bits;
@@ -231,6 +233,15 @@ extern "C" int RanAudio_LoadWav ( const char *path )
     if (got != (size_t) n) return 0;
 
     const int id = RanAudio_LoadWavMemory ( &buf[0], got );
+    if (id) {
+        const char *slash = strrchr ( path, 47 );
+        const char *back  = strrchr ( path, 92 );
+        if (back > slash) slash = back;
+        pthread_mutex_lock ( &g_lock );
+        Clip *c = clipOf ( id );
+        if (c) c->name = slash ? slash + 1 : path;
+        pthread_mutex_unlock ( &g_lock );
+    }
     if (!id) {
         //  Named once each: a sound that will not decode is content, and the
         //  file name is the only thing that identifies it.
@@ -332,7 +343,23 @@ extern "C" void RanAudio_VoicePlay ( int voice, int loop )
     if (v) {
         v->loop = ( loop != 0 );
         v->playing = true;
+        //  A clip starts from its beginning; a RING does not.
+        //
+        //  The ring is a stream the client is writing into continuously, and
+        //  its play cursor is the only thing telling the writer how far it has
+        //  got. Rewinding it to 0 on Play makes the music jump back into a part
+        //  of the buffer that holds a different second of the track - which is
+        //  the music tearing and repeating itself.
+        if (v->ring.empty()) v->pos = 0.0;
         ++g_played;
+        //  Every start, by name, so a sound the engine asks for and never
+        //  hears can be told from one it never asks for at all.
+        if (RanPlat_DiagExists ( "audiolog" )) {
+            Clip *c = clipOf ( v->clip );
+            LOGI ( "play %s%s vol %ld",
+                   !v->ring.empty() ? "bgm-ring" : ( c && !c->name.empty() ? c->name.c_str() : "?" ),
+                   v->loop ? " (loop)" : "", v->volume );
+        }
     }
     pthread_mutex_unlock ( &g_lock );
 }
@@ -405,6 +432,10 @@ extern "C" unsigned RanAudio_VoicePosition ( int voice )
     pthread_mutex_unlock ( &g_lock );
     return at;
 }
+
+//  882 frames is the sink block on both platforms; see audio_opensl.cpp and
+//  audio_audioqueue.mm.
+extern "C" int RanAudio_SafetyFrames ( void ) { return 882 * 3; }
 
 extern "C" void RanAudio_SetMuted ( int muted ) { g_muted = ( muted != 0 ); }
 
@@ -488,14 +519,41 @@ extern "C" void RanAudio_Mix ( short *out, int frames )
         }
     }
 
-    int peak = 0, voicesOn = 0;
+    int voicesOn = 0;
     for (size_t vi = 0; vi < g_voices.size(); ++vi)
         if (g_voices[vi].used && g_voices[vi].playing) ++voicesOn;
 
+    //  The sum of the voices, before anything is done about it.
+    int rawPeak = 0;
     for (size_t i = 0; i < acc.size(); ++i) {
-        int s = acc[i];
-        if (s >  32767) s =  32767;
-        if (s < -32768) s = -32768;
+        const int m = acc[i] < 0 ? -acc[i] : acc[i];
+        if (m > rawPeak) rawPeak = m;
+    }
+
+    //  A limiter, because a fixed-point sum has nowhere to put the overshoot.
+    //
+    //  The client mixes at unity: music sits at 0 dB (DSBVOLUME_MAX) and a
+    //  nearby ambient loop does too, so the sum saturates and every sound
+    //  smears into every other one - which is exactly what "it mixes everything
+    //  together" sounds like. DirectSound has a wider intermediate and the OS
+    //  mixer below it; this does not, so the headroom has to be made here.
+    //
+    //  Gain follows the block peak: pulled down at once when it would clip,
+    //  released slowly so a single loud hit does not duck the whole scene.
+    //  Nothing is attenuated while the mix fits, so a quiet scene is untouched.
+    static float s_gain = 1.0f;
+    const bool limiterOff = RanPlat_DiagExists ( "nolimiter" ) != 0;
+    const float kCeiling = 32000.0f;
+    float target = 1.0f;
+    if (!limiterOff && rawPeak > kCeiling) target = kCeiling / (float) rawPeak;
+
+    int peak = 0, clipped = 0;
+    for (size_t i = 0; i < acc.size(); ++i) {
+        //  Per sample, so the gain change is inaudible: fast down, slow up.
+        s_gain += ( target < s_gain ? 0.25f : 0.0005f ) * ( target - s_gain );
+        int s = (int) ( acc[i] * s_gain );
+        if (s >  32767) { s =  32767; ++clipped; }
+        if (s < -32768) { s = -32768; ++clipped; }
         out[i] = (short) s;
         const int m = s < 0 ? -s : s;
         if (m > peak) peak = m;
@@ -507,13 +565,36 @@ extern "C" void RanAudio_Mix ( short *out, int frames )
     //  something is playing.
     {
         static unsigned s_blocks = 0, s_peak = 0, s_maxVoices = 0;
+        static unsigned s_clipped = 0, s_over = 0;
         ++s_blocks;
+        s_clipped += (unsigned) clipped;
+        if (rawPeak > 32767) ++s_over;
         if ((unsigned) peak > s_peak) s_peak = (unsigned) peak;
         if ((unsigned) voicesOn > s_maxVoices) s_maxVoices = (unsigned) voicesOn;
         //  50 blocks of 882 frames is a second at 44.1 kHz.
         if (s_blocks >= 250) {
-            if (s_maxVoices) LOGI ( "out: %u voices, peak %u/32767", s_maxVoices, s_peak );
-            s_blocks = 0; s_peak = 0; s_maxVoices = 0;
+            if (s_maxVoices) {
+                //  Which voices, not just how many: six things playing while
+                //  standing still is only a problem if they are the wrong six.
+                std::string who;
+                int listed = 0;
+                for (size_t vi = 0; vi < g_voices.size() && listed < 10; ++vi) {
+                    const Voice &v = g_voices[vi];
+                    if (!v.used || !v.playing) continue;
+                    Clip *c = clipOf ( v.clip );
+                    char tmp[128];
+                    snprintf ( tmp, sizeof(tmp), "%s%s%s(%ld)",
+                               listed ? ", " : "",
+                               !v.ring.empty() ? "bgm-ring" : ( c && !c->name.empty() ? c->name.c_str() : "?" ),
+                               v.loop ? " loop" : "", v.volume );
+                    who += tmp;
+                    ++listed;
+                }
+                LOGI ( "out: %u voices, peak %u/32767, %u blocks over full scale, "
+                       "%u clipped samples, gain %.2f [%s]",
+                       s_maxVoices, s_peak, s_over, s_clipped, s_gain, who.c_str() );
+            }
+            s_blocks = 0; s_peak = 0; s_maxVoices = 0; s_clipped = 0; s_over = 0;
         }
     }
 

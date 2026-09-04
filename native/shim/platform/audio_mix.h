@@ -71,6 +71,15 @@ unsigned RanAudio_RingBytes ( int voice );
 //  glitch a player can hear.
 void RanAudio_Mix ( short *out, int frames );
 
+//  How far ahead of the play cursor a streaming writer must stay.
+//
+//  The sink asks for whole blocks, so everything from the play cursor to the
+//  end of the block being mixed is already committed, and the next block can be
+//  asked for at any moment. Anything written inside that window is heard half
+//  old and half new - the music smearing over itself. Three blocks covers the
+//  block in flight, the one about to be asked for, and scheduling jitter.
+int  RanAudio_SafetyFrames ( void );
+
 //  Master volume, applied after every voice. The options screen sets sfx and
 //  music separately, and both arrive as DirectSound centibels on the voices, so
 //  this is only the mute the platform asks for when the app loses focus.

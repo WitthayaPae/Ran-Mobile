@@ -56,10 +56,17 @@ public:
     {
         const unsigned at = m_voice ? RanAudio_VoicePosition ( m_voice ) : 0;
         if (pPlay)  *pPlay = at;
-        //  The write cursor is where it is no longer safe to write. Ahead of
-        //  the play cursor by one mixer buffer, which is what the hardware
-        //  would report and what the streaming code leaves room for.
-        if (pWrite) *pWrite = m_bytes ? ( at + m_fmt.nBlockAlign * 1024 ) % m_bytes : 0;
+        //  The write cursor is the first byte it is safe to write, and
+        //  everything between the play cursor and it is in flight.
+        //
+        //  This used to be an invented lead of 1024 frames - barely one mixer
+        //  block - and 6% of the client streamer writes landed directly on the
+        //  play cursor, i.e. on audio being mixed at that instant. That is the
+        //  music smearing over itself. The lead now comes from the mixer, which
+        //  is the only thing that knows how much it has committed.
+        if (pWrite) *pWrite = m_bytes
+            ? ( at + (unsigned) RanAudio_SafetyFrames() * m_fmt.nBlockAlign ) % m_bytes
+            : 0;
         return DS_OK;
     }
 
@@ -100,6 +107,8 @@ public:
         if (offset >= m_bytes) offset %= m_bytes;
         if (bytes > m_bytes) bytes = m_bytes;
 
+        m_lockOffset = offset;
+        m_lockBytes  = bytes;
         const DWORD first = ( offset + bytes <= m_bytes ) ? bytes : ( m_bytes - offset );
         if (ppv1) *ppv1 = base + offset;
         if (pb1)  *pb1  = first;
@@ -162,6 +171,26 @@ public:
     //  which is otherwise unanswerable without ears.
     STDMETHOD(Unlock)(LPVOID p1, DWORD n1, LPVOID p2, DWORD n2)
     {
+        //  Did this write land on top of what the mixer is playing right now?
+        //
+        //  The client streams into the ring while the mixer reads it, and the
+        //  only thing keeping them apart is the play cursor this class reports.
+        //  If a write covers the read position, the music plays part of one
+        //  block and part of another - it smears over itself.
+        if (m_voice && m_lockBytes) {
+            const unsigned play = RanAudio_VoicePosition ( m_voice );
+            const unsigned from = m_lockOffset;
+            const unsigned to   = m_lockOffset + m_lockBytes;   //  may wrap
+            const bool hit = ( to <= m_bytes )
+                           ? ( play >= from && play < to )
+                           : ( play >= from || play < ( to - m_bytes ) );
+            static unsigned s_writes = 0, s_hits = 0;
+            ++s_writes;
+            if (hit) ++s_hits;
+            if (s_writes % 200 == 0 && RanPlat_DiagExists ( "audiolog" ))
+                LOGI ( "ring: %u writes, %u landed on the play cursor", s_writes, s_hits );
+            m_lockBytes = 0;
+        }
         static unsigned s_calls = 0, s_bytes = 0, s_nonzero = 0;
         ++s_calls;
         const unsigned char *parts[2] = { (const unsigned char *) p1, (const unsigned char *) p2 };
@@ -178,6 +207,7 @@ public:
     STDMETHOD(Restore)() { return DS_OK; }
 
 private:
+    DWORD m_lockOffset = 0, m_lockBytes = 0;
     LONG  m_volume = 0, m_pan = 0;
     DWORD m_freq = 0;
     bool  m_looping = false;
