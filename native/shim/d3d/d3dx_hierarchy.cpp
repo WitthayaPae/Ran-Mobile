@@ -707,19 +707,27 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
                 const DWORD src = vertexRemap[nv];
                 if (src >= numVerts) continue;
 
-                //  What the GPU will use: the stored weights, and the implied
-                //  one in the slot the engine will name as the last bone.
+                //  What the GPU will use.
+                //
+                //  This is INDEXED blending: the vertex stores weightCount
+                //  weights followed by four bytes naming the palette slot each
+                //  one applies to, and the last weight is implied as 1 minus
+                //  the others. Reading weight i as belonging to slot i - which
+                //  is what a non-indexed layout would mean - made this report
+                //  every vertex whose first influence was not the first bone in
+                //  the palette: 301 lines a session, all of them false.
                 std::vector<float> got(numInfl, 0.0f);
                 const BYTE *dv = &outVerts[(size_t)nv * dstStride] + 12;
+                const BYTE *idx = dv + weightCount * 4;
                 float used = 0.0f;
                 for (DWORD i = 0; i < weightCount; ++i) {
                     float f = 0.0f;
                     memcpy(&f, dv + i * 4, 4);
-                    got[i] = f;
+                    if (idx[i] < numInfl) got[idx[i]] += f;
                     used += f;
                 }
-                const DWORD lastSlot = (DWORD)grp.bones.size() - 1;
-                if (lastSlot < numInfl) got[lastSlot] += 1.0f - used;
+                //  The implied weight belongs to the slot the LAST index names.
+                if (idx[weightCount] < numInfl) got[idx[weightCount]] += 1.0f - used;
 
                 //  What the source said.
                 for (size_t k = 0; k < infl[src].size(); ++k) {
@@ -730,6 +738,34 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
                         if (grp.bones[s] == bone) { have = got[s]; break; }
                     const float err = fabsf(have - want);
                     if (err > 0.01f) {
+                        //  One failing vertex, in full: what the source asked
+                        //  for, what the group can express, and what was
+                        //  stored. Enough to tell a wrong palette (the bone is
+                        //  simply not in the group) from wrong slot maths.
+                        static bool s_dumped = false;
+                        if (!s_dumped) {
+                            s_dumped = true;
+                            std::string bones, weights, wanted;
+                            char tmp[64];
+                            for (size_t s2 = 0; s2 < grp.bones.size(); ++s2) {
+                                snprintf(tmp, sizeof(tmp), "%u ", (unsigned) grp.bones[s2]);
+                                bones += tmp;
+                            }
+                            for (DWORD i2 = 0; i2 < numInfl; ++i2) {
+                                snprintf(tmp, sizeof(tmp), "%.3f ", got[i2]);
+                                weights += tmp;
+                            }
+                            for (size_t k2 = 0; k2 < infl[src].size(); ++k2) {
+                                snprintf(tmp, sizeof(tmp), "%u:%.3f ",
+                                         (unsigned) infl[src][k2].first, infl[src][k2].second);
+                                wanted += tmp;
+                            }
+                            LOGE("blend detail: group %u palette [%s] weightCount %u numInfl %u "
+                                 "stored [%s] source [%s] missing bone %u",
+                                 (unsigned) g, bones.c_str(), (unsigned) weightCount,
+                                 (unsigned) numInfl, weights.c_str(), wanted.c_str(),
+                                 (unsigned) bone);
+                        }
                         ++badVertices;
                         if (err > worstError) {
                             worstError = err;
