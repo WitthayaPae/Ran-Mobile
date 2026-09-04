@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <strings.h>
 #include <map>
+#include <set>
 #include <string>
 #include <mutex>
 
@@ -178,11 +179,15 @@ extern "C" const char *RanPath_Resolve(const char *in) {
     return g_cache.emplace(req, cur).first->second.c_str();
 }
 
+//  Failed opens that were not worth logging again. See ran_fopen.
+unsigned long g_failedRepeats = 0;
+
 extern "C" void RanPath_LogStats(void) {
     std::lock_guard<std::mutex> guard(g_lock);
     RanPlat_Log(RANLOG_INFO, "RanPath",
-        "path cache — %zu entries, %lu direct hits, %lu case-walks, %lu not found",
-        g_cache.size(), g_hits, g_walks, g_misses);
+        "path cache — %zu entries, %lu direct hits, %lu case-walks, %lu not found, "
+        "%lu repeat failed opens",
+        g_cache.size(), g_hits, g_walks, g_misses, g_failedRepeats);
 }
 
 // The engine calls fopen directly in many places; windows.h redirects it here.
@@ -208,6 +213,24 @@ extern "C" FILE *ran_fopen(const char *path, const char *mode) {
     }
     static unsigned n = 0;
     if (!f) {
+        //  Once per distinct path, not once per open.
+        //
+        //  The client asks for GLogicServer.rcc - server data that never ships
+        //  to players - 5,558 times during boot, and every one of those used to
+        //  cost four log lines, two hex dumps and a SECOND fopen to retry. That
+        //  was 0.83 seconds of the boot and 22,300 log lines, which is more than
+        //  logd keeps: the real boot log was being pushed out by the noise.
+        //
+        //  The dump itself is still worth having the first time a path fails -
+        //  it is what identifies an invisible character on the end - so it is
+        //  kept for the first sighting of each path, and capped.
+        static std::set<std::string> s_said;
+        const bool first = ( s_said.size() < 64 ) && s_said.insert(path).second;
+        //  Counted, not conflated with g_misses: that one counts paths the
+        //  resolver could not resolve, which is a different question from a
+        //  path that resolved and then would not open.
+        if (!first) { ++g_failedRepeats; return NULL; }
+
         RanPlat_Log(RANLOG_ERROR, "RanOpen", "%s %s -> FAILED (resolved: %s, errno %d)",
                             mode, path, real ? real : "?", errno);
         //  A path that looks right but will not open usually has an invisible
