@@ -224,38 +224,57 @@ what, not by when it was found.
 9. **Publish the pending patch.** The store at `native/out/launcher_mobile` is
    version 412 (APK V025, versionCode 42); the working build is well past it.
 
-10. **A corrupted path reaches `ran_fopen` 16 times a session.** Open lead, not
-    yet explained, and harmless so far — the open fails and nothing visible
-    breaks.
+10. **The corrupted path was `ChangeExtName` finding the wrong dot.** RESOLVED
+    2026-09-08. It had sat here for weeks as "a corrupted string, not a missing
+    file", and every theory about it was wrong: the string was never corrupt.
 
     ```
     rb /storage/emulated/0/Android/data/com.enm -> FAILED (errno 2)
-       len=40  hex=2F 73 74 6F ... 63 6F 6D 2E 65 6E 6D
     ```
 
-    What is established:
+    A `_Unwind_Backtrace` in `ran_fopen`, fired on any path shaped like a bare
+    `/Android/data/<name>`, named the caller in one run:
 
-    * It is 33 bytes of `/storage/emulated/0/Android/data/` plus the seven bytes
-      `com.enm`. There is no such directory — the real entries there are
-      `com.ran.native`, `com.ran.mobile`, `com.ldmnq.launcher3` and two Google
-      packages. So it is a corrupted string, not a missing file.
-    * The string is already corrupt when `ran_fopen` receives it: the requested
-      and the resolved path are the same bytes, so the resolver did not make it.
-    * The resolver's cache is **not** the culprit: it is mutex-guarded, and
-      `std::map` keeps node addresses stable, so the `const char*` it hands back
-      cannot dangle.
-    * It is always preceded by `piece material got no texture: (no name)`, i.e.
-      a material whose texture name is empty. `TextureContainer::LoadImageData`
-      then looks the empty name up in `g_FileTree` and opens whatever comes back.
-      That is the most likely source: an empty lookup matching a junk entry.
+    ```
+    DxGlobalStage::InitDeviceObjects
+      DxSkinCharDataContainer::LoadData -> DxSkinCharData::LoadFile
+        -> SetPiece -> DxSkinPieceContainer::LoadPiece -> DxSkinPiece::LoadPiece
+          -> DxSkinMesh9_NORMAL::Load -> CSerialFile::OpenFile -> ran_fopen
+    ```
 
-    Next step when it is worth the time: log the requested path together with a
-    `_Unwind_Backtrace` when it matches this shape, which names the caller in one
-    run. Related: the D3DX material-string lifetime bug already fixed once
-    (`pTextureFilename` must live in the returned buffer).
+    `DxSkinMesh9_NORMAL::Load` ends with
+    `strName = ChangeExtName( strName.c_str(), "enm" )`, and `ChangeExtName`
+    (`DxMethods.cpp:1582`) is `strSrcName.find('.')` — the **first** dot in the
+    whole string. On the PC that is the same as the extension dot, because the
+    paths handed to it are relative and no directory in the install has a dot in
+    its name. On Android the app path is
+    `/storage/emulated/0/Android/data/com.ran.native/files/...`, whose first dot
+    is inside the package name. So the function cut the path at `com` and
+    appended `.enm`: 33 bytes of `/storage/emulated/0/Android/data/` plus
+    `com.enm` is exactly the 40 that were dumped. Nothing was corrupt; the
+    engine asked for that path.
 
+    Fixed by scoping the search to the last path component, `#ifdef RAN_MOBILE`
+    so MSVC compiles the original line. `GetSpecularName` on the line above has
+    the identical defect and got the identical fix. (`DxClubMan.cpp:203` has the
+    shape too but takes a bare filename, so it is left alone and noted here.)
 
----
+    **Measured on LDPlayer, same scene, before and after:** 332 sightings a
+    session -> **0**, and the paths now built are right —
+    `.../files/data/skin/s_m_face.enm`, resolving into the directory where the
+    115 shipped `.enm` files actually sit.
+
+    **What it does NOT fix, stated plainly:** nothing visible. Every `.enm` in
+    the store is 152–408 bytes and begins `"default\0"` followed by zeros, so
+    `bExist` is 0 and `m_pSlimMesh` stays null exactly as it did when the open
+    failed — and `DxSMeshContainerToon.cpp:266` builds one at runtime anyway.
+    No successful `.enm` open was observed either, because the nine the login
+    scene asks for (`s_m_face`, `s_m_bs`, …) are not among the 115 that ship.
+    What is gained is a lead closed, 332 log lines a session, and a latent path
+    bug that would have mangled any absolute path fed to either function.
+
+    The backtrace instrumentation is kept: it costs nothing until a path that
+    shape appears, and it is the tool that would have found this weeks ago.
 
 ## Log
 

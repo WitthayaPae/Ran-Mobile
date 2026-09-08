@@ -182,6 +182,71 @@ extern "C" const char *RanPath_Resolve(const char *in) {
 //  Failed opens that were not worth logging again. See ran_fopen.
 unsigned long g_failedRepeats = 0;
 
+//  ------------------------------------------------- who asked for that path
+//
+//  A path shaped like the app's data directory and nothing more - 33 bytes of
+//  "/storage/emulated/0/Android/data/" followed by a name and no further
+//  separator - reaches here about 16 times a session. It is already corrupt
+//  when ran_fopen receives it (requested and resolved are the same bytes), the
+//  resolver's cache cannot dangle, and it is always preceded by "piece material
+//  got no texture: (no name)".
+//
+//  No amount of reading has said WHICH caller, so ask the stack. Nothing else
+//  ever opens a bare directory path, so the test cannot fire on legitimate
+//  work, and it is capped either way.
+#ifdef __ANDROID__
+#include <unwind.h>
+#include <dlfcn.h>
+#include <stdint.h>
+
+namespace {
+
+struct BtState { void **cur; void **end; };
+
+_Unwind_Reason_Code BtFrame ( struct _Unwind_Context *ctx, void *arg ) {
+    BtState *s = (BtState *) arg;
+    const uintptr_t pc = _Unwind_GetIP ( ctx );
+    if (pc) {
+        if (s->cur == s->end) return _URC_END_OF_STACK;
+        *s->cur++ = (void *) pc;
+    }
+    return _URC_NO_REASON;
+}
+
+//  The offset from the library's load address is the useful number: it is what
+//  llvm-symbolizer takes against the unstripped out/<abi>/libran.so.
+void LogBacktrace ( const char *path ) {
+    void *frames[40];
+    BtState st = { frames, frames + 40 };
+    _Unwind_Backtrace ( BtFrame, &st );
+    const size_t n = (size_t)( st.cur - frames );
+    RanPlat_Log ( RANLOG_ERROR, "RanOpen", "  who asked for '%s' - %zu frames:", path, n );
+    for (size_t i = 0; i < n; ++i) {
+        Dl_info info;
+        const char *sym = "?", *lib = "?";
+        unsigned long off = 0;
+        if (dladdr ( frames[i], &info ) && info.dli_fbase) {
+            lib = info.dli_fname ? info.dli_fname : "?";
+            if (info.dli_sname) sym = info.dli_sname;
+            off = (unsigned long)( (const char *) frames[i] - (const char *) info.dli_fbase );
+        }
+        RanPlat_Log ( RANLOG_ERROR, "RanOpen", "    #%02zu  %s+0x%lx  %s",
+                      i, lib, off, sym );
+    }
+}
+
+//  "…/Android/data/<something>" with no separator after it. A file open never
+//  looks like that; only a mangled copy of the data root does.
+bool LooksLikeBareDataDir ( const char *path ) {
+    const char *m = strstr ( path, "/Android/data/" );
+    if (!m) return false;
+    const char *tail = m + 14;              //  strlen("/Android/data/")
+    return *tail != 0 && strchr ( tail, '/' ) == NULL;
+}
+
+}   // namespace
+#endif  //  __ANDROID__
+
 extern "C" void RanPath_LogStats(void) {
     std::lock_guard<std::mutex> guard(g_lock);
     RanPlat_Log(RANLOG_INFO, "RanPath",
@@ -229,6 +294,18 @@ extern "C" FILE *ran_fopen(const char *path, const char *mode) {
         //  Counted, not conflated with g_misses: that one counts paths the
         //  resolver could not resolve, which is a different question from a
         //  path that resolved and then would not open.
+#ifdef __ANDROID__
+        //  Before the repeat cap, and with a cap of its own: the shape is what
+        //  is being chased, and the first sighting may already have been eaten
+        //  by s_said above.
+        {
+            static int s_traces = 0;
+            if (s_traces < 4 && LooksLikeBareDataDir ( path )) {
+                ++s_traces;
+                LogBacktrace ( path );
+            }
+        }
+#endif
         if (!first) { ++g_failedRepeats; return NULL; }
 
         RanPlat_Log(RANLOG_ERROR, "RanOpen", "%s %s -> FAILED (resolved: %s, errno %d)",
