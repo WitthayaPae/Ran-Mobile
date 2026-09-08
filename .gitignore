@@ -75,3 +75,8 @@ tools/layout-probe/structs.gen.inc
 # Compiler error logs from the layout probe
 *.err
 tools/patch/keys/
+
+# ...except the iOS app icons. They are source, not output: CFBundleIconFiles
+# names them and nothing regenerates them. The bundle shipped without any icon
+# until this line existed.
+!native/platform/ios/icons/*.png
