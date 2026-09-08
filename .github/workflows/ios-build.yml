@@ -39,6 +39,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: WitthayaPae/RAN-ASURA-SOURCE
+          #  ci/ios-source, not the default branch: the port branch carries 49
+          #  Visual Studio IntelliSense files - a 186 MB Browse.VC.db and a dozen
+          #  174 MB .ipch - which GitHub refuses outright, so it cannot be pushed.
+          #  ci/ios-source is that same working tree squashed onto main without
+          #  them. Re-push it after changing anything under SOURCE/, or this job
+          #  compiles the old file.
+          ref: ci/ios-source
           token: ${{ secrets.SOURCE_REPO_TOKEN }}
           path: SOURCE
 
