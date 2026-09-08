@@ -42,10 +42,24 @@ set(SHIM "${CMAKE_CURRENT_SOURCE_DIR}/shim")
 set(TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # ---- global flags: old MSVC code base -----------------------------------------
+#
+#  The MSVC-compatibility flags are for the CLIENT, which is MSVC code, and they
+#  are scoped away from Objective-C++ on purpose: not one .mm file in this tree
+#  is MSVC code, and -fms-compatibility changes name lookup in ways the Apple
+#  framework headers were never compiled against. The genex is a no-op on
+#  Android, where OBJCXX is not an enabled language at all.
+#
+#  Everything else stays on for every language: -fsigned-char and -fwrapv
+#  because image_decode_ios.mm shares the shim's types, and the WIN32/_WINDOWS
+#  defines below for the same reason - that file includes the shim's windows.h.
+set(RAN_NOT_OBJC "$<NOT:$<COMPILE_LANGUAGE:OBJCXX>>")
 add_compile_options(
-  -fms-extensions -fms-compatibility -fdelayed-template-parsing
+  $<${RAN_NOT_OBJC}:-fms-extensions>
+  $<${RAN_NOT_OBJC}:-fms-compatibility>
+  $<${RAN_NOT_OBJC}:-fdelayed-template-parsing>
+  $<${RAN_NOT_OBJC}:-fms-compatibility-version=19.30>
   -fno-strict-aliasing -fsigned-char -fwrapv
-  -frtti -fexceptions -fms-compatibility-version=19.30
+  -frtti -fexceptions
   -Wno-everything
   #  Kept on deliberately: MSVC passes a class BY VALUE through varargs (which is
   #  what makes MFC's printf("%s", someCString) idiom work), while the Itanium ABI

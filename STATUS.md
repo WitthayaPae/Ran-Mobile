@@ -4186,10 +4186,45 @@ only when the bundle asks. So:
 Both roads out of the device — iTunes/Finder file sharing over USB, and
 Files.app on the phone — now work from Windows.
 
+### The second pass: what the link and the flags would have done
+
+Reading the entry point is not enough — the iOS target compiles a different
+file list and a different flag set, and both were wrong in one place each.
+
+**The link was checked symbol by symbol** and is sound. The iOS target builds
+`platform/ios/*.mm` plus `platform/android/ran_app.cpp`, so every symbol
+`ran_ios_main.mm` declares had to have a home in `shim/` or in `ran_app.cpp`:
+all 24 do. `RanSplash_*` is `shim/platform/splash.cpp`, `RanTouch_*` is
+`touch_ui.cpp`, `RanInput_*` is `dinput_mobile.cpp`, `RanIME_*` is
+`shell_mobile.cpp`, `RanGLR_Init` is `gl_render.cpp`. Nothing the iOS entry
+point calls lives in an Android-only file.
+
+**Android-only code is properly walled off.** Only five files in the shim
+reach for an Android header, and every one is behind `#ifdef __ANDROID__` or a
+`__APPLE__` branch. `ran_app.cpp` — the file the iOS target borrows — contains
+no Android reference at all. `SOURCE/` is clean too: the one file that ever
+included `<android/log.h>` is `SkillTrayTab.cpp`, already guarded.
+
+**The MSVC-compatibility flags were being applied to Objective-C++.**
+`-fms-extensions -fms-compatibility -fdelayed-template-parsing
+-fms-compatibility-version=19.30` are global, and they exist for the client,
+which is MSVC code. Not one `.mm` file is. `-fms-compatibility` changes name
+lookup in ways the Apple framework headers were never compiled against, and
+`#import <UIKit/UIKit.h>` would have been the first thing to meet it. Now
+scoped with `$<NOT:$<COMPILE_LANGUAGE:OBJCXX>>`, which is a no-op on Android
+where OBJCXX is not an enabled language. What deliberately stays on for every
+language is `-fsigned-char`, `-fwrapv` and the `WIN32`/`_WINDOWS` defines:
+`image_decode_ios.mm` includes the shim's own `windows.h` and shares its types.
+
+**`gl_platform.h` used `#import` for the OpenGLES headers**, and that header is
+reached from plain C++ translation units where `#import` is a clang extension
+that warns. They are ordinary C headers with their own guards, so `#include`.
+
 **The Android build was rebuilt after every change: 0 errors, 0 failed TUs, 29
-force-includes intact and no `-fobjc-arc` anywhere in its ninja file.** None of
-this is verified on a compiler that has seen Objective-C; it is six defects
-fewer for the first run to find.
+StdAfx force-includes intact, 1,265 command lines still carrying
+`-fms-compatibility-version`, and no `-fobjc-arc` anywhere in its ninja file.**
+None of this is verified on a compiler that has seen Objective-C; it is eight
+defects fewer for the first run to find.
 
 ## Still open
 

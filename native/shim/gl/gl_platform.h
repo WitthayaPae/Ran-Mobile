@@ -17,8 +17,11 @@
 #pragma once
 
 #if defined(__APPLE__)
-  #import <OpenGLES/ES3/gl.h>
-  #import <OpenGLES/ES3/glext.h>
+  //  #include, not #import: this header is reached from plain C++ translation
+  //  units (gl_render.cpp among them), where #import is a clang extension that
+  //  warns. The OpenGLES headers are ordinary C headers with their own guards.
+  #include <OpenGLES/ES3/gl.h>
+  #include <OpenGLES/ES3/glext.h>
 #else
   #include <GLES3/gl3.h>
   #include <GLES3/gl31.h>
