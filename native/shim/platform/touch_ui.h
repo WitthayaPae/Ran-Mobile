@@ -11,27 +11,34 @@
 //  client never sees it; everything else falls through unchanged, so tapping the
 //  world or the game's own windows still works.
 
+//  extern "C" on every entry point, and it is not decoration: ran_ios_main.mm
+//  declares these inside an extern "C" block, so a C++-linkage definition here
+//  gives the linker a mangled name to look for and an unmangled one to find.
+//  That was five undefined symbols at the end of an otherwise complete iOS
+//  build. Android never noticed because android_main.cpp includes this header
+//  and agreed with it either way.
+
 //  Called once the GL context exists.
-void RanTouch_Init(int surfaceWidth, int surfaceHeight);
-void RanTouch_Shutdown(void);
+extern "C" void RanTouch_Init(int surfaceWidth, int surfaceHeight);
+extern "C" void RanTouch_Shutdown(void);
 
 //  The surface changed size.
-void RanTouch_Resize(int surfaceWidth, int surfaceHeight);
+extern "C" void RanTouch_Resize(int surfaceWidth, int surfaceHeight);
 
 //  Pointer events, in surface pixels. Return non-zero when the touch UI has
 //  taken the event and the client should not see it.
 //
 //  `id` is the platform's pointer id, so multiple fingers stay distinct: the
 //  stick and the attack ring can be held at once, which is the whole point.
-int RanTouch_PointerDown(int id, float x, float y);
-int RanTouch_PointerMove(int id, float x, float y);
-int RanTouch_PointerUp(int id, float x, float y);
+extern "C" int RanTouch_PointerDown(int id, float x, float y);
+extern "C" int RanTouch_PointerMove(int id, float x, float y);
+extern "C" int RanTouch_PointerUp(int id, float x, float y);
 
 //  Per-frame update; drives held buttons and re-targets the stick.
-void RanTouch_Frame(float elapsedSeconds);
+extern "C" void RanTouch_Frame(float elapsedSeconds);
 
 //  Draws the controls. Called after the client's frame, before the swap.
-void RanTouch_Render(void);
+extern "C" void RanTouch_Render(void);
 
 //  What the game side reads each frame. Kept as plain C so the guarded hook in
 //  the client can call them without pulling in any of this header's neighbours.
@@ -113,5 +120,5 @@ extern "C" int RanTouch_IsPinching(void);
 //  Whether the controls should be shown at all. They are hidden outside the
 //  world - there is nothing to steer on the login screen, and a stick sitting
 //  over the server list would only eat taps.
-void RanTouch_SetActive(int active);
-int  RanTouch_IsActive(void);
+extern "C" void RanTouch_SetActive(int active);
+extern "C" int  RanTouch_IsActive(void);
