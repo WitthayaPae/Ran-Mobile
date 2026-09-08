@@ -20,7 +20,21 @@ typedef unsigned char       BYTE, UCHAR, *PBYTE, *LPBYTE;
 typedef unsigned short      WORD, USHORT, *PWORD, *LPWORD;
 typedef int32_t             LONG, *PLONG, *LPLONG;
 typedef uint32_t            DWORD, ULONG, *PDWORD, *LPDWORD, *PULONG;
-typedef int                 INT, BOOL, *PINT, *LPINT, *PBOOL, *LPBOOL;
+typedef int                 INT, *PINT, *LPINT;
+//  BOOL belongs to Objective-C when there is an Objective-C compiler.
+//
+//  Win32 BOOL is int; <objc/objc.h> makes it bool on arm64, and a translation
+//  unit that has both fails with "typedef redefinition with different types
+//  ('bool' vs 'int')". Only image_decode_ios.mm has both - it needs D3DFMT_*
+//  and BYTE from here and CGImage from there - and it imports the frameworks
+//  first, so the Objective-C definition is the one already in scope.
+//
+//  Nothing crosses the boundary as a BOOL: the one function that .mm file
+//  exports returns bool. PBOOL/LPBOOL are unused there and stay Win32.
+#ifndef __OBJC__
+typedef int                 BOOL;
+#endif
+typedef int                 *PBOOL, *LPBOOL;
 typedef unsigned int        UINT, *PUINT, *LPUINT;
 typedef int64_t             LONGLONG, INT64;
 typedef uint64_t            ULONGLONG, UINT64, DWORDLONG, QWORD;

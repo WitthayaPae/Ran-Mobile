@@ -9,14 +9,22 @@
 //  NOT YET COMPILED - no Mac on this machine.
 #if defined(__APPLE__)
 
+//  The frameworks FIRST, and the order is load-bearing.
+//
+//  windows.h does "#define interface struct" for the COM declarations in
+//  d3d9.h. Objective-C headers are full of @interface, and the preprocessor
+//  expands the token after the @ like any other - so every Apple header parsed
+//  after that line dies with "prefix attribute must be followed by an
+//  interface, protocol, or implementation". Importing them first means the
+//  macro is defined only once nothing is left to break.
+#import <ImageIO/ImageIO.h>
+#import <CoreGraphics/CoreGraphics.h>
+
 #include "windows.h"
 #include "../platform/ran_plat.h"
 #include <d3d9.h>
 
 #include "image_decode.h"
-
-#import <ImageIO/ImageIO.h>
-#import <CoreGraphics/CoreGraphics.h>
 
 #define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanImg", __VA_ARGS__)
 
