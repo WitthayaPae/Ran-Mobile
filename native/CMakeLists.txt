@@ -84,11 +84,19 @@ add_compile_options(
   $<${RAN_CXX_ONLY}:-fms-extensions>
   $<${RAN_CXX_ONLY}:-fdelayed-template-parsing>
 )
-if(NOT RAN_IOS)
-  add_compile_options(
-    $<${RAN_CXX_ONLY}:-fms-compatibility>
-    $<${RAN_CXX_ONLY}:-fms-compatibility-version=19.30>
-  )
+add_compile_options(
+  $<${RAN_CXX_ONLY}:-fms-compatibility>
+  $<${RAN_CXX_ONLY}:-fms-compatibility-version=19.30>
+)
+if(RAN_IOS)
+  #  ...and the one thing the Apple SDK needs back.
+  #
+  #  The va_list collision above is not really about va_list: it is that
+  #  sys/_types.h picks its type by asking whether __GNUC__ exists. Saying yes
+  #  costs nothing - clang supports every GCC attribute the headers then reach
+  #  for - and it is far cheaper than dropping -fms-compatibility, which is
+  #  what lets 1,150 translation units of MSVC C++ compile at all.
+  add_compile_definitions(__GNUC__=4 __GNUC_MINOR__=2)
 endif()
 add_compile_options(
   -fno-strict-aliasing -fsigned-char -fwrapv
