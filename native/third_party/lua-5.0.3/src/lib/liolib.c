@@ -549,7 +549,18 @@ static void createmeta (lua_State *L) {
 */
 
 static int io_execute (lua_State *L) {
+#if defined(__APPLE__)
+  /* os.execute: system() is unavailable on iOS - the SDK marks it
+  ** __API_UNAVAILABLE(ios), so this does not compile rather than failing at
+  ** run time. Returning -1 is what system() returns when a shell cannot be
+  ** started, which is the honest answer here and the one a caller already has
+  ** to handle. Nothing in the client's scripts calls it; a script that could
+  ** run a shell command would be a liability in a shipped game either way. */
+  (void)luaL_checkstring(L, 1);
+  lua_pushnumber(L, -1);
+#else
   lua_pushnumber(L, system(luaL_checkstring(L, 1)));
+#endif
   return 1;
 }
 
