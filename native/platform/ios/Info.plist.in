@@ -47,12 +47,14 @@
           the CMake build for a screen that is on screen for one frame. The
           UILaunchScreen dictionary (iOS 13+) needs no file at all.
 
-          Black on purpose - it hands straight over to RanSplash_Begin, which
-          draws the boot art. Same handover as Android's bootcover.bin.  -->
+          An EMPTY dictionary, with no UIColorName: that key names a colour
+          in an asset catalogue, and there is no catalogue here - an empty
+          string names nothing and is a plist the installer can reject. The
+          screen is the system background for one frame, then RanSplash_Begin
+          draws the boot art over it. Same handover as Android's
+          bootcover.bin.  -->
     <key>UILaunchScreen</key>
-    <dict>
-        <key>UIColorName</key>               <string></string>
-    </dict>
+    <dict/>
     <!--  Loose icon files rather than an asset catalog: a catalog has to be
           compiled by actool, which is Xcode-only, and the icons are generated
           on the machine the artwork is on (make-ios-icons.js). Enough for
@@ -73,6 +75,17 @@
         <string>AppIcon-167</string>
         <string>AppIcon-180</string>
     </array>
+
+    <!--  Documents/ is where RanIOS_DiagRoot puts the diagnostic flags, the
+          dumps and ran.log. These two keys are what make that directory
+          reachable from outside the app - through Files.app on the device, and
+          through iTunes/Finder file sharing over USB, which is the only way to
+          read a log off an iPhone from a Windows machine.
+
+          A store build would drop both: they expose the directory to the
+          player, and nothing there is meant for them.  -->
+    <key>UIFileSharingEnabled</key>                  <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>     <true/>
 
     <key>UIRequiredDeviceCapabilities</key>
     <array>

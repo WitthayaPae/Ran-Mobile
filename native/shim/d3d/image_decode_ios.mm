@@ -66,6 +66,18 @@ bool RanImage_DecodePlatform(const void *data, size_t size, RanImage &out) {
     }
 
     CGContextSetBlendMode ( ctx, kCGBlendModeCopy );   //  no compositing, just the pixels
+
+    //  Flip first, or every decoded image comes out upside down.
+    //
+    //  A CGBitmapContext has its origin at the BOTTOM left, so drawing an image
+    //  into one puts the image's top row at the END of the buffer. Every other
+    //  decoder in the shim - the Android one, the DDS/TGA/BMP readers - returns
+    //  rows top-down, and D3DFMT_A8R8G8B8 surfaces are read that way throughout.
+    //  Translating up by the height and scaling y by -1 makes CoreGraphics
+    //  write the same order.
+    CGContextTranslateCTM ( ctx, 0, (CGFloat)height );
+    CGContextScaleCTM ( ctx, 1.0, -1.0 );
+
     CGContextDrawImage ( ctx, CGRectMake ( 0, 0, (CGFloat)width, (CGFloat)height ), img );
     CGContextRelease ( ctx );
     CGImageRelease ( img );

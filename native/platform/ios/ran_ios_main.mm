@@ -23,6 +23,7 @@ int  RanApp_Boot ( const char *dataRoot, int width, int height );
 int  RanApp_Frame ( void );
 
 int  RanGL_Init ( void *nativeWindow );
+int  RanGL_SurfaceChanged ( void );
 int  RanGL_LogicalWidth ( void );
 int  RanGL_LogicalHeight ( void );
 int  RanGL_InputScale ( void );
@@ -68,6 +69,7 @@ static int  g_imeInsetPerMille = 0;
 
 @interface RanViewController : UIViewController <UIKeyInput>
 @property (nonatomic, strong) CADisplayLink *link;
+@property (nonatomic, assign) BOOL           glReady;
 @property (nonatomic, assign) BOOL           booted;
 @property (nonatomic, assign) CFTimeInterval lastTick;
 @end
@@ -88,10 +90,43 @@ static int  g_imeInsetPerMille = 0;
     [super viewDidLoad];
     self.view.multipleTouchEnabled = YES;
 
+    //  Keyboard height, pushed rather than polled - see RanPlat_ImeInsetPerMille.
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(keyboardFrame:)
+                                               name:UIKeyboardWillChangeFrameNotification
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(keyboardGone:)
+                                               name:UIKeyboardWillHideNotification
+                                             object:nil];
+
+}
+
+//  GL starts HERE, not in viewDidLoad, and the difference is the whole screen.
+//
+//  viewDidLoad runs before the view has been laid out in its window, so the
+//  layer still carries the frame it was constructed with - UIScreen.bounds,
+//  which reports the CURRENT interface orientation and at launch can still be
+//  portrait. Initialising the drawable there would size the whole client to a
+//  portrait panel and leave it there: RanApp_Boot takes the logical size once,
+//  and every rect the GUI is laid out with is measured against it.
+//
+//  viewDidLayoutSubviews is the first point at which the size is the real one,
+//  and it runs again on every rotation - which is what SurfaceChanged is for.
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+
+    if (self.glReady) { RanGL_SurfaceChanged (); return; }
+
     //  The layer is all the platform owes the shim. RanGL_Init makes the EAGL
     //  context, the framebuffer and the renderbuffers, exactly as it makes the
     //  EGL surface on Android - so there is one place that knows how a frame is
     //  presented, and it is not this file.
+    //
+    //  contentsScale is set only on this first pass: RanGL_Init divides it when
+    //  the renderscale flag asks for a smaller drawable, and setting it again on
+    //  a later layout would silently undo that.
     CAEAGLLayer *layer = (CAEAGLLayer *)self.view.layer;
     layer.contentsScale = UIScreen.mainScreen.nativeScale;
 
@@ -104,16 +139,7 @@ static int  g_imeInsetPerMille = 0;
         RanPlat_Log ( RANLOG_ERROR, "RanIOS", "GL renderer init failed" );
         return;
     }
-
-    //  Keyboard height, pushed rather than polled - see RanPlat_ImeInsetPerMille.
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(keyboardFrame:)
-                                               name:UIKeyboardWillChangeFrameNotification
-                                             object:nil];
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(keyboardGone:)
-                                               name:UIKeyboardWillHideNotification
-                                             object:nil];
+    self.glReady = YES;
 
     self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
     [self.link addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];

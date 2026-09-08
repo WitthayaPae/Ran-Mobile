@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-03
+- **Last updated:** 2026-09-08
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -117,9 +117,24 @@ what, not by when it was found.
    `shim/gl/gl_context_ios.mm` and `shim/d3d/image_decode_ios.mm`, is written
    against documented APIs and has never seen a compiler. No Mac hardware is
    needed for this — a GitHub Actions `macos-14` runner has Xcode and the iOS
-   SDK, and `build-ios.sh` is what it would run. Both repos are on GitHub
-   already. What a Mac (or a signing identity) *is* needed for is putting the
-   build on a device.
+   SDK, and `build-ios.sh` is what it would run. What a Mac (or a signing
+   identity) *is* needed for is putting the build on a device.
+
+   **The branch is pushed** (2026-09-08,
+   `mobile-port/effects-resolution-and-text`, 107 commits — origin had only
+   `main` before). What the run still waits on is a `SOURCE_REPO_TOKEN` secret
+   on `Ran-Mobile` with Contents:read on `RAN-ASURA-SOURCE`; the workflow
+   checks the client source out as a sibling and cannot without it.
+
+   **Six defects were found and fixed before the first run** — see "The iOS
+   pass before the first compile" below. Two of them would have stopped clang
+   outright.
+
+   **The route onto a phone from Windows**, which needs no Mac: the CI job
+   uploads an unsigned `ran.app`; zip it as `Payload/ran.app` into an
+   `.ipa`, and Sideloadly or AltStore signs it with an Apple ID over USB. A
+   free account expires after 7 days and allows 3 apps; a paid one lasts a
+   year.
 2. **Audio — DONE 2026-09-04 on Android; iOS needs only a sink.** The game had
    no sound at all, on either platform, and the missing backend was only the
    last of three reasons:
@@ -150,9 +165,12 @@ what, not by when it was found.
    and nothing mutes audio when the app loses focus (`RanAudio_SetMuted` exists
    and is not wired).
 
-3. **`minIos` in the manifest.** `make-manifest.js --min-ios <n>`. The iOS
-   patcher refuses a manifest without it, deliberately, so this has to be
-   published before an iOS client may talk to the live server.
+3. **`minIos` in the manifest.** `make-manifest.js --min-ios <n>` — the flag
+   exists and is wired (`make-manifest.js:164`). The iOS patcher refuses a
+   manifest without it, deliberately, so this has to be published before an
+   iOS client may talk to the live server. **That puts item 9, publishing the
+   pending patch, in front of any test on a phone**: the client cannot fetch
+   one byte of the 4.7 GB until the live manifest carries the key.
 4. **No S3TC on Apple GPUs.** The shipped textures are DXT1/3/5, and no Apple
    GPU has ever exposed `GL_EXT_texture_compression_s3tc`. `haveS3TC()` in
    `gl_render.cpp` already detects this by extension string and falls back to
@@ -4101,6 +4119,77 @@ shop, storage, and a return to server select and back - no traps.
 
 On the release build: three world entries and a two-minute soak, no entries in
 `logcat -b crash`, 105-120 fps.
+
+## The iOS pass before the first compile (2026-09-08)
+
+An iPhone arrived, so the iOS files were read once more against the SDK before
+spending a CI run on them. Six defects, found by reading rather than by
+compiling, and every one of them would have cost a round trip:
+
+1. **ARC was never enabled.** `-fobjc-arc` appeared nowhere in the build, and
+   all six `.mm` files are written for it: `__weak`, `__bridge`, strong
+   properties, blocks capturing `weakSelf`. Without it `__bridge` is an
+   error and a file-scope `__weak` is another. Not one file calls
+   `retain`/`release`, so ARC is the only setting that compiles rather than a
+   preference. Added as `$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>`, which
+   keeps it off every C++ command line.
+
+2. **The engine's precompiled header was force-included into Objective-C++.**
+   `target_compile_options(ranshim PRIVATE -include .../Lib_Engine/StdAfx.h)`
+   had no language guard, so the Win32 emulation's `BOOL` and `interface`
+   would have gone in ahead of `#import <UIKit/UIKit.h>`. Now `CXX` only.
+   `image_decode_ios.mm` includes `windows.h` itself, in the order it wants;
+   the other three want nothing from it.
+
+3. **GL was initialised in `viewDidLoad`,** which runs before the view is laid
+   out in its window. The layer still carries `UIScreen.bounds`, which reports
+   the current interface orientation and at launch can be portrait — and
+   `RanApp_Boot` takes the logical size **once**. The whole client would have
+   been laid out against a portrait panel. Moved to
+   `viewDidLayoutSubviews`, guarded by a flag.
+
+4. **`RanGL_SurfaceChanged` was defined, never declared, never called.** It is
+   the rotation path. Declared in `gl_context.h` and wired to every layout
+   after the first.
+
+5. **Every decoded PNG and JPEG would have been upside down.** A
+   `CGBitmapContext` has its origin at the bottom left, so
+   `CGContextDrawImage` puts the image's top row at the end of the buffer.
+   Every other decoder in the shim returns rows top-down. Added the
+   translate-and-flip.
+
+6. **`UILaunchScreen` held `<key>UIColorName</key><string></string>`.** That
+   key names a colour in an asset catalogue and there is no catalogue here; an
+   empty string names nothing and is a plist an installer can reject. Now an
+   empty `<dict/>`.
+
+And one gap that is not a defect but would have made the phone untestable:
+
+**There was no way to reach a diagnostic flag or a log on iOS.** On Android
+every instrument the port has — `audiolog`, `audiodump`, `drawlimit`,
+`nulldraw`, `renderscale`, `presentlog`, `shadowcount` — is a file under
+`/sdcard/ran` that adb touches from outside, and the log is logcat. An iOS
+container is reachable from outside in exactly one place, `Documents`, and
+only when the bundle asks. So:
+
+* `RanIOS_DiagRoot` moved from `Application Support/ran-diag` to
+  `Documents/ran`. The **data** root stays in Application Support — the 4.7 GB
+  argument is untouched; what lands in Documents is kilobytes of text and
+  whatever a dump is asked for.
+* `Info.plist` gained `UIFileSharingEnabled` and
+  `LSSupportsOpeningDocumentsInPlace`. A store build drops both.
+* `RanPlat_Log` now tees to `<diag root>/ran.log` on every platform that is
+  not Android — truncated per run, capped at 8 MB, flushed per line because the
+  interesting log is the one from the run that crashed. stderr on iOS goes to
+  the system log, which needs Xcode or Console.app to read, i.e. a Mac.
+
+Both roads out of the device — iTunes/Finder file sharing over USB, and
+Files.app on the phone — now work from Windows.
+
+**The Android build was rebuilt after every change: 0 errors, 0 failed TUs, 29
+force-includes intact and no `-fobjc-arc` anywhere in its ninja file.** None of
+this is verified on a compiler that has seen Objective-C; it is six defects
+fewer for the first run to find.
 
 ## Still open
 

@@ -53,15 +53,24 @@ extern "C" const char *RanIOS_DataRoot(void)
     return cached.fileSystemRepresentation;
 }
 
-//  Diagnostic flags. On Android these are files under /sdcard/ran that adb can
-//  touch from outside; nothing outside an app may write into an iOS container,
-//  so they live in the sandbox and something inside the app has to create them
-//  - a debug menu, or a file dropped in through Files.app if the bundle opts
-//  into UIFileSharingEnabled.
+//  Diagnostic flags, dumps and the log file. On Android these are files under
+//  /sdcard/ran that adb can touch from outside.
+//
+//  Documents, not Application Support, and that is the whole point: Documents
+//  is the ONLY directory in an iOS container anything outside the app can see,
+//  and only because Info.plist sets UIFileSharingEnabled and
+//  LSSupportsOpeningDocumentsInPlace. Without that there is no way to put a
+//  flag file on the device and no way to get a dump or a log back off it, so
+//  every instrument the port has built - audiolog, audiodump, drawlimit,
+//  nulldraw, renderscale - would be unreachable on iOS.
+//
+//  It costs the 4.7 GB argument nothing: the DATA root stays in Application
+//  Support, and what lands here is kilobytes of text plus whatever a dump is
+//  asked for.
 extern "C" const char *RanIOS_DiagRoot(void)
 {
     static NSString *cached = nil;
-    if (!cached) cached = EnsureDir(NSApplicationSupportDirectory, @"ran-diag");
+    if (!cached) cached = EnsureDir(NSDocumentDirectory, @"ran");
     return cached ? cached.fileSystemRepresentation : "";
 }
 

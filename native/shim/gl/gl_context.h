@@ -8,6 +8,12 @@ extern "C" {
 // Create the context on the CALLING thread and make it current. That thread is
 // the frame-loop thread and must stay the only one touching GL.
 int  RanGL_Init(void *nativeWindow);
+
+//  The drawable resized under us - a rotation or a split view. iOS only: the
+//  Android window is a fixed landscape surface that never moves, which is why
+//  there is no counterpart in gl_context.cpp. Rebuilds the renderbuffers when
+//  the size really changed, and does nothing when it did not.
+int  RanGL_SurfaceChanged(void);
 void RanGL_Shutdown(void);
 
 int  RanGL_Ready(void);

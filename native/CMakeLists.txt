@@ -127,14 +127,26 @@ if(RAN_IOS)
   enable_language(OBJCXX)
   file(GLOB_RECURSE SHIM_SRC_MM ${SHIM}/*.mm)
   list(APPEND SHIM_SRC ${SHIM_SRC_MM})
+  #  ARC, for Objective-C++ only. Every .mm here is written for it - __weak,
+  #  __bridge, strong properties, blocks capturing weakSelf - and not one calls
+  #  retain or release, so it is the only setting that compiles rather than a
+  #  preference. The genex keeps the flag off every C++ command line.
+  set(RAN_ARC $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 endif()
 add_library(ranshim STATIC ${SHIM_SRC})
 # Temporary: split the frame between engine time and draw submission.
 # Per-draw timing for the frame-budget line. Two clock reads per draw, so it
 # stays off unless a performance question is actually being asked:
 target_compile_definitions(ranshim PRIVATE RAN_TIME_DRAWS)
+target_compile_options(ranshim PRIVATE ${RAN_ARC})
 target_include_directories(ranshim PUBLIC ${RAN_COMMON_INCLUDES} ${ENGINE_INCLUDES})
-target_compile_options(ranshim PRIVATE -include ${RAN_SRC}/Lib_Engine/StdAfx.h)
+#  CXX only. The Objective-C++ files in the shim are platform code, not engine
+#  code: image_decode_ios.mm includes windows.h itself, in the order it wants,
+#  and the other three want nothing from the engine's precompiled header. Forcing
+#  it ahead of an #import of UIKit puts the Win32 emulation's BOOL and interface
+#  in front of the framework headers.
+target_compile_options(ranshim PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:-include${SEMI}${RAN_SRC}/Lib_Engine/StdAfx.h>)
 if(RAN_IOS)
   #  The iOS equivalents of log/android/EGL/GLESv3/jnigraphics: the GL context
   #  comes from EAGL (OpenGLES), the image decoder from ImageIO, and logging
@@ -182,7 +194,7 @@ if(RAN_IOS)
     ${IOS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/ran_app.cpp)
   target_include_directories(ran PRIVATE
     ${RAN_COMMON_INCLUDES} ${ENGINE_INCLUDES} ${CLIENT_INCLUDES})
-  target_compile_options(ran PRIVATE
+  target_compile_options(ran PRIVATE ${RAN_ARC}
     $<$<COMPILE_LANGUAGE:CXX>:-include${SEMI}${RAN_SRC}/Lib_Client/stdafx.h>)
   target_link_libraries(ran PRIVATE
     Lib_ClientUI Lib_Client Lib_Engine Lib_Network Lib_Helper ranshim
