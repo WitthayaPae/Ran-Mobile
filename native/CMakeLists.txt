@@ -63,12 +63,34 @@ set(TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 #  Everything else stays on for every language: -fsigned-char and -fwrapv
 #  because image_decode_ios.mm shares the shim's types, and the WIN32/_WINDOWS
 #  defines below for the same reason - that file includes the shim's windows.h.
+#  And -fms-compatibility in particular CANNOT be used against the Apple SDK.
+#  Measured, not assumed - `echo __GNUC__ | clang -E -x c -` with each flag:
+#
+#    <none>                            __GNUC__ -> 4
+#    -fms-extensions                   __GNUC__ -> 4
+#    -fms-compatibility                __GNUC__ -> __GNUC__
+#
+#  -fms-compatibility undefines __GNUC__, because it is pretending to be MSVC.
+#  Apple's sys/_types.h then takes its non-GNUC branch and makes
+#  __darwin_va_list a "void *", while clang's own stdarg.h defines va_list as
+#  __builtin_va_list - so every translation unit that reaches <stdio.h> dies
+#  with "typedef redefinition with different types". There is no arrangement of
+#  include order that fixes that; the flag has to go on iOS.
+#
+#  -fms-extensions is the one that matters for the client anyway: anonymous
+#  structs, __declspec, the MSVC-isms in the source. It leaves __GNUC__ alone.
 set(RAN_CXX_ONLY "$<COMPILE_LANGUAGE:CXX>")
 add_compile_options(
   $<${RAN_CXX_ONLY}:-fms-extensions>
-  $<${RAN_CXX_ONLY}:-fms-compatibility>
   $<${RAN_CXX_ONLY}:-fdelayed-template-parsing>
-  $<${RAN_CXX_ONLY}:-fms-compatibility-version=19.30>
+)
+if(NOT RAN_IOS)
+  add_compile_options(
+    $<${RAN_CXX_ONLY}:-fms-compatibility>
+    $<${RAN_CXX_ONLY}:-fms-compatibility-version=19.30>
+  )
+endif()
+add_compile_options(
   -fno-strict-aliasing -fsigned-char -fwrapv
   -frtti -fexceptions
   -Wno-everything
