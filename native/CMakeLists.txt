@@ -129,6 +129,7 @@ set(RAN_COMMON_INCLUDES
   ${TP}/lua-5.0.3/include
   ${RAN_SRC}/Tik/Include
   ${TP}/ogg-1.3.5/include
+  ${CMAKE_BINARY_DIR}/ogg-generated
   ${TP}/vorbis-1.3.7/include
 )
 
@@ -159,6 +160,33 @@ target_include_directories(minilzo PUBLIC ${TP}/minilzo-2.10)
 file(GLOB LUA_SRC ${TP}/lua-5.0.3/src/*.c ${TP}/lua-5.0.3/src/lib/*.c)
 add_library(lua50 STATIC ${LUA_SRC})
 target_include_directories(lua50 PUBLIC ${TP}/lua-5.0.3/include PRIVATE ${TP}/lua-5.0.3/src)
+
+#  ogg/config_types.h is GENERATED - libogg's own .gitignore excludes it, so it
+#  is in no checkout, and the build here only ever worked because a copy had
+#  been left on one machine. Written into the build tree instead, so a fresh
+#  clone builds. Its whole content is stdint typedefs, identical on every
+#  platform this targets.
+file(WRITE ${CMAKE_BINARY_DIR}/ogg-generated/ogg/config_types.h
+"#ifndef __CONFIG_TYPES_H__
+"
+"#define __CONFIG_TYPES_H__
+"
+"#include <stdint.h>
+"
+"typedef int16_t ogg_int16_t;
+"
+"typedef uint16_t ogg_uint16_t;
+"
+"typedef int32_t ogg_int32_t;
+"
+"typedef uint32_t ogg_uint32_t;
+"
+"typedef int64_t ogg_int64_t;
+"
+"typedef uint64_t ogg_uint64_t;
+"
+"#endif
+")
 
 file(GLOB OGG_SRC ${TP}/ogg-1.3.5/src/*.c)
 add_library(ogg STATIC ${OGG_SRC})

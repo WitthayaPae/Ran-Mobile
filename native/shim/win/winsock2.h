@@ -15,6 +15,28 @@
 #include <errno.h>
 #include <poll.h>
 
+//  Darwin defines the byte-order calls as MACROS, not functions:
+//
+//    #define htons(x) __DARWIN_OSSwapInt16(x)
+//
+//  and the client writes ::htons(nPort) - s_NetClient.cpp:466 among others.
+//  A qualified name cannot be a macro invocation target that way, so the
+//  expansion is a syntax error: "expected unqualified-id". bionic declares
+//  them as real functions, which is why Android never saw it.
+//
+//  Undefine and re-declare as inline functions in the global namespace, which
+//  is what :: is asking for and what the Windows headers actually provide.
+#if defined(__APPLE__)
+#  undef htons
+#  undef htonl
+#  undef ntohs
+#  undef ntohl
+inline uint16_t htons ( uint16_t v ) { return __builtin_bswap16 ( v ); }
+inline uint32_t htonl ( uint32_t v ) { return __builtin_bswap32 ( v ); }
+inline uint16_t ntohs ( uint16_t v ) { return __builtin_bswap16 ( v ); }
+inline uint32_t ntohl ( uint32_t v ) { return __builtin_bswap32 ( v ); }
+#endif
+
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #define SOCKET_ERROR   (-1)
