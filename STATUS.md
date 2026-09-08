@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-08
+- **Last updated:** 2026-09-09
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -120,15 +120,10 @@ what, not by when it was found.
    SDK, and `build-ios.sh` is what it would run. What a Mac (or a signing
    identity) *is* needed for is putting the build on a device.
 
-   **The branch is pushed** (2026-09-08,
-   `mobile-port/effects-resolution-and-text`, 107 commits — origin had only
-   `main` before). What the run still waits on is a `SOURCE_REPO_TOKEN` secret
-   on `Ran-Mobile` with Contents:read on `RAN-ASURA-SOURCE`; the workflow
-   checks the client source out as a sibling and cannot without it.
-
-   **Six defects were found and fixed before the first run** — see "The iOS
-   pass before the first compile" below. Two of them would have stopped clang
-   outright.
+   **DONE 2026-09-09.** It compiles and links for arm64 iOS; the runner
+   uploads `ran.app`. Nine runs, and what they found is written up in "iOS
+   compiles and links" below. The eight defects found by reading beforehand are
+   in the section after that.
 
    **The route onto a phone from Windows**, which needs no Mac: the CI job
    uploads an unsigned `ran.app`; zip it as `Payload/ran.app` into an
@@ -4138,6 +4133,99 @@ shop, storage, and a return to server select and back - no traps.
 
 On the release build: three world entries and a two-minute soak, no entries in
 `logcat -b crash`, 105-120 fps.
+
+## iOS compiles and links (2026-09-09)
+
+**`ran.app` exists.** Every one of the client translation units built for
+arm64 iOS, the link is clean, and the artifact unpacks to a real bundle:
+
+    ran           13,952,792 bytes   Mach-O 64, MH_EXECUTE, arm64
+    Info.plist    UIFileSharingEnabled, UILaunchScreen, MinimumOSVersion 13.0
+    fonts/        NotoSansThai Regular+Bold, Roboto Regular+Bold
+    AppIcon-*.png 13 sizes
+
+with `RanApp_Boot`, `RanTouch_Init`, `CAEAGLLayer`, `AudioQueueNewOutput` and
+`SecKeyVerifySignature` all present in the binary. It has never been signed or
+run; what is established is that the code compiles and links for the platform,
+which two days ago was a prediction about files no compiler had seen.
+
+It took nine runs on a `macos-14` runner. What they found, in order:
+
+1. **The job reported success on a build that died at 1%.** The exit status of
+   `cmake --build … | tee build.log` is `tee`'s, which is always 0.
+   `set -o pipefail`. Every finding below was invisible until this was fixed.
+
+2. **`-fms-compatibility` cannot be used against the Apple SDK.** Measured with
+   `echo __GNUC__ | clang -E -x c -`:
+
+       <none>              __GNUC__ -> 4
+       -fms-extensions     __GNUC__ -> 4
+       -fms-compatibility  __GNUC__ -> __GNUC__
+
+   It undefines `__GNUC__`, because it is pretending to be MSVC. Apple's
+   `sys/_types.h` then takes its non-GNUC branch and makes `__darwin_va_list` a
+   `void *`, while clang's own `stdarg.h` defines `va_list` as
+   `__builtin_va_list` — so every translation unit that reaches `<stdio.h>`
+   dies with a typedef redefinition. No include order fixes it.
+
+   Turning the flag off got to 13% and then hit the MSVC-isms the flag exists
+   to accept — a member named after its template parameter, a `goto` across an
+   initialisation — with 1,150 files still to go. So the flag stays and the SDK
+   is simply given `__GNUC__=4` back. `__EXCEPTIONS` had to come with it: this
+   boost predates clang, so with `__GNUC__` set it selects
+   `config/compiler/gcc.hpp`, which turns `BOOST_NO_EXCEPTIONS` on unless
+   `__EXCEPTIONS` is defined — and MSVC mode does not define it, so
+   `BOOST_CATCH(x)` collapsed to `else if(false)` and `StringFormat.h` lost the
+   exception it names.
+
+3. **Two files that exist here and in no checkout.** `ogg/config_types.h` is
+   generated, and libogg's own `.gitignore` excludes it — this build only ever
+   worked because a copy had been left on one machine. CMake writes it into the
+   build tree now. And all 13 `AppIcon-*.png` were caught by a blanket `*.png`
+   rule meant for device screenshots, so **the first successful bundle had no
+   icon at all**; found by unpacking the artifact and counting. Both are the
+   same shape: something present locally, absent everywhere else, silent.
+
+4. **Darwin makes the byte-order calls macros.** `#define htons(x)
+   __DARWIN_OSSwapInt16(x)`, and the client writes `::htons(nPort)`. A
+   qualified name cannot be a macro invocation target, so the expansion is a
+   syntax error. bionic declares them as functions, which is why Android never
+   saw it. Undefined and re-declared as inline functions in the shim.
+
+5. **Objective-C owns `BOOL`, and the frameworks must be imported first.** Win32
+   `BOOL` is `int`; `objc.h` makes it `bool`. And `windows.h` does
+   `#define interface struct` for the COM declarations, which costs every Apple
+   header parsed afterwards its `@interface`. Both only bite
+   `image_decode_ios.mm`, the one file that needs both worlds.
+
+6. **`os.execute` does not compile**: `system()` is `__API_UNAVAILABLE(ios)`.
+
+7. **Five symbols had the wrong linkage.** The build reached 100% and the link
+   failed on `RanTouch_Init`, `_Frame`, `_PointerDown`, `_PointerMove`,
+   `_PointerUp` — declared with C++ linkage in `touch_ui.h` while
+   `ran_ios_main.mm` declares them inside `extern "C"`. Android never noticed
+   because `android_main.cpp` includes the header and agreed with it either way.
+
+8. **`sha1.cpp` wanted `<byteswap.h>`**, a consequence of giving `__GNUC__`
+   back. All it needs from it is `BYTE_ORDER`; on Apple that is
+   `<machine/endian.h>`.
+
+**Android was rebuilt after every single change: 0 errors, 0 failed TUs
+throughout.** The flag scoping was checked by counting command lines rather than
+trusting it — 1,265 carried `-fms-compatibility-version` before the C and
+Objective-C++ scoping, 1,196 after, which is exactly the 69 C translation units.
+
+**How the SOURCE repository reaches the runner.** It cannot be pushed:
+`mobile-port/effects-resolution-and-text` carries 49 Visual Studio IntelliSense
+files — a 186 MB `Browse.VC.db` and a dozen 174 MB `.ipch` — and GitHub refuses
+any blob over 100 MB. `ci/ios-source` is that same tree squashed onto `main`
+without them, and `MOBILE/tools/sync-ci-source.sh` re-syncs it. **Run that after
+every SOURCE change or the runner compiles the old file.** Doing it by hand went
+wrong the first time in the obvious way: checking the port tree out over the CI
+branch restores its `.gitignore` too, which does not ignore `.vs/`.
+
+**What remains before it runs on a phone:** signing, and `minIos` in the
+published manifest. Neither is a code problem — see Open work.
 
 ## The iOS pass before the first compile (2026-09-08)
 
