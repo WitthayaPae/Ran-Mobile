@@ -96,7 +96,14 @@ if(RAN_IOS)
   #  costs nothing - clang supports every GCC attribute the headers then reach
   #  for - and it is far cheaper than dropping -fms-compatibility, which is
   #  what lets 1,150 translation units of MSVC C++ compile at all.
-  add_compile_definitions(__GNUC__=4 __GNUC_MINOR__=2)
+  #  __EXCEPTIONS comes with it, and for the same kind of reason: this boost
+  #  predates clang, so with __GNUC__ set it selects config/compiler/gcc.hpp,
+  #  which says "#ifndef __EXCEPTIONS / define BOOST_NO_EXCEPTIONS". MSVC mode
+  #  does not define __EXCEPTIONS, so BOOST_CATCH(x) collapsed to else if(false)
+  #  and StringFormat.h lost the exception it names. Exceptions really are on -
+  #  -fexceptions is right above - so this states a fact rather than papering
+  #  over one.
+  add_compile_definitions(__GNUC__=4 __GNUC_MINOR__=2 __EXCEPTIONS=1)
 endif()
 add_compile_options(
   -fno-strict-aliasing -fsigned-char -fwrapv
