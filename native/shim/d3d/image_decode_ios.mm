@@ -23,6 +23,10 @@
 #include "windows.h"
 #include "../platform/ran_plat.h"
 #include <d3d9.h>
+//  D3DXIFF_* lives here, not in d3d9.h. The Android file gets it from the
+//  force-included StdAfx.h; .mm files do not take that force-include, so this
+//  one has to ask.
+#include <d3dx9tex.h>
 
 #include "image_decode.h"
 
