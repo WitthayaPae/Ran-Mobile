@@ -43,21 +43,32 @@ set(TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # ---- global flags: old MSVC code base -----------------------------------------
 #
-#  The MSVC-compatibility flags are for the CLIENT, which is MSVC code, and they
-#  are scoped away from Objective-C++ on purpose: not one .mm file in this tree
-#  is MSVC code, and -fms-compatibility changes name lookup in ways the Apple
-#  framework headers were never compiled against. The genex is a no-op on
-#  Android, where OBJCXX is not an enabled language at all.
+#  The MSVC-compatibility flags are for the CLIENT, and the client is C++. They
+#  go on C++ AND NOTHING ELSE, which took two runner failures to establish:
+#
+#    * Objective-C++ - not one .mm file here is MSVC code, and
+#      -fms-compatibility changes name lookup in ways the Apple framework
+#      headers were never compiled against.
+#    * plain C - and this one actually stopped the first iOS build at 1%:
+#
+#        stdarg.h:14: error: typedef redefinition with different types
+#          ('__builtin_va_list' vs '__darwin_va_list' (aka 'void *'))
+#
+#      -fms-compatibility makes clang define va_list the way MSVC does, and
+#      Apple's own stdarg.h then redefines it as the builtin. zlib and lua are
+#      portable ISO C and want none of it; they already get -UWIN32 below for
+#      the same reason. bionic happens to agree with the MSVC shape, which is
+#      why Android never noticed.
 #
 #  Everything else stays on for every language: -fsigned-char and -fwrapv
 #  because image_decode_ios.mm shares the shim's types, and the WIN32/_WINDOWS
 #  defines below for the same reason - that file includes the shim's windows.h.
-set(RAN_NOT_OBJC "$<NOT:$<COMPILE_LANGUAGE:OBJCXX>>")
+set(RAN_CXX_ONLY "$<COMPILE_LANGUAGE:CXX>")
 add_compile_options(
-  $<${RAN_NOT_OBJC}:-fms-extensions>
-  $<${RAN_NOT_OBJC}:-fms-compatibility>
-  $<${RAN_NOT_OBJC}:-fdelayed-template-parsing>
-  $<${RAN_NOT_OBJC}:-fms-compatibility-version=19.30>
+  $<${RAN_CXX_ONLY}:-fms-extensions>
+  $<${RAN_CXX_ONLY}:-fms-compatibility>
+  $<${RAN_CXX_ONLY}:-fdelayed-template-parsing>
+  $<${RAN_CXX_ONLY}:-fms-compatibility-version=19.30>
   -fno-strict-aliasing -fsigned-char -fwrapv
   -frtti -fexceptions
   -Wno-everything

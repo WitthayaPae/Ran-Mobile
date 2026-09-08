@@ -68,6 +68,10 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          #  pipefail, or the job passes whatever the compiler did: the exit
+          #  status of "cmake --build | tee" is tee's, which is always 0. The
+          #  first run reported success on a build that died at 1%.
+          set -o pipefail
           cmake --build out/ios -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build.log
 
       #  The whole point on a first run: the errors, kept even when the build
