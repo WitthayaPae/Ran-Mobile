@@ -83,9 +83,25 @@ jobs:
           name: ios-build-log
           path: MOBILE/native/build.log
 
+      #  An .ipa is a zip with the bundle under Payload/, and that is the only
+      #  shape Sideloadly, AltStore and Xcode will take. Unsigned: signing needs
+      #  an Apple identity, and the sideloader supplies one from the machine it
+      #  runs on. Producing it here means the install is a download and a drag,
+      #  rather than a repack the person doing it has to get right.
+      - name: Wrap the bundle as an .ipa
+        if: success()
+        working-directory: MOBILE/native/out/ios
+        run: |
+          mkdir -p Payload
+          cp -R ran.app Payload/
+          zip -qry RanLegacyM-unsigned.ipa Payload
+          ls -la RanLegacyM-unsigned.ipa
+
       - name: Keep the app bundle
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ran-ios-unsigned
-          path: MOBILE/native/out/ios/ran.app
+          path: |
+            MOBILE/native/out/ios/ran.app
+            MOBILE/native/out/ios/RanLegacyM-unsigned.ipa
