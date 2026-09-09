@@ -43,6 +43,16 @@ bool compressedFmt(D3DFORMAT f) {
     return f == D3DFMT_DXT1 || f == D3DFMT_DXT2 || f == D3DFMT_DXT3
         || f == D3DFMT_DXT4 || f == D3DFMT_DXT5;
 }
+//  A dimension no real texture has, and no GLES driver here would accept.
+//
+//  These decoders parse files a player can replace: the client reads its
+//  textures out of the data directory, which on Android is world-writable
+//  storage. A header claiming 2^30 pixels is not content - and unchecked it
+//  reaches arithmetic written for real numbers. 16384 is the largest
+//  GL_MAX_TEXTURE_SIZE any device in this port reports.
+const UINT kMaxDim = 16384;
+bool saneDims(UINT w, UINT h) { return w && h && w <= kMaxDim && h <= kMaxDim; }
+
 size_t levelBytes(UINT w, UINT h, D3DFORMAT f) {
     if (compressedFmt(f)) {
         UINT bw = (w + 3) / 4, bh = (h + 3) / 4;
@@ -96,7 +106,7 @@ bool decodeDDS(const BYTE *p, size_t size, RanImage &out) {
     UINT height = rd32(h + 8), width = rd32(h + 12);
     UINT mips = rd32(h + 24);
     D3DFORMAT fmt = ddsFormat(h + 72);
-    if (fmt == D3DFMT_UNKNOWN || !width || !height) return false;
+    if (fmt == D3DFMT_UNKNOWN || !saneDims(width, height)) return false;
     if (mips == 0) mips = 1;
 
     const BYTE *data = p + 128;
@@ -137,7 +147,7 @@ bool decodeDDSCube(const BYTE *p, size_t size, RanImage outFaces[6]) {
     UINT height = rd32(h + 8), width = rd32(h + 12);
     UINT mips = rd32(h + 24);
     D3DFORMAT fmt = ddsFormat(h + 72);
-    if (fmt == D3DFMT_UNKNOWN || !width || !height) return false;
+    if (fmt == D3DFMT_UNKNOWN || !saneDims(width, height)) return false;
     if (mips == 0) mips = 1;
 
     const BYTE *data = p + 128;
@@ -176,7 +186,7 @@ bool decodeTGA(const BYTE *p, size_t size, RanImage &out) {
     BYTE desc = p[17];
     if (cmapType != 0) return false;
     if (imgType != 2 && imgType != 3 && imgType != 10 && imgType != 11) return false;
-    if (!width || !height) return false;
+    if (!saneDims(width, height)) return false;
     if (depth != 8 && depth != 24 && depth != 32) return false;
 
     const BYTE *src = p + 18 + idLen;
@@ -263,9 +273,16 @@ bool decodeBMP(const BYTE *p, size_t size, RanImage &out) {
     const bool topDown = sheight < 0;
     UINT h = (UINT)(topDown ? -sheight : sheight);
     UINT w = (UINT)swidth;
+    if (!saneDims(w, h)) return false;
     UINT srcBpp = bits / 8;
-    UINT stride = ((w * srcBpp + 3) / 4) * 4;
-    if ((size_t)dataOff + (size_t)stride * h > size) return false;
+    //  size_t, not UINT. w is a 32-bit field straight out of the file, so
+    //  w * srcBpp in UINT arithmetic wraps: a width of 2^30 at 4 bytes gives a
+    //  stride of 0, the "does the pixel data fit" test below then compares
+    //  against nothing, and the row loop reads wherever it likes. The
+    //  dimension guard above already makes it impossible; this makes it
+    //  impossible twice, because the guard is one line someone could relax.
+    size_t stride = (((size_t)w * srcBpp + 3) / 4) * 4;
+    if ((size_t)dataOff + stride * (size_t)h > size) return false;
 
     std::vector<BYTE> pix((size_t)w * h * 4);
     for (UINT y = 0; y < h; ++y) {
@@ -324,7 +341,7 @@ bool decodePNG(const BYTE *p, size_t size, RanImage &out) {
     }
     // Interlaced and 16-bit-per-channel PNGs do not appear in the client data;
     // refusing them is better than producing a scrambled image.
-    if (!width || !height || depth != 8 || interlace != 0 || idat.empty()) return false;
+    if (!saneDims(width, height) || depth != 8 || interlace != 0 || idat.empty()) return false;
 
     int channels;
     switch (colorType) {

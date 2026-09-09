@@ -4412,8 +4412,31 @@ left is draw submission or fill, which decides whether batching character pieces
   a fourth flag. Guarded under `#ifdef RAN_MOBILE` so MSVC compiles the line it
   always has; **the PC client has the same defect**. It is the only
   `[strlen(x)-1]` in all 1,167 shipped translation units.
-* The file parsers reached through `/sdcard` data: the DDS/TGA/BMP decoders, the
-  .x reader and the .rcc extractor. They parse files a user can replace.
+* **The image decoders: audited and hardened 2026-09-09.** They parse files a
+  player can replace — the client reads its textures out of the data directory,
+  which on Android is world-writable storage.
+
+  Read line by line rather than fuzzed, because the arithmetic is where these
+  fail. TGA and DDS are sound: every product is promoted to `size_t` before
+  multiplying, every write is bounded by `written < total`, and every read
+  tests `src + bpp > end`. **BMP was not.**
+
+      UINT stride = ((w * srcBpp + 3) / 4) * 4;
+
+  `w` is a 32-bit field straight out of the file and `w * srcBpp` is `UINT`
+  arithmetic, so a declared width of 2^30 at 4 bytes a pixel wraps the stride to
+  **0**. The "does the pixel data fit in the file" test on the next line then
+  compares against nothing and passes, and the row loop reads wherever the
+  header points it. Fixed twice over: the multiply is `size_t` now, and every
+  decoder — DDS, DDS cube, TGA, BMP, PNG — rejects a dimension over 16384, which
+  is the largest `GL_MAX_TEXTURE_SIZE` any device in this port reports and far
+  larger than any real texture here.
+
+  Verified by rebuilding and booting: the server-select page draws exactly as
+  before, no texture lost, 60 fps, and the frame budget line unchanged at 1.5 ms.
+
+* Still to look at: the `.x` reader and the `.rcc` extractor, on the same
+  grounds.
 * Compile the `/sdcard/ran/*` switches out of a distribution build.
 
 ### 3. Confirm every function in the game works
