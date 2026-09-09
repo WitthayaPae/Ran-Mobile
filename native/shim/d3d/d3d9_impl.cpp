@@ -2031,20 +2031,51 @@ public:
     // which left dwCurrentMode pointing at an uninitialised D3DModeInfo — the
     // wild pointer that crashed Initialize3DEnvironment. One honest mode, only
     // for the format we actually present in, keeps that search consistent.
+    //  Two modes, and both are here for a reason the engine imposes.
+    //
+    //  d3dapp.cpp drops any mode under 800x600 outright:
+    //
+    //      if( DisplayMode.Width < 800 || DisplayMode.Height < 600 ) continue;
+    //
+    //  An iPhone 15 in landscape is 2556x1179, and at UI scale 2 that is a
+    //  logical 1278x589. 589 is under the floor, so the only mode was thrown
+    //  away, the adapter ended up with no devices, and Create returned
+    //  D3DAPPERR_NOCOMPATIBLEDEVICES - "Could not find any compatible Direct3D
+    //  devices" on a phone that had just drawn its own splash screen. A 19.5:9
+    //  display is simply shorter than a PC-era filter expects.
+    //
+    //  So mode 0 is the real client size raised to that floor. Mode 1 is
+    //  exactly 800x600 because the engine, having failed to match the
+    //  configured resolution, falls back to searching for 800x600 - and if
+    //  THAT finds nothing it leaves dwCurrentMode at -1 and then reads
+    //  modes[-1] in Initialize3DEnvironment. Android has been doing exactly
+    //  that all along and getting away with it. One honest fallback entry ends
+    //  it on both platforms.
+    //
+    //  Neither size is what gets drawn: in the windowed path the back buffer
+    //  comes from m_rcWindowClient, and only the depth-stencil format is taken
+    //  from the chosen mode.
     UINT GetAdapterModeCount(UINT, D3DFORMAT Format) override {
-        const UINT n = (Format == D3DFMT_X8R8G8B8) ? 1 : 0;
+        const UINT n = (Format == D3DFMT_X8R8G8B8) ? 2 : 0;
         LOGI("GetAdapterModeCount fmt=%u -> %u", (unsigned)Format, n);
         return n;
     }
-    HRESULT EnumAdapterModes(UINT, D3DFORMAT Format, UINT, D3DDISPLAYMODE *pMode) override {
+    HRESULT EnumAdapterModes(UINT, D3DFORMAT Format, UINT iMode, D3DDISPLAYMODE *pMode) override {
         if (!pMode) return D3DERR_INVALIDCALL;
-        if (Format != D3DFMT_X8R8G8B8) { LOGI("EnumAdapterModes fmt=%u -> NOTAVAILABLE", (unsigned)Format); return D3DERR_NOTAVAILABLE; }
-        RECT r; GetClientRect(NULL, &r);
-        pMode->Width = (UINT)(r.right - r.left);
-        pMode->Height = (UINT)(r.bottom - r.top);
+        if (Format != D3DFMT_X8R8G8B8) return D3DERR_NOTAVAILABLE;
+        if (iMode > 1) return D3DERR_INVALIDCALL;
+        if (iMode == 1) {
+            pMode->Width = 800; pMode->Height = 600;
+        } else {
+            RECT r; GetClientRect(NULL, &r);
+            UINT w = (UINT)(r.right - r.left), h = (UINT)(r.bottom - r.top);
+            if (w < 800) w = 800;
+            if (h < 600) h = 600;
+            pMode->Width = w; pMode->Height = h;
+        }
         pMode->RefreshRate = 60;
         pMode->Format = D3DFMT_X8R8G8B8;
-        LOGI("EnumAdapterModes -> %ux%u", pMode->Width, pMode->Height);
+        LOGI("EnumAdapterModes[%u] -> %ux%u", iMode, pMode->Width, pMode->Height);
         return D3D_OK;
     }
     HRESULT GetAdapterDisplayMode(UINT, D3DDISPLAYMODE *pMode) override {
