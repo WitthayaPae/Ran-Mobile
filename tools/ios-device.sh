@@ -31,7 +31,15 @@
 #      ./tools/ios-device.sh shot out.png
 set -e
 PY="/c/Users/tapnu/AppData/Local/Programs/Python/Python312/python.exe"
-BUNDLE=com.ran.launcher
+#  Sideloadly appends the team id on iOS 16+, so the installed app is
+#  com.ran.launcher.<TEAMID>, not com.ran.launcher. Found rather than assumed:
+#  it changes with the signing account. Override with RAN_BUNDLE=... if needed.
+BUNDLE="${RAN_BUNDLE:-}"
+if [ -z "$BUNDLE" ]; then
+  BUNDLE=$("$PY" -m pymobiledevice3 apps list --userspace 2>/dev/null |
+           grep -oE '"com.ran.launcher[^"]*"' | head -1 | tr -d '"')
+fi
+[ -n "$BUNDLE" ] || BUNDLE=com.ran.launcher
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/../native/out/ios-device"
 pmd() { "$PY" -m pymobiledevice3 "$@"; }

@@ -39,6 +39,18 @@ int        g_next = 0;
 //  not a record: a session that logs hard should not quietly fill the phone.
 #include <pthread.h>
 #include <stdlib.h>
+#if defined(__APPLE__)
+//  An iOS app's stderr is not routed anywhere: nothing reads it unless a
+//  debugger is attached, so on a sideloaded build every line written there is
+//  simply lost. That is how the first run on a phone produced an empty screen,
+//  an empty ran.log and no syslog at all - three blind instruments and no way
+//  to tell which of them was the broken one.
+//
+//  os_log is what the system console reads, and what pymobiledevice3 syslog
+//  streams over USB. %{public}s because os_log redacts %s to <private> by
+//  default, which would leave the lines visible and their contents not.
+#include <os/log.h>
+#endif
 static pthread_mutex_t g_logLock = PTHREAD_MUTEX_INITIALIZER;
 static FILE           *g_logFile = NULL;
 static long            g_logBytes = 0;
@@ -65,6 +77,20 @@ extern "C" void RanPlat_Log ( int level, const char *tag, const char *fmt, ... )
     va_copy ( ap2, ap );
     vfprintf ( stderr, fmt, ap );
     fputc ( 0x0A, stderr );
+
+#if defined(__APPLE__)
+    //  Formatted once for the system log. Done before the file, so a line
+    //  still reaches somewhere readable if the file was never opened.
+    {
+        va_list ap3;
+        va_copy ( ap3, ap2 );
+        char msg[1024];
+        vsnprintf ( msg, sizeof(msg), fmt, ap3 );
+        va_end ( ap3 );
+        os_log ( OS_LOG_DEFAULT, "%{public}s %{public}s: %{public}s",
+                 pri, tag ? tag : "Ran", msg );
+    }
+#endif
 
     pthread_mutex_lock ( &g_logLock );
     if ( !g_logFile && !g_logTried ) {
