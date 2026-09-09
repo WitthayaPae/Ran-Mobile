@@ -51,6 +51,22 @@ int        g_next = 0;
 //  default, which would leave the lines visible and their contents not.
 #include <os/log.h>
 #endif
+
+//  The real fopen, not the shim's.
+//
+//  windows.h does "#define fopen(p, m) ran_fopen((p), (m))" so the client's
+//  thousands of fopen calls go through the case-insensitive path resolver.
+//  This file is compiled with the engine's StdAfx force-included, so it got
+//  that macro too - and ran_fopen LOGS, through this very function, which is
+//  already holding g_logLock. A non-recursive mutex, taken twice, on the first
+//  line the client ever logged.
+//
+//  That is exactly what the first run on a real iPhone did: ran.log created and
+//  left at 0 bytes, the patcher thread stopped dead on its opening line, the
+//  screen showing a patch page whose callbacks never fired, and no crash to
+//  explain any of it. path_resolve.cpp carries a comment about this same
+//  recursion; the warning was there and I walked into it anyway.
+#undef fopen
 static pthread_mutex_t g_logLock = PTHREAD_MUTEX_INITIALIZER;
 static FILE           *g_logFile = NULL;
 static long            g_logBytes = 0;
@@ -92,6 +108,13 @@ extern "C" void RanPlat_Log ( int level, const char *tag, const char *fmt, ... )
     }
 #endif
 
+    //  Belt and braces. Nothing below should log, but this file cannot be the
+    //  thing that hangs the client: a re-entrant call skips the file and the
+    //  line still reaches stderr and os_log above.
+    static __thread int s_inLog = 0;
+    if ( s_inLog ) { va_end ( ap2 ); va_end ( ap ); return; }
+    s_inLog = 1;
+
     pthread_mutex_lock ( &g_logLock );
     if ( !g_logFile && !g_logTried ) {
         g_logTried = 1;
@@ -109,6 +132,7 @@ extern "C" void RanPlat_Log ( int level, const char *tag, const char *fmt, ... )
         fflush ( g_logFile );
     }
     pthread_mutex_unlock ( &g_logLock );
+    s_inLog = 0;
     va_end ( ap2 );
 #endif
     va_end ( ap );
