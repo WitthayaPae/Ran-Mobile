@@ -4134,6 +4134,55 @@ shop, storage, and a return to server select and back - no traps.
 On the release build: three world entries and a two-minute soak, no entries in
 `logcat -b crash`, 105-120 fps.
 
+## The client runs on an iPhone, and stops 11 pixels short (2026-09-09)
+
+After the patcher was fixed the phone downloaded all 4.7 GB, brought up GL,
+drew its own splash, loaded param.ini / option.ini / Config.ini, indexed
+Gui.rcc and loaded the game text — and then:
+
+    I RanD3D: device created 0x0
+    I RAN: [MessageBox] Could not find any compatible Direct3D devices.
+    E RanApp: CD3DApplication::Create failed 0x82000003
+
+**`d3dapp.cpp` drops any display mode under 800x600:**
+
+    // Filter out low-resolution modes
+    if( DisplayMode.Width < 800 || DisplayMode.Height < 600 ) continue;
+
+An iPhone 15 in landscape is 2556x1179, and at UI scale 2 that is a logical
+**1278x589**. 589 is under the floor, so the only mode the shim reports was
+thrown away, the adapter ended up with no devices, and the client refused to
+start on a phone that had just drawn its own splash screen. A 19.5:9 display is
+simply shorter than a PC-era filter expects; Android's 1280x720 has always
+cleared it by 120 pixels.
+
+**Established by measurement, not reading.** Both platforms were instrumented at
+`GetAdapterModeCount`, `EnumAdapterModes` and `CheckDeviceType`, and the two
+sequences are identical line for line — same counts across four formats, same
+two caps probes (which is all `device created 0x0` ever was), same 4+4
+`CheckDeviceType` — differing in exactly one number:
+
+    Android:  EnumAdapterModes -> 1280x720   -> device created 1280x720
+    iOS:      EnumAdapterModes -> 1278x589   -> no compatible devices
+
+**The fix reports two modes.** Mode 0 is the client size raised to the floor.
+Mode 1 is exactly 800x600, and that one is for a second bug found while reading:
+when no mode matches the configured resolution the engine falls back to
+searching for 800x600, and **if that finds nothing it leaves `dwCurrentMode` at
+-1 and then reads `modes[-1]`** in `Initialize3DEnvironment`. Android has been
+doing exactly that since the port began and getting away with it. Neither size
+is what gets drawn — in the windowed path the back buffer comes from
+`m_rcWindowClient` and only the depth-stencil format is taken from the mode.
+
+Verified on Android before it went anywhere near the phone: `EnumAdapterModes[0]
+-> 1280x720`, `[1] -> 800x600`, device still created 1280x720, **boot
+complete**, server-select page pixel-identical, 60 fps, 1.5 ms submitting draws.
+
+**Also fixed: boot no longer retries forever.** A failed `RanApp_Boot` was
+retried every frame, so the first run made **1,461 attempts and a 31,000-line
+log**, re-running the splash each time — which is why the screen looked like it
+was still loading rather than broken.
+
 ## The first run on a real iPhone (2026-09-09)
 
 **iPhone 15, iOS 26.6.2** (build 23G90), signed with a free Apple ID through
