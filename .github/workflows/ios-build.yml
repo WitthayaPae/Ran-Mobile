@@ -61,17 +61,21 @@ jobs:
         working-directory: MOBILE/native
         run: |
           chmod +x build-ios.sh
+          #  RelWithDebInfo, not Release: a crash report off the phone gives a
+          #  symbol and an offset, and without DWARF that is where the trail
+          #  ends - EXC_BREAKPOINT in SANIMCONINFO::operator= named the function
+          #  and nothing about which line. Same optimisation plus line tables, so
+          #  llvm-symbolizer turns an offset into a file and a line.
+          #
+          #  The comment lives HERE and not among the arguments: a backslash
+          #  continuation followed by a comment ends the command, and the next
+          #  line ran as one of its own - "-DCMAKE_BUILD_TYPE=RelWithDebInfo:
+          #  command not found", exit 127.
           cmake -S . -B out/ios -G "Unix Makefiles" \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-            #  RelWithDebInfo, not Release: a crash report off the phone gives a
-            #  symbol and an offset, and without DWARF that is where the trail
-            #  ends - EXC_BREAKPOINT in SANIMCONINFO::operator= named the
-            #  function and nothing about which line. Same optimisation plus the
-            #  line tables, so llvm-symbolizer turns an offset into a file and a
-            #  line, for this crash and every one after it.
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
           #  pipefail, or the job passes whatever the compiler did: the exit
