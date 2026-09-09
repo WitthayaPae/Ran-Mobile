@@ -4224,8 +4224,34 @@ every SOURCE change or the runner compiles the old file.** Doing it by hand went
 wrong the first time in the obvious way: checking the port tree out over the CI
 branch restores its `.gitignore` too, which does not ignore `.vs/`.
 
-**What remains before it runs on a phone:** signing, and `minIos` in the
-published manifest. Neither is a code problem — see Open work.
+**The patch gate is open (2026-09-09).** Version 413 is live and verified from
+here: `manifest.json` is byte-identical to the local one at minApk 1 / **minIos
+1** / 23,368 files, `manifest.sig` verifies against the pinned P-256 key, the
+APK blob is present at exactly the 342,620,229 bytes it claims, and three
+spot-checked data blobs are there at the right sizes. LDPlayer went 412 -> 413
+and booted straight through, so the Android client consumes it too.
+
+**What remains before it runs on a phone: signing.** Free and manual — Sideloadly
+on this machine signs the `.ipa` with an Apple ID, and the signature lasts 7
+days. $99/year buys TestFlight and a year-long signature; nothing about the
+build needs it.
+
+**There is a debugging loop, and it is most of the Android one.**
+`MOBILE/tools/ios-device.sh`, over pymobiledevice3 11.12 (Python 3.12 installed
+here for it):
+
+    adb logcat              ->  ios-device.sh log        (syslog live)
+    adb pull /sdcard/ran/x  ->  ios-device.sh pull       (the app's Documents)
+    adb push /sdcard/ran/x  ->  ios-device.sh flag NAME
+    adb shell screencap     ->  ios-device.sh shot
+    /data/tombstones        ->  ios-device.sh crash      (symbolised reports)
+
+The flag and log paths work **only** because `Info.plist` sets
+`UIFileSharingEnabled` and the diagnostic root was moved to Documents on
+2026-09-08 - without that there would be no way to set `audiolog` or read
+`ran.log` on a device at all. What is genuinely missing is `adb shell` (iOS has
+no equivalent) and `adb install` (an `.ipa` must be signed first). The USB
+transport needs Apple Devices installed for its usbmuxd service.
 
 ## The iOS pass before the first compile (2026-09-08)
 
