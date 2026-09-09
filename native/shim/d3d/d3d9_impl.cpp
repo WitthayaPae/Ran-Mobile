@@ -2032,16 +2032,19 @@ public:
     // wild pointer that crashed Initialize3DEnvironment. One honest mode, only
     // for the format we actually present in, keeps that search consistent.
     UINT GetAdapterModeCount(UINT, D3DFORMAT Format) override {
-        return (Format == D3DFMT_X8R8G8B8) ? 1 : 0;
+        const UINT n = (Format == D3DFMT_X8R8G8B8) ? 1 : 0;
+        LOGI("GetAdapterModeCount fmt=%u -> %u", (unsigned)Format, n);
+        return n;
     }
     HRESULT EnumAdapterModes(UINT, D3DFORMAT Format, UINT, D3DDISPLAYMODE *pMode) override {
         if (!pMode) return D3DERR_INVALIDCALL;
-        if (Format != D3DFMT_X8R8G8B8) return D3DERR_NOTAVAILABLE;
+        if (Format != D3DFMT_X8R8G8B8) { LOGI("EnumAdapterModes fmt=%u -> NOTAVAILABLE", (unsigned)Format); return D3DERR_NOTAVAILABLE; }
         RECT r; GetClientRect(NULL, &r);
         pMode->Width = (UINT)(r.right - r.left);
         pMode->Height = (UINT)(r.bottom - r.top);
         pMode->RefreshRate = 60;
         pMode->Format = D3DFMT_X8R8G8B8;
+        LOGI("EnumAdapterModes -> %ux%u", pMode->Width, pMode->Height);
         return D3D_OK;
     }
     HRESULT GetAdapterDisplayMode(UINT, D3DDISPLAYMODE *pMode) override {
@@ -2053,7 +2056,10 @@ public:
         pMode->Format = D3DFMT_X8R8G8B8;
         return D3D_OK;
     }
-    HRESULT CheckDeviceType(UINT, D3DDEVTYPE, D3DFORMAT, D3DFORMAT, BOOL) override { return D3D_OK; }
+    HRESULT CheckDeviceType(UINT, D3DDEVTYPE dt, D3DFORMAT disp, D3DFORMAT bb, BOOL win) override {
+        LOGI("CheckDeviceType type=%u disp=%u bb=%u windowed=%d -> OK", (unsigned)dt, (unsigned)disp, (unsigned)bb, (int)win);
+        return D3D_OK;
+    }
     HRESULT CheckDeviceFormat(UINT, D3DDEVTYPE, D3DFORMAT, DWORD Usage, D3DRESOURCETYPE, D3DFORMAT CheckFormat) override {
         // Depth/stencil: claim only D24S8 and D16, the two GLES3 always has.
         if (Usage & D3DUSAGE_DEPTHSTENCIL)
