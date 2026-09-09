@@ -4354,10 +4354,26 @@ fewer than the cap, so capped and uncapped are the same there (and the small
 difference above is the scene moving between samples, not the change). Take one
 reading in a busy town to close this properly, and tune the cap against it.
 
-Still worth doing: build once with RAN_TIME_DRAWS defined to find out whether
-what remains is draw submission or fill, which decides whether batching
-character pieces (one draw per bone-combination attribute group today) is the
-next thing worth attempting.
+**The draw-timing instrument was broken, and is fixed (2026-09-09).**
+`RAN_TIME_DRAWS` has been on all along; the frame-budget line printed
+`0.0 ms submitting draws (0%)` because two readers shared one resettable
+counter. `ran_app.cpp` prints a per-frame FRAME line and `d3d9_impl.cpp` a
+300-frame census, and both called `RanGLR_TakeDrawSeconds`, which resets —
+whichever ran first got the time and the other got nothing. That is why the
+budget line claimed draw submission was free while the FRAME line beside it
+reported 2 us x 287 draws. The census now reads a monotonic total and keeps its
+own delta.
+
+Measured on LDPlayer immediately after, at the character screen:
+
+    frame budget: 17.3 ms total, 1.4 ms submitting draws (8%)
+    frame budget: 16.9 ms total, 0.9 ms submitting draws (5%)
+    frame budget: 16.9 ms total, 0.8 ms submitting draws (5%)
+
+and the FRAME line agrees at 0.7-1.2 ms. So submission is a twentieth of the
+frame in a quiet scene. **The number that decides whether batching character
+pieces is worth doing is the same reading on the Tab S9 in a crowd** - the
+instrument works now, the measurement still needs the tablet.
 
 The draw-count reductions are measured and proportional, but on the emulator.
 Confirm on the Tab S9 with a real crowd, and tune `/sdcard/ran/shadowcount`

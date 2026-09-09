@@ -85,6 +85,9 @@ void RanGLR_Draw(DWORD primType, UINT primCount, const void *verts, UINT stride,
 // screen, and of what kind" without a per-draw log flood.
 void RanGLR_LogStats(void);
 double RanGLR_TakeDrawSeconds(void);
+//  The same measurement without the reset, so a second reader does not steal
+//  it from the first. Seconds since the process started.
+double RanGLR_DrawSecondsTotal(void);
 unsigned long RanGLR_TakeDrawCount(void);
 //  Re-read the diagnostic switches under /sdcard/ran (nulldraw, notex, ...).
 void RanGLR_RefreshDiagnostics(void);

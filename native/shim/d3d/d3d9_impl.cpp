@@ -1160,11 +1160,23 @@ public:
             LOGI("  of which off-screen: %lu skinned + %lu other a frame",
                  g_buckets.offSkinned / 300, g_buckets.offOther / 300);
             memset(&g_buckets, 0, sizeof(g_buckets));
-            const double draws = RanGLR_TakeDrawSeconds();
-            LOGI("frame budget: %.1f ms total, %.1f ms submitting draws (%.0f%%)"
-                 "  [draw timing needs RAN_TIME_DRAWS]",
+            //  The running total, minus what it was last census. Taking the
+            //  resettable counter here stole it from the per-frame FRAME line
+            //  - or was stolen by it, depending on which ran first - and this
+            //  line has been printing 0.0 ms ever since.
+            static double s_lastDrawTotal = 0.0;
+            const double drawTotal = RanGLR_DrawSecondsTotal();
+            const double draws = drawTotal - s_lastDrawTotal;
+            s_lastDrawTotal = drawTotal;
+#ifdef RAN_TIME_DRAWS
+            LOGI("frame budget: %.1f ms total, %.1f ms submitting draws (%.0f%%)",
                  g_frameSeconds * 1000.0 / 300.0, draws * 1000.0 / 300.0,
                  g_frameSeconds > 0.0 ? draws * 100.0 / g_frameSeconds : 0.0);
+#else
+            LOGI("frame budget: %.1f ms total  [draw timing needs RAN_TIME_DRAWS]",
+                 g_frameSeconds * 1000.0 / 300.0);
+            (void) draws;
+#endif
             g_frameSeconds = 0.0;
         }
         if ((g_stats.frames % 100000) == 0)

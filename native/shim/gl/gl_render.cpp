@@ -1907,6 +1907,13 @@ RingBuffer g_streamIndices(GL_ELEMENT_ARRAY_BUFFER);
 //  but two clock reads per draw are themselves a cost, so it is off unless
 //  RAN_TIME_DRAWS is defined.
 double g_drawSeconds = 0.0;
+//  The same seconds, never reset. Two places report draw time - the per-frame
+//  FRAME line and the 300-frame frame-budget census - and both used to call
+//  RanGLR_TakeDrawSeconds, which resets. Whichever ran first got the time and
+//  the other printed 0.0 ms, which is why the budget line has always claimed
+//  draw submission costs nothing while the FRAME line beside it said 2 us x
+//  287 draws. A reader that does not reset lets both be right.
+double g_drawSecondsTotal = 0.0;
 
 static double nowSeconds() {
     struct timespec ts;
@@ -1941,6 +1948,9 @@ extern "C" double RanGLR_TakeDrawSeconds(void) {
     g_drawSeconds = 0.0;
     return v;
 }
+
+//  Monotonic, for a second reader that must not disturb the first.
+extern "C" double RanGLR_DrawSecondsTotal(void) { return g_drawSecondsTotal; }
 
 static void drawInternal(DWORD primType, UINT primCount, const void *verts,
                          UINT stride, DWORD fvf, unsigned glTexture,
@@ -1996,7 +2006,8 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  the client-side cost of deciding to draw.
     if (g_nullDraw) {
 #ifdef RAN_TIME_DRAWS
-        g_drawSeconds += nowSeconds() - drawStart;
+        { const double dt = nowSeconds() - drawStart;
+          g_drawSeconds += dt; g_drawSecondsTotal += dt; }
 #endif
         return;
     }
@@ -2662,7 +2673,8 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     }
 
 #ifdef RAN_TIME_DRAWS
-    g_drawSeconds += nowSeconds() - drawStart;
+    { const double dt = nowSeconds() - drawStart;
+      g_drawSeconds += dt; g_drawSecondsTotal += dt; }
 #endif
 }
 
