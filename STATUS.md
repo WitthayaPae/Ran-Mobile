@@ -4383,8 +4383,35 @@ left is draw submission or fill, which decides whether batching character pieces
 
 ### 2. Security: the parts not yet looked at
 
-* Trace the 43 raw `strcpy`/`sprintf` in the client logic to see whether any
-  takes a server-supplied string.
+* **DONE 2026-09-09: none of them takes a server-supplied string.** The count
+  was wrong to begin with — grepping `SOURCE/` finds 91, but that includes
+  files the mobile client does not compile (`s_CNetUser.cpp`, the ODBC
+  sources; `Lib_Network` ships 26 of its files, not all of them). Scoped to the
+  1,167 translation units the build actually names, it is **105 calls**, and
+  every one was classified by its source:
+
+  - `m_szUID` (21 bytes) and `m_szName` (33) — the player's own, fixed-size
+    struct fields, into 256-byte buffers with ~117 bytes of slack.
+  - item and effect names from the local `.rcc` data tables.
+  - local strings: hardware ids in `NSPCID.cpp`, `inet_ntoa`, filenames,
+    and the fixed `GARBAGE_DATA` table.
+  - fixed literals via `strcat`.
+
+  No inbound packet field reaches an unbounded copy. The residual exposure is
+  the item-name path, because item data is a file a user can replace on
+  `/sdcard` — which is the parser item below, not this one.
+
+* **One real defect found on the way, and fixed.** `GLAgentServerMsg.cpp:3872`:
+
+      strcat( szTempChar, "SPEED," ); ... "ATTACK SPEED," ... "ATTACK RATE,"
+      szTempChar[strlen(szTempChar)-1] = ' ';    // strip the trailing comma
+
+  An EX event whose `emType` matches none of the three bits leaves the buffer
+  empty, `strlen` is 0, and it writes one byte **before** a stack array. The
+  three literals also total exactly 31 bytes into a `char[32]` — no margin for
+  a fourth flag. Guarded under `#ifdef RAN_MOBILE` so MSVC compiles the line it
+  always has; **the PC client has the same defect**. It is the only
+  `[strlen(x)-1]` in all 1,167 shipped translation units.
 * The file parsers reached through `/sdcard` data: the DDS/TGA/BMP decoders, the
   .x reader and the .rcc extractor. They parse files a user can replace.
 * Compile the `/sdcard/ran/*` switches out of a distribution build.
