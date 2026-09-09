@@ -4412,6 +4412,44 @@ StdAfx force-includes intact, 1,265 command lines still carrying
 None of this is verified on a compiler that has seen Objective-C; it is eight
 defects fewer for the first run to find.
 
+## The engine keeps its own error log, and nobody had read it (2026-09-09)
+
+Noticed while verifying something else: the client opens
+`files/Logs/ErrorLog/log.<date>.txt` 255 times a boot. It has been writing
+**5,740 lines every run** for the whole port and no session has ever looked at
+it — all the instrumentation built here goes to logcat, and this file is the
+engine's own channel, written by `CDebugSet::ToLogFile`.
+
+Almost all of it is benign, and that was worth establishing before chasing any
+of it. The bulk is
+
+    2,632  item ran option setting file load fail : w4_sample.bin
+      938  item ran option setting file load fail : a3_sample.bin
+      919  ERROR : SGENITEM::LOADFILE(), <name>.genitem
+
+which is the client asking for `data/glogicserver/` — **server** data. The PC
+client's own error log (`Ran/Logs/ErrorLog/`) has the same families in the same
+proportions, 9,002 lines to our 5,740, so a client without server data logging
+thousands of these is normal and not a port defect.
+
+**One lead, and its confound, both recorded rather than acted on.** Comparing by
+item key rather than by message text (the two logs are in different codepages,
+so a byte-level diff lies), mobile reports `GETAPPLYNUM() == 0` for **45 item
+keys the PC log does not, and none the other way**. `GETAPPLYNUM` returns
+`sDrugOp.wCureVolume` for a list of item types, so a zero there is either real
+data or a stream desync in `SITEM::LoadFile` - which would be the same family as
+the `.cps` pointer-in-a-record bug found earlier.
+
+It cannot be attributed yet, and the reason is worth writing down: the PC log is
+from 2026-08-21, and `Ran/` has no `data/glogicserver/` directory at all while
+`CLIENT/` has 1,586 `.genitem` files in it. **The two clients are demonstrably
+not loading the same data**, so the difference may be content vintage rather
+than parsing. Settling it needs one PC run against the same item file, and that
+is what to do before touching any code.
+
+**Worth doing routinely from now on:** pull this file after a session on the
+device. It is 5,740 lines that no instrument here was showing.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly
