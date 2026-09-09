@@ -4134,6 +4134,55 @@ shop, storage, and a return to server select and back - no traps.
 On the release build: three world entries and a two-minute soak, no entries in
 `logcat -b crash`, 105-120 fps.
 
+## The iPhone booted, ran at 60 fps, and drew nothing (2026-09-09)
+
+With the mode filter cleared the client reached `=== boot complete ===` on the
+phone and held a steady 60 fps — submitting **not one draw**:
+
+    FRAME 60.1 fps | 4.1 ms = update 0.1 + render 3.6 + present 0.4
+    draws=0 (ui=0 textured=0) verts=0
+    per frame: opaque 0 (0 verts) | alpha 0 (0) | skinned 0 (0) | ui 0
+
+A black screen at full frame rate. `Render()` was running and costing 3.4 ms of
+engine CPU while producing nothing.
+
+**Two leads were wrong and both were dropped by reading the source rather than
+arguing from the log.** Zero textures created is a *consequence* of zero draws —
+`texture N = ...` is logged on upload, and upload only happens when a texture is
+bound for a draw. The absent `RanLight` line is the same: capped at 40, emitted
+during draw setup. Neither was independent evidence; both restate `draws=0`.
+
+**The cause was one missing separator.**
+
+    E RanOpen: rb .../Application Support/ranData/Map/Map.rcc -> FAILED
+    I RanApp:  engine data: loose files
+    E RanLand: log_in.wld: 0 frames, 0 leaf nodes
+    W RanEngine: file not found by DxSkinCharData::LoadFile: o_m1.chf
+
+`ranData`. The engine joins its data root without a separator —
+
+    ran_app.cpp:276   std::string(g_appPath) + "Data/Map/Map.rcc"
+
+— because the contract is that the root **ends** in one, and Android has always
+met it: `pickDataRoot` does `snprintf(chosen, n, "%s/", candidate)`.
+`RanIOS_DataRoot` returned an `NSURL` path, which never carries a trailing
+slash. So the 574 MB archive never opened, the client fell back to loose files,
+and **there are none** — the manifest ships `data/map/Map.rcc` and zero loose
+`.wld`, zero `.chf`, because they all live inside it. An empty scene submits no
+draws.
+
+Paths built with an explicit separator — `RANPARAM::LOAD`'s `ranparam.ini` —
+were unaffected, which is why the boot looked healthy right up to the end.
+
+The patcher's `RootDir` standardises the slash back off: it joins with
+`stringByAppendingPathComponent` and `SafeDest` compares path prefixes, where a
+root ending in `/` would test for `//` and reject every path.
+
+Found by diffing the two platforms' logs line by line — Android reports
+`log_in.wld: 2 frames, 1 leaf nodes`, iOS `0 frames, 0 leaf nodes` — and then
+reading how each platform builds its root. Android is untouched: the change is
+in iOS-only code.
+
 ## The client runs on an iPhone, and stops 11 pixels short (2026-09-09)
 
 After the patcher was fixed the phone downloaded all 4.7 GB, brought up GL,
