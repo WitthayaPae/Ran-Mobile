@@ -4134,6 +4134,59 @@ shop, storage, and a return to server select and back - no traps.
 On the release build: three world entries and a two-minute soak, no entries in
 `logcat -b crash`, 105-120 fps.
 
+## The first run on a real iPhone (2026-09-09)
+
+**iPhone 15, iOS 26.6.2** (build 23G90), signed with a free Apple ID through
+Sideloadly and installed as `com.ran.launcher.FALC84Z7MP` — Sideloadly appends
+the team id, so nothing may assume the bundle id.
+
+The app launched, drew a black screen with an empty progress bar, and stopped.
+No crash report. `ran.log` created and left at **exactly 0 bytes**. Nothing in
+the system log. Three instruments, all silent, and the first job was working out
+which of them was lying.
+
+**Two of the three were lying, and both were mine.**
+
+1. **iOS routes an app's stderr nowhere.** `RanPlat_Log` writes there on every
+   platform that is not Android, so on a sideloaded build every line was
+   discarded. Now also emitted through `os_log` with `%{public}s` — os_log
+   redacts `%s` to `<private>` by default, which would have left the lines
+   visible and their contents not.
+
+2. **The ATS exception did the opposite of what it looked like.** It was written
+   as `NSExceptionDomains -> "143.14.11.244" -> NSExceptionAllowsInsecureHTTPLoads`,
+   and ATS exception keys must be **domain names**: an IP address is not a valid
+   key, and a domain listed without usable subkeys gets FULL enforcement rather
+   than none. The plain-HTTP patch fetch was blocked. `NSAllowsArbitraryLoads`
+   instead; the real fix is a hostname with HTTPS, at which point the block goes.
+
+**And then the actual cause,** found with
+`pymobiledevice3 developer dvt launch --stream`, which pipes the process's own
+stderr and was the only channel that worked:
+
+    I RanPatch: patch base http://143.14.11.244:1521/launcher_mobile/
+    I RanOpen:  wb /var/mobile/Containers/Data/Application/...
+
+`RanOpen` is `ran_fopen`. `windows.h:1433` has
+`#define fopen(p, m) ran_fopen((p), (m))` so the client's file opens reach the
+case-insensitive resolver — and `ran_plat.cpp` is compiled with the engine's
+`StdAfx.h` force-included, so it inherited the macro. **The log-to-file `fopen`
+added the day before became `ran_fopen`, which logs, through `RanPlat_Log`,
+which was already holding `g_logLock`.** A non-recursive mutex taken twice, on
+the first line the client ever wrote. It froze the patcher thread; the UI thread
+carried on drawing the empty page, which is why the process stayed alive and
+nothing crashed.
+
+`#undef fopen`, plus a thread-local re-entry guard so this file can never hang
+the client again — a re-entrant call skips the file and still reaches stderr and
+os_log. `path_resolve.cpp` carries a comment about this exact recursion.
+Android never saw it: the file tee is compiled out there.
+
+**What the round established beyond the bugs:** the debugging loop works.
+Screenshots, process list, crash reports, app-container file access and streamed
+stderr all run from Windows over USB, and `dvt launch --stream` is the channel
+to reach for first.
+
 ## iOS compiles and links (2026-09-09)
 
 **`ran.app` exists.** Every one of the client translation units built for
