@@ -209,7 +209,13 @@ static BOOL HttpToFile ( NSString *url, NSString *dest, long long expect, NSStri
 
 // -------------------------------------------------------------------- state
 
-static NSString *RootDir ( void ) { return @(RanIOS_DataRoot()); }
+//  Without the trailing slash RanIOS_DataRoot now carries: this file joins with
+//  stringByAppendingPathComponent and compares prefixes in SafeDest, and a
+//  root ending in "/" would make that check test for "//" and reject every
+//  path. stringByStandardizingPath drops it.
+static NSString *RootDir ( void ) {
+    return [@(RanIOS_DataRoot()) stringByStandardizingPath];
+}
 
 static int ReadVersion ( void )
 {

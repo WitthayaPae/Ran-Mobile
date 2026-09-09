@@ -49,7 +49,22 @@ extern "C" const char *RanIOS_DataRoot(void)
     NSError *err = nil;
     [url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&err];
 
-    cached = path;
+    //  WITH a trailing slash, because that is the contract the engine was
+    //  built against and Android has always met it:
+    //
+    //      pickDataRoot():  snprintf(chosen, n, "%s/", candidate)
+    //      ran_app.cpp:276: std::string(g_appPath) + "Data/Map/Map.rcc"
+    //
+    //  Without it that concatenation produced ".../Application Support/ranData/
+    //  Map/Map.rcc" - one missing separator - so the 574 MB archive never
+    //  opened, the client logged "engine data: loose files" and fell back to
+    //  loose files that do not exist, because every .wld and .chf lives inside
+    //  that archive. The login scene came up with 0 leaf nodes, nothing was
+    //  submitted to the device, and the phone showed a black screen at a
+    //  steady 60 fps. Paths built with an explicit separator, like
+    //  RANPARAM::LOAD's "ran\param.ini", were unaffected, which is why the
+    //  boot got as far as it did.
+    cached = [path hasSuffix:@"/"] ? path : [path stringByAppendingString:@"/"];
     return cached.fileSystemRepresentation;
 }
 
