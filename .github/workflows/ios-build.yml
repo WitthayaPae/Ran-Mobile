@@ -66,7 +66,13 @@ jobs:
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-            -DCMAKE_BUILD_TYPE=Release \
+            #  RelWithDebInfo, not Release: a crash report off the phone gives a
+            #  symbol and an offset, and without DWARF that is where the trail
+            #  ends - EXC_BREAKPOINT in SANIMCONINFO::operator= named the
+            #  function and nothing about which line. Same optimisation plus the
+            #  line tables, so llvm-symbolizer turns an offset into a file and a
+            #  line, for this crash and every one after it.
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
           #  pipefail, or the job passes whatever the compiler did: the exit
           #  status of "cmake --build | tee" is tee's, which is always 0. The
