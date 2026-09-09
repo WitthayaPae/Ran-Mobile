@@ -98,6 +98,28 @@ jobs:
       #  an Apple identity, and the sideloader supplies one from the machine it
       #  runs on. Producing it here means the install is a download and a drag,
       #  rather than a repack the person doing it has to get right.
+      #  dsymutil, because RelWithDebInfo on its own gives nothing off-device.
+      #
+      #  Apple's linker does not put DWARF in the executable: it leaves it in the
+      #  .o files and writes a debug map of N_OSO entries pointing at them. The
+      #  binary that comes back from this runner therefore has zero __DWARF
+      #  sections and four stale paths - checked, not assumed. dsymutil is what
+      #  walks that map and collects the DWARF into one bundle, and only then can
+      #  llvm-symbolizer turn a crash offset into a file and a line.
+      - name: Collect the debug info
+        if: success()
+        working-directory: MOBILE/native/out/ios
+        run: |
+          dsymutil ran.app/ran -o ran.dSYM
+          du -sh ran.dSYM
+
+      - name: Keep the debug info
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ran-ios-dsym
+          path: MOBILE/native/out/ios/ran.dSYM
+
       - name: Wrap the bundle as an .ipa
         if: success()
         working-directory: MOBILE/native/out/ios
