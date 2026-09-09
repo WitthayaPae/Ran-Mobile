@@ -55,10 +55,25 @@ bool inflateWithHistory(const BYTE *chunk, size_t chunkSize,
     zs.next_in = &stream[0];
     zs.avail_in = (uInt)stream.size();
 
-    std::vector<BYTE> buf(history.size() + 65536);
+    //  Capped, not grown without end.
+    //
+    //  MSZip is one deflate stream per block and a block decompresses to at
+    //  most 32 KB by definition, so a fixed buffer is what the format actually
+    //  allows. The loop used to double the buffer whenever it filled, which
+    //  means a crafted .x - and .x files live in the data directory, which a
+    //  player can write to - could inflate one block until the process was
+    //  killed for memory. 64 KB is twice what the format permits, so no
+    //  conformant file can reach it, and a file that does says so in the log
+    //  rather than failing silently.
+    const size_t kBlockMax = 65536;
+    std::vector<BYTE> buf(history.size() + kBlockMax);
     size_t produced = 0;
     for (;;) {
-        if (produced == buf.size()) buf.resize(buf.size() * 2);
+        if (produced == buf.size()) {
+            warnOnce("MSZip: block inflates past 64 KB, refusing it");
+            inflateEnd(&zs);
+            return false;
+        }
         zs.next_out = &buf[produced];
         zs.avail_out = (uInt)(buf.size() - produced);
         int r = inflate(&zs, Z_NO_FLUSH);

@@ -4514,8 +4514,28 @@ left is draw submission or fill, which decides whether batching character pieces
   Verified by rebuilding and booting: the server-select page draws exactly as
   before, no texture lost, 60 fps, and the frame budget line unchanged at 1.5 ms.
 
-* Still to look at: the `.x` reader and the `.rcc` extractor, on the same
-  grounds.
+* **The `.x` reader: audited 2026-09-09, one hole.** Its `BinaryReader` is
+  careful — every accessor tests `m_at + n > m_n` before reading, and every
+  count-times-width is computed in `size_t`, so nothing wraps on 64-bit. Nothing
+  allocates from a file-supplied count.
+
+  Its **MSZip decompressor** was another matter:
+
+      std::vector<BYTE> buf(history.size() + 65536);
+      for (;;) {
+          if (produced == buf.size()) buf.resize(buf.size() * 2);
+
+  an inflate loop that doubles its buffer for as long as the stream keeps
+  producing. MSZip is one deflate stream per block and a block decompresses to
+  at most 32 KB **by definition**, so that growth is not something a conformant
+  file can ever ask for — but a crafted `.x` can, and `.x` files live in the
+  data directory a player can write to. It is a decompression bomb: one block,
+  inflated until the process is killed for memory.
+
+  Capped at 64 KB, twice what the format permits, so no real file can reach it
+  and one that does says so in the log instead of failing silently.
+
+* Still to look at: the `.rcc` extractor, on the same grounds.
 * Compile the `/sdcard/ran/*` switches out of a distribution build.
 
 ### 3. Confirm every function in the game works
