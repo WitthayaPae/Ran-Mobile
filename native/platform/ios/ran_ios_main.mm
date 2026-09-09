@@ -71,6 +71,7 @@ static int  g_imeInsetPerMille = 0;
 @property (nonatomic, strong) CADisplayLink *link;
 @property (nonatomic, assign) BOOL           glReady;
 @property (nonatomic, assign) BOOL           booted;
+@property (nonatomic, assign) BOOL           bootFailed;
 @property (nonatomic, assign) CFTimeInterval lastTick;
 @end
 
@@ -153,6 +154,14 @@ static int  g_imeInsetPerMille = 0;
     const float dt = self.lastTick > 0 ? (float)(now - self.lastTick) : 0.0f;
     self.lastTick = now;
 
+    //  Once. A failed boot used to be retried on the next frame, which meant
+    //  the first run on a phone made 1,461 attempts and a 31,000-line log
+    //  before anyone read it - and every attempt re-ran the splash, so the
+    //  screen looked like it was still loading rather than broken. Boot is not
+    //  something that succeeds on the second try: whatever it could not find
+    //  it will not find a frame later.
+    if (self.bootFailed) return;
+
     if (!self.booted) {
         const char *root = RanIOS_DataRoot();
         //  Something on screen before the client boots: it loads for seconds
@@ -160,7 +169,15 @@ static int  g_imeInsetPerMille = 0;
         RanSplash_Begin ( root );
         const int ok = RanApp_Boot ( root, RanGL_LogicalWidth(), RanGL_LogicalHeight() );
         RanSplash_End ();
-        if (!ok) { RanPlat_Log ( RANLOG_ERROR, "RanIOS", "boot failed" ); return; }
+        if (!ok) {
+            RanPlat_Log ( RANLOG_ERROR, "RanIOS",
+                          "boot failed - giving up (logical %dx%d)",
+                          RanGL_LogicalWidth(), RanGL_LogicalHeight() );
+            self.bootFailed = YES;
+            [self.link invalidate];
+            self.link = nil;
+            return;
+        }
         self.booted = YES;
     }
 
