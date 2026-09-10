@@ -9,8 +9,25 @@ set -e
 A="/c/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/platform-tools/adb.exe"
 D="${D:-127.0.0.1:5555}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-USER="${RANUSER:-xx11}"
-PASS="${RANPASS:-1234}"
+#  Credentials come from native/.login, which is gitignored and which this
+#  script never prints - the same file login-ld.sh reads. Two lines: id, then
+#  password.
+#
+#  They used to sit here as defaults. That is a live account on the live server
+#  written into every commit, and it only has to be read once by anyone who can
+#  see the repository. RANUSER/RANPASS still override, for a one-off run.
+CRED="$HERE/.login"
+USER="${RANUSER:-}"
+PASS="${RANPASS:-}"
+if [ -z "$USER" ] || [ -z "$PASS" ]; then
+  if [ ! -f "$CRED" ]; then
+    echo "  no $CRED - create it with two lines: id, then password"
+    exit 1
+  fi
+  USER=$(sed -n 1p "$CRED")
+  PASS=$(sed -n 2p "$CRED")
+fi
+[ -n "$USER" ] && [ -n "$PASS" ] || { echo "  $CRED needs two non-empty lines"; exit 1; }
 
 t() { "$A" -s "$D" shell input tap "$1" "$2"; sleep "${3:-1}"; }
 
