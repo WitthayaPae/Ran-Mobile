@@ -338,6 +338,24 @@ extern "C" int RanPlat_ImeInsetPerMille(void) {
     static long s_lastMs = -1000;
 
     if (!g_imeActive) { s_cached = 0; return 0; }
+
+    //  A keyboard height to pretend, for a device that will not show one.
+    //
+    //  LDPlayer passes the host keyboard straight through and never raises the
+    //  soft one, so the inset here is always 0 and nothing that moves out of the
+    //  keyboard's way can be tested on it at all. Put a per-mille number in
+    //  fakekb under the diagnostic root and it is used instead.
+    {
+        FILE *f = RanPlat_DiagExists("fakekb") ? RanPlat_DiagOpen("fakekb") : NULL;
+        if (f) {
+            char buf[16] = { 0 };
+            const bool got = fread(buf, 1, sizeof(buf) - 1, f) > 0;
+            fclose(f);
+            const int fake = got ? atoi(buf) : 0;
+            if (fake > 0 && fake < 1000) return fake;
+        }
+    }
+
     if (!g_app || !g_app->activity) return s_cached;
 
     struct timespec ts;
