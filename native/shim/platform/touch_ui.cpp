@@ -101,7 +101,14 @@ Button g_buttons[kButtonCount];
 
 //  Rims over the client's skill slots, in surface pixels. Filled in by the
 //  client each time it lays the arc out.
-struct SkillCircle { float x, y, r; bool filled; float cool; };
+//  press: seconds since this circle was last pressed, negative when idle.
+//
+//  These circles are the client's quick-skill slots, not the overlay's
+//  buttons, so the overlay does not claim their presses - it only notices
+//  them. Without this a skill button was the one control on the pad that
+//  did not answer a thumb: the attack button shrinks and brightens, and
+//  the slots did nothing at all.
+struct SkillCircle { float x, y, r; bool filled; float cool; float press; };
 SkillCircle g_skillCircles[RANTOUCH_MAX_SKILL_CIRCLES];
 int         g_skillCircleCount = 0;
 
@@ -830,6 +837,15 @@ int RanTouch_PointerDown(int id, float x, float y) {
         }
     }
 
+    //  Not one of ours, but a skill circle might be under it. Noticed, never
+    //  claimed: the press still goes through to the client, which is what
+    //  actually runs the skill.
+    for (int i = 0; i < g_skillCircleCount; ++i) {
+        SkillCircle &c = g_skillCircles[i];
+        if (!c.filled) continue;
+        if (len(x - c.x, y - c.y) <= c.r) { c.press = 0.0f; break; }
+    }
+
     //  Not ours. Two unclaimed fingers mean a pinch, which we do watch - but we
     //  still let them through, so a two-finger tap on the world behaves.
     if (unclaimedCount() == 2) {
@@ -929,7 +945,18 @@ int RanTouch_PointerUp(int id, float x, float y) {
     return claimed;
 }
 
-void RanTouch_Frame(float) { /* state is edge-driven; nothing to age yet */ }
+//  How long a skill circle stays lit after a press. Short enough to read as a
+//  button answering, long enough to see at 60 fps.
+const float kSkillPressTime = 0.20f;
+
+void RanTouch_Frame(float dt) {
+    for (int i = 0; i < g_skillCircleCount; ++i) {
+        SkillCircle &c = g_skillCircles[i];
+        if (c.press < 0.0f) continue;
+        c.press += dt;
+        if (c.press >= kSkillPressTime) c.press = -1.0f;
+    }
+}
 
 namespace {
 void ageActivity() {
@@ -1079,6 +1106,25 @@ void drawIconDisc(const SkillIcon &ic) {
     glDrawArrays(GL_TRIANGLE_FAN, 0, n / 4);
 }
 
+//  How much a pressed slot shrinks. 0.94 is the attack button's figure, so the
+//  whole pad answers a thumb with the same movement.
+float iconPressScale(const SkillIcon &ic) {
+    for (int i = 0; i < g_skillCircleCount; ++i) {
+        const SkillCircle &c = g_skillCircles[i];
+        if (c.press < 0.0f) continue;
+        //  Matched by position: icons and circles are set from the same slot,
+        //  but by two calls, so nothing guarantees the indices line up.
+        if (len(ic.x - c.x, ic.y - c.y) <= ic.r * 0.5f) {
+            //  Down hard, then ease back - a button that is pushed in and
+            //  released, rather than one that fades.
+            const float t = c.press / kSkillPressTime;
+            const float d = (t < 0.35f) ? 1.0f : (1.0f - (t - 0.35f) / 0.65f);
+            return 1.0f - 0.06f * d;
+        }
+    }
+    return 1.0f;
+}
+
 void drawIcons(float w, float h) {
     if (g_iconCount <= 0) return;
     ensureTexProg();
@@ -1087,7 +1133,11 @@ void drawIcons(float w, float h) {
     glUniform2f(uTexViewport, w, h);
     glUniform1f(uTexAlpha, 1.0f);
     glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
-    for (int i = 0; i < g_iconCount; ++i) drawIconDisc(g_icons[i]);
+    for (int i = 0; i < g_iconCount; ++i) {
+        SkillIcon ic = g_icons[i];
+        ic.r *= iconPressScale(ic);
+        drawIconDisc(ic);
+    }
     glBindVertexArray(0);
 }
 
@@ -1869,6 +1919,16 @@ extern "C" void RanTouch_SetSkillCircles(int count, const float *cx,
     if (count > RANTOUCH_MAX_SKILL_CIRCLES) count = RANTOUCH_MAX_SKILL_CIRCLES;
     const float w = (g_width  > 0) ? (float)g_width  : 1.0f;
     const float h = (g_height > 0) ? (float)g_height : 1.0f;
+    //  A circle that has never been pressed has to start idle, and one that is
+    //  mid-flash has to keep its age: this is called every frame, so assigning
+    //  the whole struct would restart or erase the flash on the next frame.
+    static bool s_init = false;
+    if (!s_init) {
+        s_init = true;
+        for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i)
+            g_skillCircles[i].press = -1.0f;
+    }
+
     for (int i = 0; i < count; ++i) {
         g_skillCircles[i].x = cx[i] * w;
         g_skillCircles[i].y = cy[i] * h;

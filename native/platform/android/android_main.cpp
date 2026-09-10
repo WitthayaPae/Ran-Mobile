@@ -61,6 +61,7 @@ extern "C" int  RanUI_MouseInControl(void);
 extern "C" int  RanUI_PointInControl(int x, int y);
 extern "C" void RanUI_EndEditIfOutside(int x, int y);
 extern "C" int  RanTouch_IsPinching(void);
+extern "C" void RanTouch_Frame(float elapsedSeconds);
 extern "C" void RanInput_Key(int scanCode, int down);
 extern "C" void RanInput_KeyTap(int scanCode);
 
@@ -796,6 +797,20 @@ extern "C" void android_main(android_app *app) {
         }
 
         if (state.booted) {
+            //  The overlay ages its own state here - a pressed skill slot
+            //  springs back, and anything else timed does the same.
+            //
+            //  iOS has always called this from its display link; Android never
+            //  called it at all, so a press that was meant to last a fifth of a
+            //  second lasted until the next one. Nothing depended on it before,
+            //  which is why it went unnoticed.
+            {
+                static int64_t s_last = 0;
+                const int64_t now = nowMs();
+                const float dt = s_last ? (float)(now - s_last) / 1000.0f : 0.0f;
+                s_last = now;
+                RanTouch_Frame(dt);
+            }
             RanGesture_Tick();
             //  One button transition per frame, so every press and release is
             //  visible to the client for at least one frame.
