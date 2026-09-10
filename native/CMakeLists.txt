@@ -304,6 +304,20 @@ if(RAN_IOS)
   #  res/drawable-nodpi. They are bundled, NOT taken from Gui.rcc: the patcher
   #  is what downloads Gui.rcc, so the page that shows the download cannot read
   #  from it. Bundle root, so [UIImage imageNamed:] finds them.
+  #  One version number for the product, and it already exists: Android's
+  #  versionCode is what build-and-publish.js bumps whenever the binary
+  #  changes. iOS had CFBundleShortVersionString hardcoded to 1.0, which is
+  #  invisible to anything that decides whether an update is available - a
+  #  store source compares versions, and a frozen one never offers anything.
+  file(READ ${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml RAN_AMF)
+  string(REGEX MATCH "android:versionCode=\"([0-9]+)\"" _m "${RAN_AMF}")
+  set(RAN_PRODUCT_BUILD "${CMAKE_MATCH_1}")
+  if(NOT RAN_PRODUCT_BUILD)
+    message(FATAL_ERROR "no android:versionCode in AndroidManifest.xml")
+  endif()
+  set(RAN_PRODUCT_VERSION "1.0.${RAN_PRODUCT_BUILD}")
+  message(STATUS "iOS bundle version ${RAN_PRODUCT_VERSION} (build ${RAN_PRODUCT_BUILD})")
+
   file(GLOB IOS_ART ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/art/*.png)
   target_sources(ran PRIVATE ${IOS_ART})
   set_source_files_properties(${IOS_ART} PROPERTIES
@@ -319,6 +333,8 @@ if(RAN_IOS)
   set_target_properties(ran PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.ran.launcher
     MACOSX_BUNDLE_BUNDLE_NAME "Ran Legacy M"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${RAN_PRODUCT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${RAN_PRODUCT_BUILD}"
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/Info.plist.in
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2")
 elseif(APP_SRC)

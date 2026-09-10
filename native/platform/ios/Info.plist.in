@@ -7,8 +7,8 @@
     <key>CFBundleName</key>                  <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
     <key>CFBundleDisplayName</key>           <string>Ran Legacy M</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>1.0</string>
-    <key>CFBundleVersion</key>               <string>1</string>
+    <key>CFBundleShortVersionString</key>    <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <key>CFBundleVersion</key>               <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
     <key>LSRequiresIPhoneOS</key>            <true/>
     <key>MinimumOSVersion</key>              <string>13.0</string>
 
