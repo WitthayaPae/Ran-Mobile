@@ -634,6 +634,12 @@ unsigned long g_texUploads = 0, g_texBytes = 0;
 GLenum g_texLastError = 0;
 GLenum g_frontFace = GL_CW;   // winding the current D3D cull mode leaves visible
 bool   g_cullWanted = false;  // D3DRS_CULLMODE, applied per draw
+//  Two switches for the one question the cull path cannot answer by reading
+//  code: is a missing surface missing because it was culled, and if so was it
+//  culled on the wrong side? nocull answers the first, cullflip the second.
+//  Both live under the diagnostic root, same as the other toggles.
+bool   g_noCull = false;
+bool   g_cullFlip = false;
 
 //  Everything the draw path binds or toggles, as last actually sent to GL.
 //  Cleared on init; nothing else in the shim talks to GL behind its back except
@@ -836,6 +842,8 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
         { "plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
         { "reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
+        { "nocull",    &g_noCull,      "face culling entirely" },
+        { "cullflip",  &g_cullFlip,    "the world front face (CW <-> CCW)" },
     };
 
     //  A one-shot readback of every loaded texture. Same re-arm as the draw
@@ -2099,6 +2107,13 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
                  (unsigned long)g_colorOp, (unsigned long)g_colorArg1, (unsigned long)g_colorArg2,
                  (unsigned long)g_alphaOp, (unsigned long)g_alphaArg1, (unsigned long)g_alphaArg2,
                  g_texFactor[0], g_texFactor[1], g_texFactor[2], g_texFactor[3]);
+            //  Which engine code asked for this draw. Bisecting with drawlimit
+            //  says WHICH draw paints a thing on screen; without this it still
+            //  takes guesswork to say what drew it, and guessing at that has
+            //  cost more time than the bisect saves.
+            char szWho[768];
+            RanDiag_Backtrace(szWho, sizeof(szWho));
+            LOGI("draw #%d from:%s", g_frameDraw, szWho);
         }
     }
 
@@ -2591,15 +2606,17 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  pixels, whose winding is whatever the control happened to emit. The
     //  in-game HUD and the outer GUI disagree about it, and D3D's cull mode is
     //  meaningless for them, so they are never culled. Only world geometry is.
-    if (preTransformed) {
+    if (preTransformed || g_noCull) {
         setCull(false, g_gl.frontFace);
     } else {
         //  A render target's rows run bottom-up, so that pass mirrors once and
         //  wants the opposite face.
         //  A render target's rows run bottom-up, so that pass mirrors once
         //  and wants the opposite face.
+        const GLenum wantFace = g_cullFlip
+            ? (g_frontFace == GL_CCW ? GL_CW : GL_CCW) : g_frontFace;
         setCull(g_cullWanted,
-                g_rtActive ? (g_frontFace == GL_CCW ? GL_CW : GL_CCW) : g_frontFace);
+                g_rtActive ? (wantFace == GL_CCW ? GL_CW : GL_CCW) : wantFace);
     }
 
     //  Blending applies only to vertices that actually carry weights: the
