@@ -385,6 +385,7 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 @interface RanPatchViewController : UIViewController
 {
     double _shownAt;
+    double _holdSeconds;
 }
 @property (nonatomic, strong) UILabel *status, *detail;
 @property (nonatomic, strong) UIProgressView *bar;
@@ -436,6 +437,15 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     self.status.text = @"Starting";
 
     self.bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    //  Android's bar is the theme accent, #FFCB00, on a dark track, and about
+    //  6dp tall - sampled off a screenshot of the launcher page rather than
+    //  guessed. UIProgressView's default is a thin system-blue line on light
+    //  grey, which is the one thing on this page that did not match.
+    self.bar.progressTintColor = [UIColor colorWithRed:1.0 green:203/255.0 blue:0.0 alpha:1.0];
+    self.bar.trackTintColor    = [UIColor colorWithWhite:0.22 alpha:1.0];
+    //  A UIProgressView is a fixed ~4.5pt tall whatever frame it is given, so
+    //  the only way to thicken it is to scale it.
+    self.bar.transform = CGAffineTransformMakeScale ( 1.0f, 1.4f );
 
     self.detail = [UILabel new];
     self.detail.font = [UIFont systemFontOfSize:12];
@@ -525,6 +535,12 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 
 - (void)run
 {
+    //  /Documents/ran/patchhold keeps this page up after the patcher is
+    //  done, so it can be photographed and compared against Android's.
+    //  With the data current it is otherwise on screen for about a third
+    //  of a second, which no screen capture over USB can catch.
+    self->_holdSeconds = RanPlat_DiagExists ( "patchhold" ) ? 12.0 : 0.0;
+
     __weak RanPatchViewController *weakSelf = self;
     RanIOS_RunPatch (
         ^(NSString *status, NSString *detail, int permille) {
@@ -543,7 +559,19 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
             dispatch_async ( dispatch_get_main_queue(), ^{
                 RanPatchViewController *me = weakSelf;
                 if (!me) return;
-                if (ok) { [me handOver]; return; }
+                if (ok) {
+                    if (me->_holdSeconds > 0.0) {
+                        RanPlat_Log ( RANLOG_INFO, "RanPatch",
+                                      "holding the page for %.0f s (patchhold)",
+                                      me->_holdSeconds );
+                        dispatch_after ( dispatch_time ( DISPATCH_TIME_NOW,
+                                            (int64_t)(me->_holdSeconds * NSEC_PER_SEC) ),
+                                         dispatch_get_main_queue(), ^{ [me handOver]; } );
+                    } else {
+                        [me handOver];
+                    }
+                    return;
+                }
                 //  A failed patch is a dead end, not a warning: the client would
                 //  read half-updated data. Same stance as the Java.
                 me.status.text = @"Update failed";
