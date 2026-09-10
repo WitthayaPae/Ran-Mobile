@@ -109,6 +109,18 @@ const ipaName = 'RanLegacyM.ipa';
 fs.copyFileSync(ipaPath, path.join(IOS_DIR, ipaName));
 const size = fs.statSync(path.join(IOS_DIR, ipaName)).size;
 
+/*  The icon the source advertises. Taken out of the bundle rather than kept
+ *  as a second copy, so it cannot end up showing an icon the app does not
+ *  have. A source whose iconURL 404s renders as a blank tile.               */
+try {
+  const icon = execFileSync('unzip', ['-p', ipaPath, 'Payload/*.app/AppIcon-512.png'],
+                            { maxBuffer: 1 << 24 });
+  if (icon && icon.length) fs.writeFileSync(path.join(IOS_DIR, 'icon.png'), icon);
+  else throw new Error('empty');
+} catch (e) {
+  console.warn('no AppIcon-512.png in the bundle - the source will show a blank tile');
+}
+
 const source = {
   name: 'RAN Legacy M',
   subtitle: 'RAN Online EP9, on iOS',
