@@ -391,6 +391,7 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 @property (nonatomic, strong) UIProgressView *bar;
 @property (nonatomic, strong) UIImageView *art, *topBand, *underBand, *mark;
 @property (nonatomic, strong) UIStackView *band;
+@property (nonatomic, strong) NSLayoutConstraint *bandCentre;
 @end
 
 @implementation RanPatchViewController
@@ -480,7 +481,20 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     self.band.axis = UILayoutConstraintAxisVertical;
     self.band.alignment = UIStackViewAlignmentFill;
     self.band.spacing = 8;
+    //  Constraints, not a frame computed in viewDidLayoutSubviews.
+    //  The bar is hidden while the patcher has no percentage to show and
+    //  shown again when it has, and hiding an arranged subview changes
+    //  the stack's height. A frame measured once was measured with the
+    //  bar hidden, and the bar had nowhere to appear when it came back.
+    self.band.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.band];
+    self.bandCentre = [self.band.centerYAnchor
+                          constraintEqualToAnchor:self.view.bottomAnchor];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.band.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [self.band.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+        self.bandCentre,
+    ]];
 
     [self run];
 }
@@ -505,15 +519,9 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     self.mark.frame = CGRectMake ( roundf ( ( size.width - markH ) / 2.0f ),
                                    roundf ( ( bandH - markH ) / 2.0f ), markH, markH );
 
-    //  24pt of side padding, matching the Java's dp(24).
-    const CGSize want = [self.band systemLayoutSizeFittingSize:
-                            CGSizeMake ( size.width - 48, 0 )
-                        withHorizontalFittingPriority:UILayoutPriorityRequired
-                              verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
-    const CGFloat h = MIN ( want.height, bandH );
-    self.band.frame = CGRectMake ( 24,
-                                   size.height - bandH + roundf ( ( bandH - h ) / 2.0f ),
-                                   size.width - 48, h );
+    //  The band sits in the middle of the bottom strip; its height comes
+    //  from its own content, so only the centre has to follow the panel.
+    self.bandCentre.constant = -bandH / 2.0f;
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -551,7 +559,11 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
                 //  detail, hundreds of times.
                 if (status) me.status.text = status;
                 if (detail) me.detail.text = detail;
-                me.bar.hidden = (permille < 0);
+                const BOOL wantHidden = (permille < 0);
+                if (me.bar.hidden != wantHidden) {
+                    me.bar.hidden = wantHidden;
+                    [me.view setNeedsLayout];
+                }
                 if (permille >= 0) [me.bar setProgress:permille / 1000.0f animated:NO];
             });
         },
@@ -560,6 +572,8 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
                 RanPatchViewController *me = weakSelf;
                 if (!me) return;
                 if (ok) {
+                    //  Before the swap, while the page is still on screen.
+                    [me writeBootCover];
                     if (me->_holdSeconds > 0.0) {
                         RanPlat_Log ( RANLOG_INFO, "RanPatch",
                                       "holding the page for %.0f s (patchhold)",
@@ -581,6 +595,67 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
                               error ? error.UTF8String : "unknown error" );
             });
         });
+}
+
+//  Hand the page itself to the client's boot screen.
+//
+//  RanSplash draws whatever is in <root>/cache/bootcover.bin, and falls back to
+//  loading_002.dds - a zone loading screen - when there is none. Android's
+//  launcher writes the file, so the player sees one continuous page from the
+//  patcher through the seconds of client boot. iOS never wrote it, so the page
+//  was replaced by a loading screen that has nothing to do with logging in.
+//
+//  Same format as RanLauncher.handOverPage: "RANC", width and height as
+//  little-endian 32-bit, then width*height*4 bytes of RGBA. Half resolution,
+//  because it is a photograph behind a caption, it is stretched back by a
+//  linear filter, and this keeps the write under a frame.
+- (void)writeBootCover
+{
+    const CGSize full = self.view.bounds.size;
+    const CGFloat scale = self.view.window.screen.scale ?: 2.0;
+    const int w = (int)( full.width  * scale / 2.0 );
+    const int h = (int)( full.height * scale / 2.0 );
+    if (w <= 0 || h <= 0) return;
+
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+    CGContextRef ctx = CGBitmapContextCreate ( NULL, (size_t)w, (size_t)h, 8, (size_t)w * 4, cs,
+                                               kCGImageAlphaPremultipliedLast |
+                                               kCGBitmapByteOrder32Big );
+    CGColorSpaceRelease ( cs );
+    if (!ctx) return;
+
+    //  UIKit's origin is top left and Core Graphics' is bottom left.
+    CGContextTranslateCTM ( ctx, 0, h );
+    CGContextScaleCTM ( ctx, 1.0, -1.0 );
+    CGContextScaleCTM ( ctx, scale / 2.0, scale / 2.0 );
+    [self.view.layer renderInContext:ctx];
+
+    const unsigned char *px = (const unsigned char *)CGBitmapContextGetData ( ctx );
+    if (px) {
+        NSString *dir = [NSString stringWithFormat:@"%s/cache", RanIOS_DataRoot()];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil error:nil];
+        NSMutableData *out = [NSMutableData dataWithCapacity:16 + (NSUInteger)w * h * 4];
+        [out appendBytes:"RANC" length:4];
+        const uint32_t lw = CFSwapInt32HostToLittle ( (uint32_t)w );
+        const uint32_t lh = CFSwapInt32HostToLittle ( (uint32_t)h );
+        [out appendBytes:&lw length:4];
+        [out appendBytes:&lh length:4];
+        [out appendBytes:px length:(NSUInteger)w * h * 4];
+
+        //  Written beside and renamed, so a half-written file is never picked up.
+        NSString *tmp = [dir stringByAppendingPathComponent:@"bootcover.tmp"];
+        NSString *dst = [dir stringByAppendingPathComponent:@"bootcover.bin"];
+        if ([out writeToFile:tmp atomically:NO]) {
+            [[NSFileManager defaultManager] removeItemAtPath:dst error:nil];
+            if ([[NSFileManager defaultManager] moveItemAtPath:tmp toPath:dst error:nil])
+                RanPlat_Log ( RANLOG_INFO, "RanPatch", "boot cover %dx%d written", w, h );
+            else
+                [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+        }
+    }
+    CGContextRelease ( ctx );
 }
 
 //  Straight swap, no animation: on Android the equivalent transition showing a

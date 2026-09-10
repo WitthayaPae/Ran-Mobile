@@ -49,6 +49,28 @@ jobs:
           token: ${{ secrets.SOURCE_REPO_TOKEN }}
           path: SOURCE
 
+      #  ccache, because macOS minutes bill at 10x on a private repository and
+      #  this job recompiled the entire client - a thousand-odd translation
+      #  units - from scratch every run, at about twelve minutes each. A change
+      #  to one file has no business costing that.
+      #
+      #  The cache key changes every run so the entry is always rewritten with
+      #  what this run compiled; restore-keys is what actually finds the
+      #  previous one. That is the documented way to keep a rolling cache.
+      - name: Cache the compiler output
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ios-ccache-${{ github.sha }}
+          restore-keys: |
+            ios-ccache-
+
+      - name: Install ccache
+        run: |
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+          ccache --max-size=2G
+          ccache --zero-stats
+
       - name: Show the toolchain
         run: |
           xcodebuild -version
@@ -72,6 +94,9 @@ jobs:
           #  line ran as one of its own - "-DCMAKE_BUILD_TYPE=RelWithDebInfo:
           #  command not found", exit 127.
           cmake -S . -B out/ios -G "Unix Makefiles" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -83,6 +108,12 @@ jobs:
           #  first run reported success on a build that died at 1%.
           set -o pipefail
           cmake --build out/ios -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build.log
+
+      #  Whether the cache is actually earning its keep. A hit rate near zero
+      #  means the key or the compiler line changed and the run cost full price.
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
 
       #  The whole point on a first run: the errors, kept even when the build
       #  fails, so they can be worked through on the development machine.
