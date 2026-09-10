@@ -192,10 +192,16 @@ function sweep(dir, keep, label) {
 
     The manifest and its signature are deliberately spared: make-manifest.js
     reads the old manifest to work out the next version number, and deleting it
-    here would silently reset the store to version 1.                          */
+    here would silently reset the store to version 1.
+
+    ios/ is spared for the same reason: make-ios-source.js writes the .ipa and
+    source.json there, and it reads the previous source.json to carry the
+    version history forward. Sweeping it would delete the published app and
+    reset that history, and the only symptom would be a store that had
+    forgotten every release.                                                   */
 function sweepStore() {
   return sweep(path.join(NATIVE, 'out/launcher_mobile'),
-               new Set(['blobs', 'manifest.json', 'manifest.sig']),
+               new Set(['blobs', 'manifest.json', 'manifest.sig', 'ios']),
                'launcher_mobile/');
 }
 
