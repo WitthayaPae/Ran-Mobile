@@ -10,6 +10,7 @@
 #ifdef __APPLE__
 
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <QuartzCore/CAEAGLLayer.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
@@ -343,6 +344,9 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 //  same four PNGs in its own package and draws them before a byte is fetched.
 
 @interface RanPatchViewController : UIViewController
+{
+    double _shownAt;
+}
 @property (nonatomic, strong) UILabel *status, *detail;
 @property (nonatomic, strong) UIProgressView *bar;
 @property (nonatomic, strong) UIImageView *art, *topBand, *underBand, *mark;
@@ -402,6 +406,24 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     self.detail.textAlignment = NSTextAlignmentCenter;
     self.detail.numberOfLines = 0;
 
+    //  Say whether the art actually resolved. [UIImage imageNamed:] answers nil
+    //  for a file that is not in the bundle, and the page then lays itself out
+    //  correctly around nothing - which looks like a styling problem and is
+    //  not one. The four PNGs were ignored by a tree-wide *.png rule once
+    //  already, so this is worth a line in the log.
+    {
+        NSArray<NSString *> *names = @[@"ran_loading", @"ld_top", @"ld_under", @"ran_mark"];
+        for (NSString *n in names) {
+            UIImage *im = [UIImage imageNamed:n];
+            if (im)
+                RanPlat_Log ( RANLOG_INFO, "RanPatch", "page art %s: %.0fx%.0f",
+                              n.UTF8String, im.size.width, im.size.height );
+            else
+                RanPlat_Log ( RANLOG_ERROR, "RanPatch", "page art %s: NOT IN THE BUNDLE",
+                              n.UTF8String );
+        }
+    }
+
     //  The text and the bar sit in the bottom band. That band is already dark,
     //  so it needs no scrim of its own.
     self.band = [[UIStackView alloc] initWithArrangedSubviews:
@@ -443,6 +465,23 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
     self.band.frame = CGRectMake ( 24,
                                    size.height - bandH + roundf ( ( bandH - h ) / 2.0f ),
                                    size.width - 48, h );
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    //  How long the player actually sees this page. With the data already
+    //  current the patcher has nothing to do and the page is gone in a blink,
+    //  which is a different complaint from the page looking wrong.
+    self->_shownAt = CACurrentMediaTime ();
+    RanPlat_Log ( RANLOG_INFO, "RanPatch", "page on screen" );
+}
+
+- (void)viewWillDisappear:(BOOL)animated
+{
+    [super viewWillDisappear:animated];
+    RanPlat_Log ( RANLOG_INFO, "RanPatch", "page leaving after %.2f s",
+                  CACurrentMediaTime () - self->_shownAt );
 }
 
 - (void)run

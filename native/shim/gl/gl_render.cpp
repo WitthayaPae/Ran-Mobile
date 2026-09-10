@@ -1855,12 +1855,41 @@ struct RingBuffer {
         }
 
         const GLintptr offset = cursor;
-        //  Without persistent mapping, one glBufferSubData is the cheapest way
-        //  to get the bytes across: mapping a range costs a map and an unmap
-        //  for the same copy, and on a driver that emulates GL - where a call
-        //  is expensive and a stall is not - that doubles the price of every
-        //  streamed draw.
-        glBufferSubData(target, offset, size, data);
+        //  Two ways to get the bytes across, and which is cheaper is a
+        //  property of the driver, not of the code.
+        //
+        //  On an emulated GL - LDPlayer - a call is expensive and a stall is
+        //  not, so one glBufferSubData beats a map plus an unmap for the same
+        //  copy. On Apple's GLES the opposite is true by two orders of
+        //  magnitude, measured on an iPhone 15 in the same frame:
+        //
+        //      glBufferSubData here          64.3 calls  28.89 ms   449 us each
+        //      unsynchronised mapped range   18.9 calls   0.10 ms   5.3 us each
+        //
+        //  The reason is that this buffer is in flight: earlier draws in the
+        //  same frame are reading it, and a plain glBufferSubData has to make
+        //  that safe. The ring already guarantees safety itself - it writes
+        //  front to back and respecifies the whole store when it wraps, so a
+        //  slice is never written while anything reads it - which is exactly
+        //  the promise GL_MAP_UNSYNCHRONIZED_BIT makes. The driver then has
+        //  nothing to wait for.
+        //
+        //  It also moved the cost that was being charged at draw time: with
+        //  64 of these a frame, world draws cost 277 us each against 35 us at
+        //  character select, which does 13.
+        bool wrote = false;
+#if defined(__APPLE__)
+        void *dst = glMapBufferRange(target, offset, size,
+                                     GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT |
+                                     GL_MAP_INVALIDATE_RANGE_BIT);
+        if (dst) {
+            memcpy(dst, data, (size_t)size);
+            glUnmapBuffer(target);
+            wrote = true;
+        }
+#endif
+        //  A driver that will not map falls back rather than dropping the draw.
+        if (!wrote) glBufferSubData(target, offset, size, data);
         ++g_callsBuffer;
         cursor += size;
         //  Keep slices aligned; unaligned attribute reads are slow or illegal.
