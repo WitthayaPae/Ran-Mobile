@@ -12,6 +12,41 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-10 (3) — Splitting a stack uses the client's own window again
+
+The touch item sheet opened a bespoke "how many?" sheet — `CMobileCountSheet`,
+steppers and presets — instead of the split window the client has always had. It
+was written to dodge the on-screen keyboard, and it was a second way to do
+something the client already does.
+
+`ACT_SPLIT` and `ACT_STORAGE_SPLIT` now do exactly what the PC does:
+
+```
+pInvenWnd->SetSplitPos ( x, y );
+DoModal ( ID2GAMEINTEXT("SPLIT_ITEM"), MODAL_QUESTION, EDITBOX_NUMBER, MODAL_SPLIT_ITEM );
+```
+
+`MODAL_SPLIT_ITEM` / `MODAL_STORAGE_SPLIT_ITEM` already read the slot — and the
+channel — back off those windows and send `ReqInvenSplit` / `ReqStorageSplit`.
+The storage window needed a getter to set the slot on; it sits next to the
+inventory one and is `RAN_MOBILE`-guarded.
+
+`CMobileCountSheet` is deleted along with `MobileAskCount`, the member, the
+accessor, the creation block, its GUID and its entry in
+`cmake/sources_Lib_ClientUI.cmake`. It had no other caller. The `MOBILE_COUNT`
+gameword is now unused in `Gui.rcc`; harmless, no repack needed.
+
+**Verified on LDPlayer:** inventory → stack of 599 → แยก → the client's own
+*โปรดระบุจำนวนสิ่งของที่ต้องการแยกออกมา* window with its number box and
+ตกลง/ยกเลิก → entered 100 → stack became **499** with a new stack of **100** in
+the next free slot. `out/split_modal.png`, `out/split_done.png`.
+
+One thing to watch: the keyboard question the sheet existed to dodge is back. The
+modal sits mid-screen so a bottom-docked keyboard should clear it, but that has
+only been checked on the emulator, where text is injected rather than typed.
+
+---
+
 ## 2026-09-10 (2) — Effect meshes were being drawn in their frame's space, not the file's
 
 **This is the "effect on the floor is wrong".** It is the map gate marker, and the
