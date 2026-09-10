@@ -12,6 +12,34 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-11 — The chat follows the keyboard only when the keyboard is its own
+
+Splitting a stack opens the client's number window, that window raises the soft
+keyboard, and the **chat box jumped up** out of the way of a keyboard that had
+nothing to do with it.
+
+`DxGameStage::MobileArrangeInterface` places the chat above the soft keyboard
+every frame — the window deliberately does not resize (`adjustNothing`, because
+letting Android resize it churns the surface mid-frame), so without this the chat
+is buried while you type. But `RanPlat_ImeInsetPerMille()` answers for *whichever*
+edit box raised the keyboard, and every other edit box in the game — a split
+count, a name, a search — already has its own window mid-screen that the keyboard
+does not cover.
+
+The lift is now gated on `CBasicChat::IsCHAT_BEGIN()`, i.e.
+`m_pEditBox->IsBegin()` on the chat's own edit box. That is true exactly while
+the chat is the thing being typed into: `BeginEdit()` focuses that box, and focus
+is what calls `RanIME_Show`.
+
+**Not reproduced on LDPlayer.** It will not show the soft keyboard for the game
+window at all — tried `settings put secure show_ime_with_hard_keyboard 1` and
+selecting the pinyin IME explicitly — so the inset reads 0 there and the lift
+never engages either way. The condition comes from reading the path that produces
+the behaviour end to end, not from a captured symptom. Worth one look on the
+tablet.
+
+---
+
 ## 2026-09-10 (3) — Splitting a stack uses the client's own window again
 
 The touch item sheet opened a bespoke "how many?" sheet — `CMobileCountSheet`,
