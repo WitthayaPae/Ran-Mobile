@@ -12,6 +12,73 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-10 (2) — Effect meshes were being drawn in their frame's space, not the file's
+
+**This is the "effect on the floor is wrong".** It is the map gate marker, and the
+bug is in the mesh loader, so it is not confined to gates.
+
+`D3DXLoadMeshFromX` **flattens** an `.x` file: every mesh comes back with the
+transform of each frame above it already applied. That is how an artist places
+the pieces of an effect — park a mesh under a moved frame. The shim returned the
+mesh in its own frame's space and dropped those matrices, so each piece landed at
+the file origin.
+
+Read straight out of the shipped binary `.x` files:
+
+| mesh | its frame carries | effect of dropping it |
+|---|---|---|
+| `gate_01.x` | z **+13.33** | the arrow sits away from the marker |
+| `gate_line.x` | x **−14.63** | the outline sits ~15 units off the arrow |
+| `gate_plane.x` | y **+0.28** | the plane sinks into the floor it should hover over |
+
+Fixed in `shim/d3d/d3dx_mesh.cpp` (`flattenTransform`): walk the mesh's
+ancestors, multiply their `FrameTransformMatrix` child-first, apply the full
+matrix to positions and the rotation to normals. Returns false when every
+ancestor is identity, so the common case costs nothing. **The hierarchy loader
+deliberately does not use it** — there each frame keeps its own
+`TransformationMatrix` and the engine applies it; baking it in as well would
+transform the mesh twice.
+
+Verified on LDPlayer from the vertex data, same gate, same map, before and after:
+
+    gate_line   v0 x   5.0 -> -9.6    (-14.6; the file says -14.63)
+    gate_plane  v0 y   0.0 ->  0.1    (lifted off the floor)
+    gate_01     v0 z  -8.4 -> -12.1   (its frame carries rotation as well)
+
+### How it was found, and what it cost
+
+Most of the session went on identifying *what* the shape on the floor was. What
+finally worked, and is now permanent tooling:
+
+* `drawlimit` bisects to the draw — it now also logs a **symbolised backtrace**,
+  which named `DXLANDEFF -> DxEffSingleGroup -> DxEffectMesh -> DxSimMesh` in one
+  step instead of an afternoon of grepping.
+* `meshtex` (SOURCE) prints, per mesh subset, the texture its material names and
+  whether it loaded. That proved the gate meshes carry **no texture at all** in
+  the shipped `.x`, so the flat colour is content, not a load failure.
+* `effmesh` (SOURCE) prints each effect piece's local, group and final matrix.
+  All pieces shared one group position with a zero local matrix, which cleared
+  the effect system and pointed at the mesh loader.
+* `nocull` / `cullflip` toggle world culling at runtime.
+
+### Still open
+
+* **`D3DXLoadMeshFromX` does not merge multiple meshes.** Real D3DX merges every
+  mesh in the file into one; `findMesh` returns the first. Every `.x` checked
+  here holds a single mesh, so nothing shipped depends on it — but it is a real
+  gap.
+* **The shim collapses `D3DCULL_CW` and `D3DCULL_CCW`** onto GL front face `CW`,
+  deliberately and measured at the time against the world and character-select
+  grounds. It is still a distinction the PC honours and this build does not.
+  `nocull`/`cullflip` now make it testable without a rebuild.
+* **No PC reference was obtained.** `Ran/MiniA.exe` launches windowed with the
+  `iyaa...rundiwa` token, but the connection is refused from here ("the internet
+  was disconnected"), so it never reached a map. Two `MiniA.exe` processes are
+  left running and cannot be closed programmatically (Hackshield refuses
+  `WM_CLOSE`, `CloseMainWindow` and `Stop-Process`).
+
+---
+
 ## 2026-09-10 — Records written by a 32-bit client are now read at 32-bit widths
 
 **Entering clubwar_inzone crashed the client. It no longer does, and the map renders.**
