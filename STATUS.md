@@ -13,6 +13,38 @@ If anything here disagrees with another file, this file wins.
 ---
 
 ## 2026-09-11 — The chat follows the keyboard only when the keyboard is its own
+### Fields under the keyboard — checked, and mostly a non-issue
+
+The obvious follow-up: if the chat no longer moves for other fields, does anything
+else end up buried? A `fakekb` diagnostic was added to answer it, because
+**LDPlayer never raises a soft keyboard** and the inset reads 0 there — put a
+per-mille number in `fakekb` under the diagnostic root and it is used instead.
+
+| forced keyboard | split window's number box |
+|---|---|
+| 400‰ (about a real phone keyboard) | **not covered** — no lift needed |
+| 650‰ | covered |
+
+So with a realistic keyboard the client's own windows, which are centred, stay
+clear. The chat was the one bottom-anchored thing, and it is handled.
+
+A general "lift whichever window is being typed into" pass was written and then
+**reverted**. It does not work through this route, and the measurements say why:
+
+* Moving the window and its whole subtree moves the children **twice** — the
+  window went up 162 and its edit box went up 325. Sorting and de-duplicating
+  the collected tree did not change that, so it is not a duplicate in the list.
+* Moving only the root gives consistent numbers (window 310 → 148, edit box
+  388 → 226, both −162, confirmed in the `kblift` log) but **nothing moves on
+  screen** — the drawn window stays where it was.
+
+So a client window's drawn position does not follow `SetGlobalPos` on the window
+at runtime the way the chat's does, and the difference is not yet understood.
+Shipping a half-working window mover is worse than not having one. If a field
+ever does end up under a real keyboard, this is the thread to pull, and `fakekb`
+plus the `kblift` log are the tools.
+
+
 
 Splitting a stack opens the client's number window, that window raises the soft
 keyboard, and the **chat box jumped up** out of the way of a keyboard that had
