@@ -66,6 +66,7 @@ extern "C" void RanInput_KeyTap(int scanCode);
 
 //  The on-screen controls. They see every pointer before the client does.
 #include "../../shim/platform/touch_ui.h"
+#include "../../shim/platform/touch_gesture.h"
 
 namespace {
 
@@ -147,58 +148,15 @@ int scanCodeFor(int32_t keyCode) {
 //
 //  Right-click does real work in RAN - it uses or equips an item from the
 //  inventory, clears a quick slot, and drives various context actions - and a
-//  touch screen has no second button, so a long press stands in for it.
-//
-//  The press cannot be sent on touch-down, because by the time the hold is long
-//  enough to count a left click would already have happened. So it is deferred:
-//  a finger that moves is a drag and presses left as soon as it moves, a finger
-//  that lifts early presses left then releases, and a finger that stays put
-//  presses right when the timer expires. The pointer still moves on touch-down,
-//  so hover and tooltips behave exactly as before.
-struct TouchGesture {
-    bool  active   = false;
-    bool  pressed  = false;     // a button is down for this touch
-    int   button   = 0;         // which one
-    int   x = 0, y = 0;         // where it started
-    int64_t downMs = 0;
-} g_gesture;
-
-//  Long enough not to fire on a normal tap, short enough not to feel stuck.
-const int64_t kLongPressMs = 450;
-
-//  Past this the touch is a drag, not a hold or a tap, however long it lasts.
-//
-//  16 was far too tight. A finger resting on glass wanders further than that
-//  just from the contact patch shifting, so ordinary taps were being promoted to
-//  drags - which is why tapping a window's close button dragged the window
-//  instead of closing it.
-const int     kDragSlop    = 30;
+//  touch screen has no second button, so a long press stands in for it - all of
+//  which now lives in shim/platform/touch_gesture.cpp, because iOS needs the
+//  same behaviour and had none of it while this was a static in this file.
+//  The rules and the reasons moved with the code.
 
 int64_t nowMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-//  Press at the point the finger went DOWN, not wherever it is now.
-//
-//  The client records a window's grab offset on the button-down, so pressing at
-//  the current position after the finger had already travelled made the window
-//  jump by however far that was. Putting the pointer back first reproduces a
-//  real press-then-drag: down where you touched, then movement.
-void gesturePress(int button) {
-    g_gesture.pressed = true;
-    g_gesture.button  = button;
-    RanInput_PointerMove(g_gesture.x, g_gesture.y);
-    RanInput_PointerButton(button, 1);
-}
-
-//  Called once a frame: the only place a hold can be noticed, since a finger
-//  that is not moving generates no events at all.
-void gestureTick() {
-    if (!g_gesture.active || g_gesture.pressed) return;
-    if (nowMs() - g_gesture.downMs < kLongPressMs) return;
-    gesturePress(1);                // right
 }
 
 //  Take the whole screen: no status bar, no navigation bar.
@@ -331,8 +289,8 @@ bool g_imeActive = false;
 extern "C" void RanIME_InsertUtf8(const char *sz);
 extern "C" void RanIME_Backspace(void);
 
-extern "C" void RanIME_Show(void) { g_imeActive = true;  imeCall(true); }
-extern "C" void RanIME_Hide(void) { g_imeActive = false; imeCall(false); }
+extern "C" void RanIME_Show(void) { g_imeActive = true;  RanGesture_SetImeActive(1); imeCall(true); }
+extern "C" void RanIME_Hide(void) { g_imeActive = false; RanGesture_SetImeActive(0); imeCall(false); }
 extern "C" void RanIME_SetNumeric(int numeric) { g_imeNumeric = (numeric != 0); }
 
 //  What the soft keyboard produced, on its way to the client's edit buffer.
@@ -656,29 +614,7 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
             case AMOTION_EVENT_ACTION_DOWN:
             case AMOTION_EVENT_ACTION_POINTER_DOWN:
                 if (RanTouch_PointerDown(pid, (float)px, (float)py)) return 1;
-
-                //  A second finger means a pinch is starting. Anything already
-                //  dragging has to let go now, before the pinch moves.
-                if (RanTouch_IsPinching() && g_gesture.pressed) {
-                    RanInput_PointerButton(g_gesture.button, 0);
-                    g_gesture.pressed = false;
-                    g_gesture.active = false;
-                }
-
-                RanInput_PointerMove(px, py);
-                //  A press outside the field being edited puts the keyboard
-                //  away. Nothing in the client does this: it only ends an edit
-                //  when you move to another box, so the keyboard would sit
-                //  there over half the screen.
-                if (g_imeActive) RanUI_EndEditIfOutside(px, py);
-
-                //  No button yet - see TouchGesture. The move alone is what
-                //  drives hover and tooltips.
-                g_gesture.active  = true;
-                g_gesture.pressed = false;
-                g_gesture.x = px;
-                g_gesture.y = py;
-                g_gesture.downMs = nowMs();
+                RanGesture_Down(px, py);
                 return 1;
 
             case AMOTION_EVENT_ACTION_MOVE: {
@@ -691,50 +627,7 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
                     const int mx = (int)AMotionEvent_getX(event, i) / scale;
                     const int my = (int)AMotionEvent_getY(event, i) / scale;
                     if (RanTouch_PointerMove(mid, (float)mx, (float)my)) { claimedAny = true; continue; }
-                    RanInput_PointerMove(mx, my);
-
-                    //  Moved far enough to be a drag. What that means depends
-                    //  on what is under the finger:
-                    //
-                    //    on a control - left, so items and scrollbars drag;
-                    //    on the world - middle, which is what DxViewPort reads
-                    //    for camera rotation. That is the free look.
-                    //
-                    //  The press lands back at the touch-down point, then this
-                    //  move carries it to where the finger actually is - the
-                    //  camera turns by the difference, as it would on a mouse.
-                    //  A pinch is two fingers moving, and that movement would
-                    //  otherwise cross the drag threshold and press the middle
-                    //  button - which is the camera-rotate binding. Zooming
-                    //  turned the view at the same time. A pinch is a zoom and
-                    //  nothing else.
-                    if (RanTouch_IsPinching()) {
-                        if (g_gesture.pressed) {
-                            //  Already dragging when the second finger landed:
-                            //  let go, or the rotation continues through the
-                            //  whole pinch.
-                            RanInput_PointerButton(g_gesture.button, 0);
-                            g_gesture.pressed = false;
-                        }
-                        g_gesture.active = false;
-                        continue;
-                    }
-
-                    if (g_gesture.active && !g_gesture.pressed) {
-                        const int dx = mx - g_gesture.x, dy = my - g_gesture.y;
-                        if (dx * dx + dy * dy > kDragSlop * kDragSlop) {
-                            //  Ask where the finger IS, not where the pointer was.
-                            //
-                            //  RanUI_MouseInControl answers for the end of the last
-                            //  frame, and on touch that is wherever the previous tap
-                            //  left the pointer - so a drag starting on a window title
-                            //  read as "not on a control" and pressed the middle button,
-                            //  which turns the camera. That is why no window could be
-                            //  dragged unless something had already been tapped inside it.
-                            gesturePress(RanUI_PointInControl(g_gesture.x, g_gesture.y) ? 0 : 2);
-                            RanInput_PointerMove(mx, my);
-                        }
-                    }
+                    RanGesture_Move(mx, my);
                 }
                 (void)claimedAny;
                 return 1;
@@ -744,17 +637,7 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
             case AMOTION_EVENT_ACTION_POINTER_UP:
             case AMOTION_EVENT_ACTION_CANCEL:
                 if (RanTouch_PointerUp(pid, (float)px, (float)py)) return 1;
-
-                //  Lifted before the hold expired and without moving: an
-                //  ordinary tap, so the left click happens now, at the point the
-                //  finger went down rather than the pixel it left from. The shim
-                //  holds the release back until the press has been polled, so a
-                //  quick tap cannot fall between two frames and vanish.
-                if (g_gesture.active && !g_gesture.pressed)	gesturePress(0);
-                else										RanInput_PointerMove(px, py);
-                if (g_gesture.pressed) RanInput_PointerButton(g_gesture.button, 0);
-                g_gesture.active  = false;
-                g_gesture.pressed = false;
+                RanGesture_Up(px, py);
                 return 1;
 
             default:
@@ -913,7 +796,7 @@ extern "C" void android_main(android_app *app) {
         }
 
         if (state.booted) {
-            gestureTick();
+            RanGesture_Tick();
             //  One button transition per frame, so every press and release is
             //  visible to the client for at least one frame.
             RanInput_PumpButtons();

@@ -39,6 +39,15 @@ int  RanTouch_PointerUp ( int id, float x, float y );
 void RanTouch_Frame ( float elapsedSeconds );
 
 void RanInput_PointerMove ( int x, int y );
+//  The touch-to-mouse gesture layer, shared with Android - long press for
+//  the right button, drag for left on a control and middle on the world,
+//  pinch cancelling a drag, and a press outside an edit box closing the
+//  keyboard. It lived inside android_main.cpp, so iOS had none of it.
+void RanGesture_Down ( int x, int y );
+void RanGesture_Move ( int x, int y );
+void RanGesture_Up   ( int x, int y );
+void RanGesture_Tick ( void );
+void RanGesture_SetImeActive ( int active );
 void RanInput_PointerButton ( int button, int down );
 void RanInput_PumpButtons ( void );
 void RanInput_KeyTap ( int scanCode );
@@ -183,6 +192,9 @@ static int  g_imeInsetPerMille = 0;
     }
 
     RanTouch_Frame ( dt );
+    //  A finger resting still produces no events, so the hold that becomes
+    //  the right button can only be noticed here.
+    RanGesture_Tick ();
     RanInput_PumpButtons ();
     if (!RanApp_Frame ()) return;
 
@@ -257,8 +269,7 @@ static int  g_imeInsetPerMille = 0;
         //  Offered to the overlay first, which says whether it took it; the
         //  client only hears about what is left. Exactly as on Android.
         if (RanTouch_PointerDown ( slot, (float)p.x, (float)p.y )) continue;
-        RanInput_PointerMove ( (int)p.x, (int)p.y );
-        RanInput_PointerButton ( 0, 1 );
+        RanGesture_Down ( (int)p.x, (int)p.y );
     }
 }
 
@@ -269,7 +280,7 @@ static int  g_imeInsetPerMille = 0;
         if (slot < 0) continue;
         const CGPoint p = [self inputPointOf:t];
         if (RanTouch_PointerMove ( slot, (float)p.x, (float)p.y )) continue;
-        RanInput_PointerMove ( (int)p.x, (int)p.y );
+        RanGesture_Move ( (int)p.x, (int)p.y );
     }
 }
 
@@ -281,7 +292,7 @@ static int  g_imeInsetPerMille = 0;
         const CGPoint p = [self inputPointOf:t];
         const int taken = RanTouch_PointerUp ( slot, (float)p.x, (float)p.y );
         _slots[slot] = nil;
-        if (!taken) RanInput_PointerButton ( 0, 0 );
+        if (!taken) RanGesture_Up ( (int)p.x, (int)p.y );
     }
 }
 
@@ -327,10 +338,16 @@ static int  g_imeInsetPerMille = 0;
 static __weak RanViewController *g_vc = nil;
 
 extern "C" void RanIME_Show ( void )
-{ dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc becomeFirstResponder]; } ); }
+{
+    RanGesture_SetImeActive ( 1 );
+    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc becomeFirstResponder]; } );
+}
 
 extern "C" void RanIME_Hide ( void )
-{ dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc resignFirstResponder]; } ); }
+{
+    RanGesture_SetImeActive ( 0 );
+    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc resignFirstResponder]; } );
+}
 
 extern "C" void RanIME_SetNumeric ( int numeric )
 {
