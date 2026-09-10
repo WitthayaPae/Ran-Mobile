@@ -159,6 +159,95 @@ login on the live server to find out.
 
 The three probes are kept, armed by `/sdcard/ran/loadprobe`.
 
+### iOS lost the character, the interface and the touch pad (fixed 2026-09-10)
+
+Reported as "some skin load not correctly". A screenshot off the phone showed
+the terrain drawn and **nothing else** - no character, no mobs, no HUD, no touch
+pad - while the log said all of it was being submitted: `skinned 51/frame`,
+`ui 2581/frame`, `touch-hud: 7.0 draws/frame`, `interface 6.4ms`.
+
+**The measurement that named it.** The per-frame stats carry a `glErr`:
+
+```
+draws=85123 (ui=6523 ...) glErr=0x0000     <- last frame before world entry
+draws=51446 (ui=16326 ...) glErr=0x0506    <- first frame in the world
+into render targets: 3900 draws, largest 512x512
+```
+
+`0x0506` is `GL_INVALID_FRAMEBUFFER_OPERATION`, and it appears on exactly the
+frame where the engine starts drawing into off-screen targets. Android is
+`0x0000` throughout.
+
+**Cause.** On EAGL there is no default framebuffer. `gl_context_ios.mm` builds
+the screen as an FBO around the CAEAGLLayer's renderbuffer, so framebuffer
+**0 has no attachments and is incomplete**. The renderer finished an off-screen
+pass with `glBindFramebuffer(GL_FRAMEBUFFER, 0)` - correct on EGL, where 0 is
+the window surface - and from that point on every draw in the frame failed and
+rendered nowhere. The world survived because it is drawn *before* the first
+render-target pass; the character, the interface and the touch pad are drawn
+after it. The present path rebinds the real FBO each frame, which is why the
+damage repeated per frame instead of being permanent.
+
+**Fix.** `RanGL_DefaultFramebuffer()` says which object is the screen - 0 on
+EGL, `g_fbo` on EAGL - and every unbind goes through it. Three call sites, plus
+the blit's "no destination texture means the screen" default.
+
+**Ruled out while looking, so it is not chased again:** the 35 failed `.enm`
+opens in the log are files that do not exist in the client data at all - the
+engine asks for an optional per-model file and there is none - and
+`bootcover.bin` is the launcher's own cache, absent on a first run. Neither is
+a defect, and neither is iOS-specific.
+
+### The iOS patch page was text on black (fixed 2026-09-10)
+
+Android draws the real page - `ld_top`, the zone art, `ld_under`, the mark in
+the top band, and status/bar/detail in the bottom one - from four PNGs in
+`res/drawable-nodpi`. iOS drew a centred label and a bar on black, and the code
+said why:
+
+```objc
+//  Text only - the Android page's art is packed in Gui.rcc, which is itself
+//  part of what the patcher is downloading, so it cannot be drawn before it runs.
+```
+
+The first half is true and the second does not follow. Android does not read
+that art from `Gui.rcc` either; it carries the same four files in its own
+package and draws them before a byte is fetched. The PNGs are now bundled into
+`ran.app` the same way and `RanPatchViewController` is laid out band for band
+with `RanLauncher.java`: bands at 128/768 of the panel height, the art cropped
+to fill the middle two thirds, the mark at 0.82 of the band, the same colours
+(`#0B0E10`, `#F0F4F6`, `#AEB8BE`) and the same 15/12 pt text.
+
+Laid out in `viewDidLayoutSubviews`, not with constraints, because the bands
+are a fraction of a panel height that is not known until the view is sized.
+
+### The iPhone hang was the same bug (confirmed 2026-09-10)
+
+Its own log, pulled over USB from `Documents/ran/ran.log` (house arrest AFC,
+bundle `com.ran.launcher.FALC84Z7MP` - Sideloadly appends the team id), ends
+exactly where Android's did:
+
+```
+I RanAudio: out: 1 voices ... [bgm-ring loop(-10000)]
+I RanLoad: ChangeStage entered, to=2
+I RanLoad: thread handle = 0x132ec7100        <- last line from the main thread
+I RanLoad: presented frame 1 ... 360, hr=0x00000000
+I RanAudio: out: 1 voices ... []              <- the BGM voice goes away here
+```
+
+The file was still growing when pulled, so the app is alive, not crashed: the
+loading thread presents forever while the main thread is parked. The voice list
+emptying at that moment is the track change that enters `UnLoadSoundBuffer`.
+No `RanBgm`, `RanStall` or `ChangeStage:` lines anywhere, which dates the build
+as pre-fix. The only errors in 11,656 lines are a missing `bootcover.bin`, two
+`/sdcard/ran/` diagnostic probes that cannot exist on iOS, and one `.x` mesh
+with no `TextureFilename`.
+
+Nothing iOS-specific to fix - all three fixes are shared code. iOS build
+`34444486422` is green and carries them (`ov_read returned`, `ChangeStage: %s`
+and `loading art draw` all present in the Mach-O); the `.ipa` is in the
+Downloads folder as `RanLegacyM-unsigned.ipa`, waiting to be sideloaded.
+
 ### World entry hung forever — the BGM decoder (fixed 2026-09-10)
 
 Reported as "it did not even get to the real map world like before", and that

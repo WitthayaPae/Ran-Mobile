@@ -81,5 +81,12 @@ tools/patch/keys/
 # until this line existed.
 !native/platform/ios/icons/*.png
 
+# ...and the patch page's art, for the same reason. These are the four files
+# the Android launcher carries in res/drawable-nodpi, copied into the iOS
+# bundle: the patcher is what downloads Gui.rcc, so the page that shows the
+# download cannot read its art from there. Ignored by *.png, the runner built
+# a bundle without them and the page fell back to bare text.
+!native/platform/ios/art/*.png
+
 # Login credentials for the device test rig. Never committed.
 native/.login
