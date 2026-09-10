@@ -230,7 +230,7 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     const int bufferW = g_panelWidth  / g_bufferDiv;
     const int bufferH = g_panelHeight / g_bufferDiv;
     ANativeWindow_setBuffersGeometry(win, bufferW, bufferH, nativeVisual);
-    LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, renderscale %d)",
+    LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, buffer divisor %d)",
          g_panelWidth, g_panelHeight, bufferW, bufferH,
          g_panelWidth / g_renderScale, g_panelHeight / g_renderScale,
          g_renderScale / g_bufferDiv, g_bufferDiv);

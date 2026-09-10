@@ -224,17 +224,40 @@ static int  g_imeInsetPerMille = 0;
     return CGPointMake ( p.x * s, p.y * s );
 }
 
+//  Where a touch is, in the space everything downstream lays out in.
+//
+//  UIKit gives points; the layer scale turns those into panel pixels; and the
+//  frame is drawn at panel/RanGL_InputScale, which is what RanTouch_Init was
+//  handed and what the client's own hit test uses. Android divides once, up
+//  front, and passes the result to BOTH the overlay and the client:
+//
+//      const int scale = RanGL_InputScale();
+//      px = AMotionEvent_getX(event, i) / scale;
+//      if (RanTouch_PointerDown(pid, px, py)) return 1;
+//      RanInput_PointerMove(px, py);
+//
+//  Here the division was applied only on the client's side, so the overlay was
+//  hit-tested in panel pixels against a layout built in logical ones - on this
+//  phone a factor of two out, with every pad and skill button reading as a
+//  press somewhere else. RanUI_PointInControl, which RanTouch consults first,
+//  was asked the same doubled question.
+- (CGPoint)inputPointOf:(UITouch *)t
+{
+    const CGPoint p = [self pixelsOf:t];
+    const CGFloat is = RanGL_InputScale() > 0 ? (CGFloat)RanGL_InputScale() : 1.0f;
+    return CGPointMake ( p.x / is, p.y / is );
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
     for (UITouch *t in touches) {
         const int slot = [self slotFor:t assign:YES];
         if (slot < 0) continue;
-        const CGPoint p = [self pixelsOf:t];
+        const CGPoint p = [self inputPointOf:t];
         //  Offered to the overlay first, which says whether it took it; the
         //  client only hears about what is left. Exactly as on Android.
         if (RanTouch_PointerDown ( slot, (float)p.x, (float)p.y )) continue;
-        const int is = RanGL_InputScale() > 0 ? RanGL_InputScale() : 1;
-        RanInput_PointerMove ( (int)p.x / is, (int)p.y / is );
+        RanInput_PointerMove ( (int)p.x, (int)p.y );
         RanInput_PointerButton ( 0, 1 );
     }
 }
@@ -244,10 +267,9 @@ static int  g_imeInsetPerMille = 0;
     for (UITouch *t in touches) {
         const int slot = [self slotFor:t assign:NO];
         if (slot < 0) continue;
-        const CGPoint p = [self pixelsOf:t];
+        const CGPoint p = [self inputPointOf:t];
         if (RanTouch_PointerMove ( slot, (float)p.x, (float)p.y )) continue;
-        const int is = RanGL_InputScale() > 0 ? RanGL_InputScale() : 1;
-        RanInput_PointerMove ( (int)p.x / is, (int)p.y / is );
+        RanInput_PointerMove ( (int)p.x, (int)p.y );
     }
 }
 
@@ -256,7 +278,7 @@ static int  g_imeInsetPerMille = 0;
     for (UITouch *t in touches) {
         const int slot = [self slotFor:t assign:NO];
         if (slot < 0) continue;
-        const CGPoint p = [self pixelsOf:t];
+        const CGPoint p = [self inputPointOf:t];
         const int taken = RanTouch_PointerUp ( slot, (float)p.x, (float)p.y );
         _slots[slot] = nil;
         if (!taken) RanInput_PointerButton ( 0, 0 );
