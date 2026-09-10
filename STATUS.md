@@ -3,12 +3,96 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-09
+- **Last updated:** 2026-09-10
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-10 — Records written by a 32-bit client are now read at 32-bit widths
+
+**Entering clubwar_inzone crashed the client. It no longer does, and the map renders.**
+
+The crash was a null dereference in `DxLandMan::EffectLoadToList`, but that was the
+symptom, three sections downstream of the cause.
+
+`DXOCMATERIAL` is written into the `.wld` as a raw blob with a live texture
+**pointer** inside it:
+
+| | bytes |
+|---|---|
+| `D3DMATERIAL9` | 68 |
+| `LPDIRECT3DTEXTURE9` — an address from a process that exited in 2005 | 4 |
+| `char szTexture[MAX_PATH]` | 260 |
+| **record** | **332** |
+
+The file says 332 too: in `clubwar_inzone.wld` the first material name is at byte
+691 and the second at 1023. A 64-bit build makes the same struct 344, so
+`sizeof()` read 12 bytes too many per material, the names landed mid-record, the
+octree mesh that follows read a garbage vertex count and swallowed the rest of the
+file, and the effect list after it was read past the end — where a type of `0`
+comes back and `CreateEffInstance` answers `NULL`. That matched the log the
+previous commit's guard produced exactly: *unknown effect type 0 at offset 887627*,
+132 bytes short of the file's 887,759.
+
+**The whole family was then measured rather than eyeballed.**
+`MOBILE/native/layout/blobprobe.cpp` + `blobrun.sh` take `sizeof()` of every type
+read with `ReadBuffer(..., sizeof(T))` — 148 of them, from the real headers — on
+both the ABI the data was written with (i686) and the one we run under (aarch64).
+Thirteen differ. Fixed:
+
+| type | file / this build | what it breaks |
+|---|---|---|
+| `DXOCMATERIAL` | 332 / 344 | map meshes — **the crash** |
+| `DXMATERIAL_SPECULAR` | 528 / 536 | character specular |
+| `DXMATERIAL_SPEC2` | 528 / 536 | |
+| `DXMATERIAL_SPECREFLECT` | 528 / 536 | |
+| `DXMATERIAL_NEON` | 552 / 560 | two pointers, not one |
+| `DXUSERMATERIAL` | 536 / 544 | glow |
+| `EFFCHAR_PROPERTY_LINE2BONEEFF_0101` | 232 / 248 | |
+| `EFFCHAR_PROPERTY_LINE2BONEEFF_0102` | 232 / 240 | |
+
+The last pair carries no pointer at all. It embeds `CMinMax<float>`, which has a
+**virtual destructor**, so the vtable slot is the thing that grows. Same failure,
+different cause — which is why the sweep compared measured sizes instead of
+looking for pointer members. An earlier audit that looked only for pointers found
+nothing here.
+
+Each read is now field-by-field at the width the file holds; pointer and vtable
+slots are read and discarded (`RanReadWin32Pointer` / `RanReadWin32Pad` in
+`basestream.h`), and the pointer is set to `NULL`, which is what the caller does
+with it anyway. MSVC keeps the original blob read in the `#else` branch.
+`DXMATERIAL_CHAR_EFF` and `_100` already had readers from an earlier pass.
+
+**Verified on LDPlayer** (x86_64 build, one login): walked into the clubwar TD
+gate, `clubwar_inzone` loads and renders — real geometry, `clubwar_wall*` and
+`clubwar_floor*` textures, the club-war score panel, 54 fps, process alive, and no
+`unknown effect` line anywhere in the log. `out/inzone.png`.
+
+Also measured and **clean**, so ruled out: all 22 nested effect `PROPERTY` structs
+in the single-effect system (`propprobe.cpp`), including `DxLandGate::PROPERTY`
+(732 bytes on both). Effect placement does not come from a width bug.
+
+### Still open from this session
+
+* **The misplaced map effect (TP gate) is not explained.** Ruled out with
+  measurements: every effect `PROPERTY` struct, `DXAFFINEPARTS`, and
+  `EFF_PROPERTY::GetSizeBase` are all width-stable, and the client never calls
+  `DxLandGateMan::Render` (that is the editor's AABB debug draw), so what is on the
+  floor is real map content drawn in the wrong place. Next step is a side-by-side
+  against the shipped PC client at the same gate — deliberately not done in this
+  session because it would be a second login to the live server.
+* **`SITEMCUSTOM` (76 / 80) and `SINVENITEM_SAVE` (80 / 88) still differ.** Both are
+  packet-side, read out of a `ByteStream` inside a message body, and belong with the
+  wire-parity work rather than the file loaders. `SITEMCUSTOM` carries other
+  players' equipment customisation, so this is a candidate for any remaining
+  "skin loads wrong" report.
+* **`TILE_TEX` blob-reads a `std::string`** (12 / 24), which is heap corruption on
+  any ABI. Only reached from `DxBlend::LoadFile_Edit` — the map editor's path, which
+  the client never takes. Left alone, recorded here.
 
 ---
 
