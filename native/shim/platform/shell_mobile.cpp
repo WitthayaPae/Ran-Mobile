@@ -83,23 +83,82 @@ extern "C" void RanIME_CaretToEnd(void) { imeSetCaret((int)g_imeText.size()); }
 //
 //  The caret is a byte offset, so stepping over a character means stepping over
 //  a whole UTF-8 sequence, not one byte.
+//  UTF-8 in, CP874 out.
+//
+//  Everything else in this buffer is CP874: SetString seeds it from the client,
+//  whose own strings come from Gui.rcc and the item tables, and every place the
+//  client compares typed text against its own data does it byte for byte -
+//  CGMGenItemWindow::ApplyFilter is a plain CString::Find. A Windows Thai IME
+//  hands the client CP874, so the client has never had to care.
+//
+//  Appending UTF-8 made the buffer two encodings at once. ASCII still worked,
+//  because the two agree there, which is why login and English search were fine
+//  and Thai matched nothing at all - "ดาบ" typed is E0 B8 94 E0 B8 B2 E0 B8 9A
+//  and the same word in the item table is B4 D2 BA. Nothing could ever match.
+//
+//  0x00-0x7F is ASCII and 0xA1-0xFB maps linearly onto the Thai block at
+//  U+0E01 - the inverse of cp874() in gdi_text.cpp, which is what draws it.
+static void appendCp874(std::string &out, unsigned cp) {
+    if (cp < 0x80) { out += (char)cp; return; }
+    if (cp >= 0x0E01 && cp <= 0x0E5B) { out += (char)(0xA0 + (cp - 0x0E00)); return; }
+    switch (cp) {
+        case 0x20AC: out += (char)0x80; return;   //  euro
+        case 0x00A0: out += (char)0xA0; return;   //  no-break space
+        case 0x2026: out += (char)0x85; return;
+        case 0x2018: out += (char)0x91; return;
+        case 0x2019: out += (char)0x92; return;
+        case 0x201C: out += (char)0x93; return;
+        case 0x201D: out += (char)0x94; return;
+        case 0x2022: out += (char)0x95; return;
+        case 0x2013: out += (char)0x96; return;
+        case 0x2014: out += (char)0x97; return;
+        //  Anything the codepage cannot hold is dropped rather than written as
+        //  a replacement byte: a stray 0x3F in a name is worse than a shorter
+        //  string, because it matches nothing and looks like a typo.
+        default: return;
+    }
+}
+
 extern "C" void RanIME_InsertUtf8(const char *sz) {
     if (!sz || !*sz) return;
+
+    std::string cooked;
+    for (const unsigned char *p = (const unsigned char *)sz; *p; ) {
+        unsigned cp = 0;
+        int n = 0;
+        if      (*p < 0x80)        { cp = *p;          n = 1; }
+        else if ((*p & 0xE0) == 0xC0) { cp = *p & 0x1F; n = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = *p & 0x0F; n = 3; }
+        else if ((*p & 0xF8) == 0xF0) { cp = *p & 0x07; n = 4; }
+        else { ++p; continue; }                 //  stray continuation byte
+
+        int i = 1;
+        for (; i < n; ++i) {
+            if ((p[i] & 0xC0) != 0x80) break;   //  truncated - give up on it
+            cp = (cp << 6) | (p[i] & 0x3F);
+        }
+        if (i < n) { ++p; continue; }
+        appendCp874(cooked, cp);
+        p += n;
+    }
+    if (cooked.empty()) return;
+
     int c = imeCaret();
     if (c < 0) c = 0;
     if (c > (int)g_imeText.size()) c = (int)g_imeText.size();
-    g_imeText.insert((size_t)c, sz);
-    imeSetCaret(c + (int)strlen(sz));
+    g_imeText.insert((size_t)c, cooked);
+    imeSetCaret(c + (int)cooked.size());
 }
 
 extern "C" void RanIME_Backspace(void) {
     const int c = imeCaret();
     if (c <= 0 || g_imeText.empty()) return;
-    //  Back up over continuation bytes (10xxxxxx) to the start of the character.
-    int i = c - 1;
-    while (i > 0 && ((unsigned char)g_imeText[(size_t)i] & 0xC0) == 0x80) --i;
-    g_imeText.erase((size_t)i, (size_t)(c - i));
-    imeSetCaret(i);
+    //  One byte. The buffer is CP874 now, where every character is one byte -
+    //  stepping back over UTF-8 continuation bytes would eat a Thai character
+    //  and one or two of its neighbours, because CP874 Thai lives in the same
+    //  0x80-0xBF range that marks a continuation byte in UTF-8.
+    g_imeText.erase((size_t)(c - 1), 1);
+    imeSetCaret(c - 1);
 }
 
 extern "C" void RanIME_ClearText(void) { g_imeText.clear(); imeSetCaret(0); }
