@@ -20,6 +20,7 @@
 #include "xmesh_build.h"
 
 #include <string.h>
+#include <math.h>
 #include <vector>
 #include <set>
 #define LOGW(...) RanPlat_Log(RANLOG_WARN, "RanXMesh", __VA_ARGS__)
@@ -269,10 +270,59 @@ struct Cursor {
     bool vec2(Vec2 &v) { return f32(v.u) && f32(v.v); }
 };
 
+//  Multiply two row-vector 4x4s: out = a * b.
+void matMul(float out[16], const float a[16], const float b[16]) {
+    float t[16];
+    for (int r = 0; r < 4; ++r)
+        for (int col = 0; col < 4; ++col)
+            t[r * 4 + col] = a[r * 4 + 0] * b[0 * 4 + col] + a[r * 4 + 1] * b[1 * 4 + col]
+                           + a[r * 4 + 2] * b[2 * 4 + col] + a[r * 4 + 3] * b[3 * 4 + col];
+    memcpy(out, t, sizeof(t));
+}
+
+//  The transform D3DX would have baked into this mesh's vertices.
+//
+//  D3DXLoadMeshFromX FLATTENS the file: every mesh comes back in the file's own
+//  space, with each ancestor frame's FrameTransformMatrix already applied. This
+//  shim returned the mesh in its own frame's space, so any .x that parks its
+//  mesh under a moved frame drew in the wrong place - and effect meshes do that
+//  constantly, because that is how the artist positioned the pieces.
+//
+//  Measured in the shipped map gate effect, which is what surfaced it:
+//
+//      gate_01.x     frame translates z +13.33   (the arrow)
+//      gate_line.x   frame translates x -14.63   (the outline)
+//      gate_plane.x  frame translates y  +0.28   (lifts the plane off the floor)
+//
+//  Ignoring those put the arrow and the outline about fifteen units apart on the
+//  ground and sank the plane into the floor it was meant to sit above.
+//
+//  Returns false when every ancestor is identity, so the common case does no
+//  work. The hierarchy loader must NOT use this: there each frame carries its
+//  own TransformationMatrix and the engine applies it, so baking it in as well
+//  would transform the mesh twice.
+bool flattenTransform(const XNode *mesh, float out[16]) {
+    static const float kIdentity[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    memcpy(out, kIdentity, sizeof(kIdentity));
+    bool any = false;
+
+    for (const XNode *n = mesh ? mesh->parent : NULL; n; n = n->parent) {
+        const XNode *xf = findChild(n, "FrameTransformMatrix");
+        if (!xf || xf->data.size() < 16 * sizeof(float)) continue;
+        float m[16];
+        memcpy(m, &xf->data[0], sizeof(m));
+        if (memcmp(m, kIdentity, sizeof(m)) == 0) continue;
+        //  Child first, then its parent: the same order the hierarchy walk uses.
+        matMul(out, out, m);
+        any = true;
+    }
+    return any;
+}
+
 HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
                      LPD3DXBUFFER *ppAdjacency, LPD3DXBUFFER *ppMaterials,
                      LPD3DXBUFFER *ppEffectInstances, DWORD *pNumMaterials,
-                     LPD3DXMESH *ppMesh) {
+                     LPD3DXMESH *ppMesh, const float *pFlatten = NULL) {
     if (!mesh || !ppMesh) return D3DERR_INVALIDCALL;
     *ppMesh = NULL;
 
@@ -283,6 +333,19 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
     std::vector<Vec3> positions(numVerts);
     for (unsigned i = 0; i < numVerts; ++i)
         if (!c.vec3(positions[i])) return D3DXERR_INVALIDDATA;
+
+    //  Bake the frame hierarchy in, exactly where D3DX does it. See
+    //  flattenTransform: positions take the translation, normals only the
+    //  rotation.
+    if (pFlatten) {
+        const float *m = pFlatten;
+        for (unsigned i = 0; i < numVerts; ++i) {
+            const Vec3 v = positions[i];
+            positions[i].x = v.x * m[0] + v.y * m[4] + v.z * m[8]  + m[12];
+            positions[i].y = v.x * m[1] + v.y * m[5] + v.z * m[9]  + m[13];
+            positions[i].z = v.x * m[2] + v.y * m[6] + v.z * m[10] + m[14];
+        }
+    }
 
     unsigned numFacesIn = 0;
     if (!c.u32(numFacesIn)) return D3DXERR_INVALIDDATA;
@@ -431,6 +494,19 @@ HRESULT meshFromNode(const XNode *mesh, DWORD options, LPDIRECT3DDEVICE9 device,
         }
     }
 
+    if (pFlatten && normals.size() == numVerts) {
+        const float *m = pFlatten;
+        for (unsigned i = 0; i < numVerts; ++i) {
+            const Vec3 n = normals[i];
+            float x = n.x * m[0] + n.y * m[4] + n.z * m[8];
+            float y = n.x * m[1] + n.y * m[5] + n.z * m[9];
+            float z = n.x * m[2] + n.y * m[6] + n.z * m[10];
+            const float len = sqrtf(x * x + y * y + z * z);
+            if (len > 1e-6f) { x /= len; y /= len; z /= len; }
+            normals[i].x = x; normals[i].y = y; normals[i].z = z;
+        }
+    }
+
     DWORD fvf = D3DFVF_XYZ;
     if (normals.size() == numVerts) fvf |= D3DFVF_NORMAL;
     if (uvs.size() == numVerts)     fvf |= D3DFVF_TEX1;
@@ -576,8 +652,12 @@ HRESULT loadFromBytes(const void *bytes, size_t size, DWORD options, LPDIRECT3DD
     for (size_t i = 0; i < file->roots.size() && !mesh; ++i) mesh = findMesh(file->roots[i]);
     if (!mesh) { delete file; return D3DXERR_INVALIDDATA; }
 
+    float flat[16];
+    const bool moved = flattenTransform(mesh, flat);
+
     HRESULT hr = meshFromNode(mesh, options, device, ppAdjacency, ppMaterials,
-                              ppEffectInstances, pNumMaterials, ppMesh);
+                              ppEffectInstances, pNumMaterials, ppMesh,
+                              moved ? flat : NULL);
     delete file;                                   // the mesh copied what it needs
     return hr;
 }
@@ -595,8 +675,11 @@ extern "C" HRESULT WINAPI D3DXLoadMeshFromXof(LPD3DXFILEDATA pxofMesh, DWORD Opt
     if (!node) return D3DERR_INVALIDCALL;
     const XNode *mesh = findMesh(node);
     if (!mesh) return D3DXERR_INVALIDDATA;
+    float flat[16];
+    const bool moved = flattenTransform(mesh, flat);
     return meshFromNode(mesh, Options, pD3DDevice, ppAdjacency, ppMaterials,
-                        ppEffectInstances, pNumMaterials, ppMesh);
+                        ppEffectInstances, pNumMaterials, ppMesh,
+                        moved ? flat : NULL);
 }
 
 extern "C" HRESULT WINAPI D3DXLoadMeshFromXInMemory(LPCVOID Memory, DWORD SizeOfMemory,
