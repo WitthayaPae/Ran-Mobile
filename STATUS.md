@@ -159,6 +159,85 @@ login on the live server to find out.
 
 The three probes are kept, armed by `/sdcard/ran/loadprobe`.
 
+### The loading screen before login was a missing boot cover (fixed 2026-09-10)
+
+Reported as "why it show loading screen? we do not show that before login like
+android version".
+
+Both platforms call `RanSplash_Begin` around `RanApp_Boot` - the call sites are
+line for line the same - so the splash is not iOS-only. What differs is what it
+draws:
+
+```
+Android   RanSplash: boot cover 1280x720 from the launcher
+          RanSplash: boot screen up (art 0x0)
+
+iOS       RanOpen: .../cache/bootcover.bin -> FAILED (errno 2)
+          RanSplash: boot screen up (art 1024x512)
+```
+
+`RanLauncher.handOverPage` rasterises the launcher's own page into
+`cache/bootcover.bin`, and `splash.cpp` draws that in preference to its own
+art - so on Android the page runs unbroken from the patcher through the several
+seconds of client boot. iOS never wrote the file, so the splash fell back to
+`loading_002.dds`, a **zone loading screen**, which is what appears before
+login.
+
+That failed open was in the very first log pulled off the phone. It was written
+off as "the launcher's own cache, absent on a first run" - wrong: it is absent
+on *every* run, because nothing on iOS ever writes it. A file that is missing
+every time is not a first-run artefact.
+
+**Fix.** `RanPatchViewController` renders itself into a half-resolution RGBA
+bitmap and writes the same `"RANC"` + width + height + pixels file the Java
+writes, just before the swap. Orientation checked against the reader rather
+than assumed: `splash.cpp` draws the cover with the same UVs as a DDS, and a
+`CGBitmapContext` is top-down in memory exactly like Android's
+`copyPixelsToBuffer`.
+
+### The patch page's progress bar never appeared (fixed 2026-09-10)
+
+The bottom band's frame was computed once, in `viewDidLayoutSubviews`. The bar
+is hidden while the patcher has no percentage to report (`permille < 0`) and
+shown again when it has - and hiding an arranged subview changes a
+`UIStackView`'s height. The frame was therefore measured with the bar hidden,
+and the bar had nowhere to appear when it came back. The band is on constraints
+now, and a visibility change asks for a fresh layout.
+
+The bar's colour was a second, separate difference: Android's is `#FFCB00` on a
+dark track, about 6dp tall, sampled off a screenshot of the launcher page.
+`UIProgressView` defaults to a thin system-blue line on light grey, and is a
+fixed ~4.5pt whatever frame it is given, so the thickness comes from a
+transform.
+
+### GitHub Actions is out of minutes (blocking, 2026-09-10)
+
+```
+The job was not started because recent account payments have failed or your
+spending limit needs to be increased.
+```
+
+The run failed in 8 seconds without consuming anything, so nothing was wasted -
+but no iOS build can be produced until this is resolved. There is no Mac on the
+development machine, so Actions is the only compiler.
+
+**The arithmetic.** GitHub Free gives a personal account 2,000 CI/CD minutes a
+month for private repositories, and **macOS bills at 10x** - so 200 real macOS
+minutes. This job recompiled the whole client every run at about twelve
+minutes, which is roughly sixteen builds a month, and there were 42 runs.
+
+**Done about it:** the workflow now uses `ccache` with a rolling
+`actions/cache` key, which should take an unchanged-headers build from twelve
+minutes to three or four - four times as many builds for the same allowance.
+The hit rate is printed each run, so a key that stops matching is visible
+rather than silently costing full price.
+
+**Still to decide, and it is not mine to decide:** wait for the monthly reset;
+raise the spending limit (macOS is billed per minute); make both repositories
+public, which makes Actions free and unlimited but publishes the client source;
+or move the iOS job to a service with a free macOS tier. Each is recorded here
+so the choice is not re-derived next time.
+
 ### The whole touch layer was Android-only (fixed 2026-09-10)
 
 Reported as "the functionality that we implement for all in the android did not
