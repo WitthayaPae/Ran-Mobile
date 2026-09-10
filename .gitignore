@@ -80,3 +80,6 @@ tools/patch/keys/
 # names them and nothing regenerates them. The bundle shipped without any icon
 # until this line existed.
 !native/platform/ios/icons/*.png
+
+# Login credentials for the device test rig. Never committed.
+native/.login

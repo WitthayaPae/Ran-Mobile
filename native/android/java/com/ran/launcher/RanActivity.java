@@ -135,6 +135,32 @@ public class RanActivity extends NativeActivity {
 
         @Override public boolean onCheckIsTextEditor() { return true; }
 
+        /*  Injected key events, which is how a test types.
+         *
+         *  RanInputConnection.sendKeyEvent below covers keys that arrive
+         *  THROUGH an IME. "adb shell input text" does not go that way: it
+         *  injects into the focused window, so the events reach the view and
+         *  nothing was listening. With the emulator IME shown-but-dead - which
+         *  is exactly what LDPlayer does now - there was no way to type at all,
+         *  and the login script that had worked for weeks silently entered
+         *  nothing. Handling them here makes typing work with no IME involved,
+         *  on any device, and costs a real keyboard nothing.  */
+        @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+            if (keyCode == KeyEvent.KEYCODE_DEL)   { nativeBackspace(); return true; }
+            if (keyCode == KeyEvent.KEYCODE_ENTER) { nativeEnter();     return true; }
+            final int u = event.getUnicodeChar();
+            if (u > 0) { nativeCommitText(String.valueOf((char) u)); return true; }
+            return super.onKeyDown(keyCode, event);
+        }
+
+        /*  A string injected in one go arrives as ACTION_MULTIPLE with the
+         *  characters attached rather than as separate key codes.  */
+        @Override public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
+            final String chars = event.getCharacters();
+            if (chars != null && chars.length() > 0) { nativeCommitText(chars); return true; }
+            return super.onKeyMultiple(keyCode, repeatCount, event);
+        }
+
         @Override public InputConnection onCreateInputConnection(EditorInfo out) {
             out.inputType = mNumeric
                 ? (InputType.TYPE_CLASS_NUMBER)

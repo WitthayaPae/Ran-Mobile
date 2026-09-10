@@ -67,10 +67,28 @@ t 1229 708 4                               # server "YourServer"
 t 1681 708 3                               # channel 0
 t 1792 919 8                               # connect
 
-t 1331 596 2                               # ID field
-t 1114 1108; t 1114 1108; t 1508 982; t 1508 982
+#  Credentials come from native/.login, which is gitignored and which this
+#  script never prints. Two lines: id, then password.
+#
+#  They used to be tapped in as keyboard positions. That depended on the
+#  emulator IME putting its keys where they were when the script was written,
+#  and LDPlayer now reports the keyboard shown while rendering nothing and
+#  delivering no keys - so the taps entered an empty string and the client
+#  answered "please enter name and password". Typing with `input text` needs no
+#  IME at all; RanActivity.ImeView handles injected key events for exactly this.
+CRED="$HERE/.login"
+if [ ! -f "$CRED" ]; then
+  echo "  no $CRED - create it with two lines: id, then password"
+  exit 1
+fi
+RAN_ID=$(sed -n 1p "$CRED")
+RAN_PW=$(sed -n 2p "$CRED")
+[ -n "$RAN_ID" ] && [ -n "$RAN_PW" ] || { echo "  $CRED needs two non-empty lines"; exit 1; }
+
+t 1331 591 2                               # ID field
+"$ADB" -s "$D" shell input text "$RAN_ID"; sleep 1
 t 1331 653 2                               # Pass field
-t 1448 982; t 1508 982; t 1569 982; t 1448 1024
+"$ADB" -s "$D" shell input text "$RAN_PW"; sleep 1
 t 1162 790 3                               # OK - the one login the server sees
 
 wait_log "blended: verts" 180 || exit 1
