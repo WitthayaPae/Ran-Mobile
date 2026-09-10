@@ -159,6 +159,99 @@ login on the live server to find out.
 
 The three probes are kept, armed by `/sdcard/ran/loadprobe`.
 
+### iOS ran at 7 fps — glBufferSubData into an in-flight buffer (fixed 2026-09-10)
+
+Once the framebuffer bug was fixed and the draws stopped being thrown away, the
+real cost appeared: 6.4-7.3 fps, `render 138-150 ms`, of which `submit 78-82 ms`.
+
+**Both candidate paths ran in the same frame, so they compare directly:**
+
+```
+FRAME buffer calls: orphan 0.0/f 0.00ms  map 64.3/f 28.89ms  sub 18.9/f 0.10ms  whole 0.0/f 0.00ms
+                                             449 us each          5.3 us each
+```
+
+`map` is the streaming ring, which falls back to `glBufferSubData` when there is
+no persistent mapping - and iOS reports `buffer_storage: no`. `sub` is
+`RanGLR_UpdateBufferRangeUnsync`, an unsynchronised mapped range. Same device,
+same driver, same frame, **85x apart**.
+
+**The larger half is charged at draw time,** which the two stages show:
+
+| | draws/frame | us per draw | ring writes/frame |
+|---|---|---|---|
+| character select | 275 | 35 | 13 |
+| in the world | 294 | 277 | 64 |
+
+Same call counts either side; the draws get eight times more expensive exactly
+where there are five times more buffer writes. The buffer is in flight - earlier
+draws in the same frame read it - so a plain `glBufferSubData` has to make that
+safe, and the wait lands on the next draw that touches the range.
+
+**Fix.** The ring already guarantees safety itself: it writes front to back and
+respecifies the whole store when it wraps, so a slice is never written while
+anything is reading it. That is exactly the promise `GL_MAP_UNSYNCHRONIZED_BIT`
+makes, so the write goes through a mapped range on Apple, with
+`glBufferSubData` still the fallback if the map is refused. Apple only - on an
+emulated GL a call is expensive and a stall is not, and the measurement there
+favours `glBufferSubData`.
+
+**Ruled out on the way, so they are not chased again:** 20 shader variants, all
+built before the slow frames, so no runtime recompilation; `glErr` is `0x0000`
+throughout, so nothing is being rejected.
+
+### iOS touch went to the overlay in the wrong space (fixed 2026-09-10)
+
+Reported as "the functionality not look like android".
+
+`RanTouch_Init` is handed `panel / RanGL_InputScale` - 1278x589 against a
+2556x1179 panel - and the overlay lays itself out and hit-tests in that space.
+Android divides once, up front, and gives the result to **both** consumers:
+
+```c
+const int scale = RanGL_InputScale();
+px = AMotionEvent_getX(event, i) / scale;
+if (RanTouch_PointerDown(pid, px, py)) return 1;   // overlay
+RanInput_PointerMove(px, py);                       // client
+```
+
+iOS applied the division only on the client's side and offered the overlay raw
+panel pixels, so every pad, skill button and camera control was hit-tested at
+twice its coordinate. `RanUI_PointInControl`, which `RanTouch_PointerDown`
+consults before claiming a press, was asked the same doubled question - so
+presses that should have fallen through to a client window did not, either.
+
+**Why it read as "renderscale 1" and hid.** The boot line printed `g_bufferDiv`
+under the label `renderscale`:
+
+```c
+LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, renderscale %d)",
+     g_panelWidth, g_panelHeight, bufferW, bufferH,
+     g_panelWidth / g_renderScale, g_panelHeight / g_renderScale,
+     g_renderScale / g_bufferDiv, g_bufferDiv);
+```
+
+`g_renderScale` is 2 on this phone; the number printed last is the buffer
+divisor, which is 1. The label now says what the number is.
+
+### The iOS patch page — still open, now instrumented (2026-09-10)
+
+Reported twice as not matching Android, and still not settled. What is known:
+
+* The four PNGs **are** in the shipped bundle - checked in the `.ipa`, not
+  inferred from a green build.
+* The page carries nothing to do once the data is current: the whole log holds
+  one `RanPatch` line, `patch base ...`, and the next line is already the GL
+  view. The page is on screen for a fraction of a second.
+* Screenshots over the USB tunnel take about five seconds, so they cannot catch
+  it. Three attempts came back **100% pure black** - not the page's `#0B0E10` -
+  which most likely means the phone's screen was off, and proves nothing either
+  way.
+
+Rather than guess again, the page now logs whether each image resolved
+(`page art ran_loading: 1600x1105`, or `NOT IN THE BUNDLE`) and how long it is
+on screen. One launch answers both.
+
 ### iOS lost the character, the interface and the touch pad (fixed 2026-09-10)
 
 Reported as "some skin load not correctly". A screenshot off the phone showed
