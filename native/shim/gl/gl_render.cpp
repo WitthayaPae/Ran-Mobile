@@ -1252,7 +1252,7 @@ extern "C" int RanGLR_BlitTexture(unsigned srcTex, int sx0, int sy0, int sx1, in
     std::map<GLuint, RanRT>::iterator s = g_rts.find(srcTex);
     if (s == g_rts.end() || !s->second.fbo) return 0;
 
-    GLuint dstFbo = 0;                       // 0 is the back buffer
+    GLuint dstFbo = RanGL_DefaultFramebuffer();   // no texture means the screen
     if (dstTex) {
         std::map<GLuint, RanRT>::iterator d = g_rts.find(dstTex);
         if (d == g_rts.end() || !d->second.fbo) return 0;
@@ -1265,7 +1265,7 @@ extern "C" int RanGLR_BlitTexture(unsigned srcTex, int sx0, int sy0, int sx1, in
                       GL_COLOR_BUFFER_BIT, linear ? GL_LINEAR : GL_NEAREST);
 
     //  Leave the binding where the renderer expects it.
-    glBindFramebuffer(GL_FRAMEBUFFER, g_rtActive ? g_rtFbo : 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_rtActive ? g_rtFbo : RanGL_DefaultFramebuffer());
     ++g_callsState;
     return 1;
 }
@@ -1275,7 +1275,7 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
 
     if (!glTex || w <= 0 || h <= 0) {
         if (g_rtActive) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
             g_rtActive = false;
         }
         glViewport(0, 0, RanGL_Width(), RanGL_Height());
@@ -1333,7 +1333,7 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
         GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (st != GL_FRAMEBUFFER_COMPLETE) {
             LOGE("render target %ux%u incomplete: 0x%04X", w, h, st);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
             g_rtActive = false;
             glViewport(0, 0, RanGL_Width(), RanGL_Height());
             return;

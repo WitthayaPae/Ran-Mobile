@@ -29,6 +29,7 @@ int  RanGL_DepthBits(void);
 // The EGL context belongs to one thread at a time. The loading screen renders
 // from its own thread, so the context is handed over for the duration.
 int  RanGL_HasContext(void);
+unsigned RanGL_DefaultFramebuffer(void);
 void RanGL_ProbePixel(int x, int y, const char *tag);
 void RanGL_ReleaseContext(void);
 int  RanGL_AcquireContext(void);

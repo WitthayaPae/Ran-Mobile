@@ -300,6 +300,15 @@ if(RAN_IOS)
   set_source_files_properties(${IOS_FONTS} PROPERTIES
     MACOSX_PACKAGE_LOCATION Resources/fonts)
 
+  #  The patch page's art, the same four files the Android launcher carries in
+  #  res/drawable-nodpi. They are bundled, NOT taken from Gui.rcc: the patcher
+  #  is what downloads Gui.rcc, so the page that shows the download cannot read
+  #  from it. Bundle root, so [UIImage imageNamed:] finds them.
+  file(GLOB IOS_ART ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/art/*.png)
+  target_sources(ran PRIVATE ${IOS_ART})
+  set_source_files_properties(${IOS_ART} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources)
+
   #  Icons go at the bundle ROOT, not in a subfolder: CFBundleIconFiles names
   #  them without a path and iOS looks for them nowhere else.
   file(GLOB IOS_ICONS ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/icons/*.png)

@@ -222,6 +222,11 @@ extern "C" int RanGL_HasContext ( void )
     return ( g_ctxHeld && pthread_equal ( g_ctxThread, pthread_self() ) ) ? 1 : 0;
 }
 
+//  On EAGL there is no default framebuffer: framebuffer 0 has no attachments
+//  and is incomplete, so binding it makes every following draw fail with
+//  GL_INVALID_FRAMEBUFFER_OPERATION and render nowhere. The screen is g_fbo.
+extern "C" unsigned RanGL_DefaultFramebuffer ( void ) { return g_fbo; }
+
 extern "C" void RanGL_ReleaseContext ( void )
 {
     if (!g_ctxHeld) return;

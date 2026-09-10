@@ -328,13 +328,25 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 //  ------------------------------------------------------------ patch screen
 //
 //  What RanLauncher's page is on Android: the only thing on screen until the
-//  data is up to date, and then it hands straight over to the game. Text only —
-//  the Android page's art is packed in Gui.rcc, which is itself part of what
-//  the patcher is downloading, so it cannot be drawn before the patch runs.
+//  data is up to date, and then it hands straight over to the game.
+//
+//  Laid out band for band with RanLauncher.java, because the player sees this
+//  page and then, a moment later, the client's own map loader draws the same
+//  one. LoadingThread.cpp works in a 1024x768 virtual space - ld_top 1024x128
+//  at (0,0), the art 1024x512 at (0,128), ld_under 1024x128 at (0,640) - so
+//  each band is 128/768 of the height, whatever the panel is.
+//
+//  The art is bundled with the app, exactly as the Android launcher bundles it
+//  in res/drawable-nodpi. An earlier note here said the page had to be text
+//  only because the art lives in Gui.rcc and the patcher is what downloads it.
+//  The first half is true and the second does not follow: Android carries the
+//  same four PNGs in its own package and draws them before a byte is fetched.
 
 @interface RanPatchViewController : UIViewController
 @property (nonatomic, strong) UILabel *status, *detail;
 @property (nonatomic, strong) UIProgressView *bar;
+@property (nonatomic, strong) UIImageView *art, *topBand, *underBand, *mark;
+@property (nonatomic, strong) UIStackView *band;
 @end
 
 @implementation RanPatchViewController
@@ -344,34 +356,93 @@ extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    self.view.backgroundColor = UIColor.blackColor;
+    //  #0B0E10, the Java's root colour.
+    self.view.backgroundColor = [UIColor colorWithRed:0x0B/255.0
+                                                green:0x0E/255.0
+                                                 blue:0x10/255.0 alpha:1.0];
+
+    //  Fill the middle band and crop rather than letterbox: black bars around
+    //  the art look like a broken asset.
+    self.art = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"ran_loading"]];
+    self.art.contentMode = UIViewContentModeScaleAspectFill;
+    self.art.clipsToBounds = YES;
+    [self.view addSubview:self.art];
+
+    //  The bands are stretched to width, as the client does - they are a frame,
+    //  not a picture, and their ends have to meet the edges of the screen.
+    self.topBand = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"ld_top"]];
+    self.topBand.contentMode = UIViewContentModeScaleToFill;
+    [self.view addSubview:self.topBand];
+
+    self.underBand = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"ld_under"]];
+    self.underBand.contentMode = UIViewContentModeScaleToFill;
+    [self.view addSubview:self.underBand];
+
+    //  In the top band, which is empty by design: it is where the client puts
+    //  the map name on its own loading screen.
+    self.mark = [[UIImageView alloc] initWithImage:[UIImage imageNamed:@"ran_mark"]];
+    self.mark.contentMode = UIViewContentModeScaleAspectFit;
+    [self.view addSubview:self.mark];
 
     self.status = [UILabel new];
-    self.status.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
-    self.status.textColor = UIColor.whiteColor;
+    self.status.font = [UIFont systemFontOfSize:15];
+    //  #F0F4F6
+    self.status.textColor = [UIColor colorWithRed:0xF0/255.0 green:0xF4/255.0
+                                             blue:0xF6/255.0 alpha:1.0];
     self.status.textAlignment = NSTextAlignmentCenter;
-
-    self.detail = [UILabel new];
-    self.detail.font = [UIFont systemFontOfSize:14];
-    self.detail.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
-    self.detail.textAlignment = NSTextAlignmentCenter;
-    self.detail.numberOfLines = 0;
+    self.status.text = @"Starting";
 
     self.bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
 
-    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:
-                            @[self.status, self.detail, self.bar]];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 12;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:60],
-        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-60],
-    ]];
+    self.detail = [UILabel new];
+    self.detail.font = [UIFont systemFontOfSize:12];
+    //  #AEB8BE
+    self.detail.textColor = [UIColor colorWithRed:0xAE/255.0 green:0xB8/255.0
+                                             blue:0xBE/255.0 alpha:1.0];
+    self.detail.textAlignment = NSTextAlignmentCenter;
+    self.detail.numberOfLines = 0;
+
+    //  The text and the bar sit in the bottom band. That band is already dark,
+    //  so it needs no scrim of its own.
+    self.band = [[UIStackView alloc] initWithArrangedSubviews:
+                    @[self.status, self.bar, self.detail]];
+    self.band.axis = UILayoutConstraintAxisVertical;
+    self.band.alignment = UIStackViewAlignmentFill;
+    self.band.spacing = 8;
+    [self.view addSubview:self.band];
 
     [self run];
+}
+
+//  Laid out here rather than with constraints: the bands are a fraction of the
+//  panel height, which is not known until the view has been sized, and it has
+//  to follow a rotation.
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+
+    const CGSize  size  = self.view.bounds.size;
+    const CGFloat bandH = roundf ( size.height * 128.0f / 768.0f );
+
+    self.art.frame       = CGRectMake ( 0, bandH, size.width, size.height - 2*bandH );
+    self.topBand.frame   = CGRectMake ( 0, 0, size.width, bandH );
+    self.underBand.frame = CGRectMake ( 0, size.height - bandH, size.width, bandH );
+
+    //  Sized off the band rather than in points, so it keeps its margin on any
+    //  panel. 0.82 is the Java's figure.
+    const CGFloat markH = roundf ( bandH * 0.82f );
+    self.mark.frame = CGRectMake ( roundf ( ( size.width - markH ) / 2.0f ),
+                                   roundf ( ( bandH - markH ) / 2.0f ), markH, markH );
+
+    //  24pt of side padding, matching the Java's dp(24).
+    const CGSize want = [self.band systemLayoutSizeFittingSize:
+                            CGSizeMake ( size.width - 48, 0 )
+                        withHorizontalFittingPriority:UILayoutPriorityRequired
+                              verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+    const CGFloat h = MIN ( want.height, bandH );
+    self.band.frame = CGRectMake ( 24,
+                                   size.height - bandH + roundf ( ( bandH - h ) / 2.0f ),
+                                   size.width - 48, h );
 }
 
 - (void)run

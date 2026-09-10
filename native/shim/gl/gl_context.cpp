@@ -368,6 +368,12 @@ extern "C" int RanGL_AcquireContext(void) {
     setSwapPreserved(!pthread_equal(pthread_self(), g_mainThread));
     return 1;
 }
+//  Which framebuffer object IS the screen. On EGL that is 0; on iOS the screen
+//  is a framebuffer the app creates around the CAEAGLLayer's renderbuffer, so
+//  the two platforms disagree and nothing may bind a literal 0 to go back to
+//  the display.
+extern "C" unsigned RanGL_DefaultFramebuffer(void) { return 0; }
+
 extern "C" int  RanGL_Width(void)  { return g_width; }
 extern "C" int  RanGL_Height(void) { return g_height; }
 
