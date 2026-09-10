@@ -159,6 +159,61 @@ login on the live server to find out.
 
 The three probes are kept, armed by `/sdcard/ran/loadprobe`.
 
+### The whole touch layer was Android-only (fixed 2026-09-10)
+
+Reported as "the functionality that we implement for all in the android did not
+work with the ios". It was one cause, not many.
+
+**How it was found, since guessing at "functionality" is useless.** Two
+mechanical diffs:
+
+1. **Symbol tables of the two shipped binaries** (`llvm-nm --defined-only` on
+   `libran.so` and the iOS Mach-O, filtered to `Ran*`). **No** function is
+   defined on Android and missing on iOS. Nothing is stubbed out, so the
+   divergence is not in the API surface.
+2. **What each platform layer calls.** `android_main.cpp` is 930 lines against
+   the iOS layer's 589, and the calls only Android makes name the gap exactly:
+
+   ```
+   gesturePress / gestureTick     the touch-to-mouse state machine
+   RanUI_PointInControl           left-click vs camera-turn
+   RanUI_MouseInControl
+   RanTouch_IsPinching            pinch cancelling a drag
+   RanUI_EndEditIfOutside         a tap outside an edit box closes the keyboard
+   RanInput_Key
+   RanApp_Shutdown / RanGL_Shutdown
+   ```
+
+**Cause.** The entire touch-to-mouse layer was a file-static inside
+`android_main.cpp`, which iOS does not compile. On iOS a touch pressed the left
+button on the way down and released it on the way up, and that was all there
+was: no long press for the right button, no 30 px drag threshold, no camera
+free-look, no window dragging, no pinch zoom, and the keyboard stayed up over
+half the screen because nothing ended the edit.
+
+**Fix.** Moved verbatim into `shim/platform/touch_gesture.cpp` - the rules, the
+constants (450 ms hold, 30 px slop) and the comments recording why each was
+chosen - and both platforms call `RanGesture_Down/Move/Up/Tick`. Copying it into
+the iOS layer would have worked today and diverged again the next time either
+side was touched; the shim is compiled by both, so it cannot.
+
+**Verified both ways.** Android on a real run after the move: login taps drive
+through the shared path, world entry, HUD, joystick, skill pad, chat and other
+players all correct. iOS at the link: `touch_gesture.cpp` is in a *static*
+library, so `RanGesture_*` is pulled into the binary only if something
+references it - and all five are in the shipped Mach-O. The symbol diff is now
+empty in both directions.
+
+**Left alone deliberately**, so they are not mistaken for oversights:
+`RanInput_Key` is scan-code key events a soft keyboard cannot produce - Enter is
+already mapped through `UIKeyInput` - and `RanApp_Shutdown` / `RanGL_Shutdown`
+are never reached on iOS because the system kills the process.
+
+**Worth keeping as a method:** when a platform "does not work", diff the defined
+symbols of the two binaries first (is anything missing?), then diff the calls
+each platform layer makes (is anything unwired?). Both are mechanical and
+neither depends on a hunch.
+
 ### iOS ran at 7 fps — glBufferSubData into an in-flight buffer (fixed 2026-09-10)
 
 Once the framebuffer bug was fixed and the draws stopped being thrown away, the
