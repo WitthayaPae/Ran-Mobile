@@ -54,7 +54,10 @@ public:
 
     STDMETHOD(GetCurrentPosition)(LPDWORD pPlay, LPDWORD pWrite)
     {
-        const unsigned at = m_voice ? RanAudio_VoicePosition ( m_voice ) : 0;
+        unsigned at = m_voice ? RanAudio_VoicePosition ( m_voice ) : 0;
+        //  DirectSound reports both cursors on a sample-frame boundary. Holding
+        //  to that here means no caller can ever be handed a partial frame.
+        if (m_fmt.nBlockAlign) at -= at % m_fmt.nBlockAlign;
         //  Every step the caller sees. A cursor that ever moves BACKWARDS
         //  without wrapping makes the streamer think a lap has passed and refill
         //  the whole buffer, which is the music racing through the track.

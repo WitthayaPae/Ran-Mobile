@@ -25,6 +25,28 @@
 
 #define LOGI(...) RanPlat_Log(RANLOG_INFO, "RAN", __VA_ARGS__)
 
+//  ----------------------------------------------------------- stall reporting
+//
+//  A hang here is always one thread parked on a lock or a join, and the only
+//  fact worth having is which call site. Every blocking wait below tries for a
+//  few seconds first, and on timeout names its own caller through dladdr before
+//  going on to block for real.
+#include <dlfcn.h>
+#define RAN_STALL_SECS 3
+static void ranWhere(char *out, size_t n, void *ra) {
+    Dl_info info;
+    if (ra && dladdr(ra, &info) && info.dli_sname)
+        snprintf(out, n, "%s+0x%x", info.dli_sname,
+                 (unsigned)((char *)ra - (char *)info.dli_saddr));
+    else
+        snprintf(out, n, "%p", ra);
+}
+static void ranDeadline(struct timespec *ts, int secs) {
+    clock_gettime(CLOCK_REALTIME, ts);
+    ts->tv_sec += secs;
+}
+#define RANSTALL(fmt, ...) RanPlat_Log(RANLOG_ERROR, "RanStall", fmt, ##__VA_ARGS__)
+
 static thread_local DWORD g_lastError = 0;
 
 // ------------------------------------------------------------------ time / misc
@@ -114,7 +136,19 @@ void DeleteCriticalSection(LPCRITICAL_SECTION cs) {
 }
 void EnterCriticalSection(LPCRITICAL_SECTION cs) {
     if (!cs->impl) InitializeCriticalSection(cs);
-    pthread_mutex_lock((pthread_mutex_t *)cs->impl);
+    pthread_mutex_t *m = (pthread_mutex_t *)cs->impl;
+#if defined(__ANDROID__)
+    if (pthread_mutex_trylock(m) == 0) return;
+    struct timespec ts; ranDeadline(&ts, RAN_STALL_SECS);
+    if (pthread_mutex_timedlock(m, &ts) == 0) return;
+    char where[256]; ranWhere(where, sizeof where, __builtin_return_address(0));
+    RANSTALL("EnterCriticalSection cs=%p blocked >%ds at %s",
+             (void *)cs, RAN_STALL_SECS, where);
+    pthread_mutex_lock(m);
+    RANSTALL("EnterCriticalSection cs=%p finally acquired at %s", (void *)cs, where);
+#else
+    pthread_mutex_lock(m);
+#endif
 }
 void LeaveCriticalSection(LPCRITICAL_SECTION cs) {
     if (cs->impl) pthread_mutex_unlock((pthread_mutex_t *)cs->impl);
@@ -141,9 +175,51 @@ struct RanHandle {
     std::string pattern, root;
 };
 
+//  Join watchdog: one detached thread per outstanding join, reporting the
+//  caller if the join is still outstanding a few seconds later.
+struct RanJoinWatch { void *handle; char where[256]; volatile bool done; };
+static void *ranJoinWatchProc(void *p) {
+    RanJoinWatch *w = (RanJoinWatch *)p;
+    Sleep(RAN_STALL_SECS * 1000);
+    if (!w->done)
+        RANSTALL("join on thread handle %p blocked >%ds at %s",
+                 w->handle, RAN_STALL_SECS, w->where);
+    else
+        delete w;
+    return NULL;
+}
+static thread_local RanJoinWatch *t_joinWatch = NULL;
+static void ranWatchJoin(void *hh, const char *where) {
+    RanJoinWatch *w = new RanJoinWatch;
+    w->handle = hh; w->done = false;
+    snprintf(w->where, sizeof w->where, "%s", where);
+    t_joinWatch = w;
+    pthread_t th;
+    if (pthread_create(&th, NULL, ranJoinWatchProc, w) == 0) pthread_detach(th);
+    else { t_joinWatch = NULL; delete w; }
+}
+static void ranWatchDone() {
+    if (t_joinWatch) { t_joinWatch->done = true; t_joinWatch = NULL; }
+}
+
 struct ThreadStart { DWORD (*fn)(LPVOID); LPVOID arg; unsigned (*fn2)(void *); void (*fn3)(void *); };
 static void *threadTrampoline(void *p) {
     ThreadStart *ts = (ThreadStart *)p;
+    //  Name the thread after the routine it runs. /proc/<pid>/task/<tid>/comm
+    //  then says which worker is spinning without a debugger on the device.
+    {
+        void *fn = ts->fn ? (void *)ts->fn
+                 : ts->fn2 ? (void *)ts->fn2 : (void *)ts->fn3;
+        char where[256]; ranWhere(where, sizeof where, fn);
+#if defined(__ANDROID__)
+        RanPlat_Log(RANLOG_INFO, "RanThread", "tid=%d runs %s",
+                    (int)gettid(), where);
+        size_t len = strlen(where);
+        //  comm holds 15 characters; the tail of a mangled name is the part
+        //  that identifies it.
+        pthread_setname_np(pthread_self(), len > 15 ? where + len - 15 : where);
+#endif
+    }
     if (ts->fn)  ts->fn(ts->arg);
     else if (ts->fn2) ts->fn2(ts->arg);
     else if (ts->fn3) ts->fn3(ts->arg);
@@ -292,7 +368,17 @@ DWORD WaitForSingleObject(HANDLE hh, DWORD ms) {
         if (ms == INFINITE) {
             if (!h->threadConsumed) {
                 h->threadConsumed = true;
+#if defined(__ANDROID__)
+                //  bionic at this API level has no timed join, so a watchdog
+                //  says who is waiting if the join does not come back.
+                char where[256];
+                ranWhere(where, sizeof where, __builtin_return_address(0));
+                ranWatchJoin(hh, where);
                 pthread_join(h->thread, NULL);
+                ranWatchDone();
+#else
+                pthread_join(h->thread, NULL);
+#endif
             }
             return WAIT_OBJECT_0;
         }
@@ -304,7 +390,20 @@ DWORD WaitForSingleObject(HANDLE hh, DWORD ms) {
     if (!h->signalled) {
         if (ms == 0) r = WAIT_TIMEOUT;
         else if (ms == INFINITE) {
-            while (!h->signalled) pthread_cond_wait(&h->cond, &h->mtx);
+            {
+                struct timespec ts; ranDeadline(&ts, RAN_STALL_SECS);
+                bool told = false;
+                while (!h->signalled) {
+                    if (pthread_cond_timedwait(&h->cond, &h->mtx, &ts) != 0 && !told) {
+                        told = true;
+                        char where[256];
+                        ranWhere(where, sizeof where, __builtin_return_address(0));
+                        RANSTALL("wait on event %p blocked >%ds at %s",
+                                 hh, RAN_STALL_SECS, where);
+                        ranDeadline(&ts, 3600);
+                    }
+                }
+            }
         } else {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);

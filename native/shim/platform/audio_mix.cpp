@@ -458,7 +458,12 @@ extern "C" unsigned RanAudio_VoicePosition ( int voice )
             while (pos < 0.0) pos += ringFrames;
         } else if (pos < 0.0) pos = 0.0;
 
-        at = (unsigned) ( pos * frameBytes );
+        //  Whole frames only. A cursor part way through a frame is not a thing
+        //  real hardware reports, and the client subtracts two of these to size
+        //  a decode request: a request that is not a multiple of the frame size
+        //  leaves a tail ov_read can never satisfy, and it answers OV_EINVAL
+        //  for as long as it is asked.
+        at = (unsigned) ( (long long) pos ) * frameBytes;
     }
     pthread_mutex_unlock ( &g_lock );
     return at;

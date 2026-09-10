@@ -111,6 +111,124 @@ the change was structural.
 Kept at the top because it is the list that matters. Ordered by what blocks
 what, not by when it was found.
 
+### The loading screen drew dark and full of holes (fixed 2026-09-10)
+
+The zone art rendered as a dim stipple - the scene recognisable, most pixels
+black - on both platforms. Traced without a single guess, and the sequence is
+worth keeping because each step ruled out a whole class:
+
+1. **Per-draw pixel probe.** `RanGL_ProbePixel` reads the framebuffer back from
+   inside the loading thread, which renders outside the frame path every other
+   diagnostic hangs off. Probing after each of the six draws showed the art
+   draw writing `231E15` and nothing after it changing that: not a later draw
+   painting over the art.
+2. **Whole-texture dump.** `RanD3D_DumpTexture` attaches an uploaded texture to
+   an FBO and writes the entire level out as raw RGBA. `loading_054.dds` came
+   back **perfect** - full brightness, 0.1% black texels, no zero alpha. Not the
+   DXT1 decode, not the upload.
+3. **Real GL state, not the shim's record of it.** `RanGL_ProbeState` asks GL
+   itself. Everything was clean - `BLEND=0`, no alpha test, `colorMask=1111`,
+   `samples=0`, gamma off, full viewport and scissor, `colorOp=SELECTARG1(TEXTURE)`
+   - except **`DEPTH_TEST=1, depthMask=1`**.
+
+Two defects, both real:
+
+* **`D3DCLEAR_TARGET` without `D3DCLEAR_ZBUFFER`.** The loading loop clears only
+  colour, and it inherits `D3DRS_ZENABLE` from the stage that was on screen when
+  the change began. It was testing 2D art against the depth of a scene that no
+  longer exists.
+* **The pre-transformed depth mapping was wrong for GL.** D3D clip z is `[0,w]`,
+  GL's is `[-w,w]`, and the vertex shader passed a `D3DFVF_XYZRHW` z straight
+  through:
+
+  ```glsl
+  gl_Position = vec4(x, y, aPos.z, 1.0);          // z = 0 lands at depth 0.5
+  gl_Position = vec4(x, y, aPos.z * 2.0 - 1.0, 1.0);   // z = 0 is the near plane
+  ```
+
+  A pre-transformed z of 0 means *the near plane* in D3D; unconverted it lands
+  at window depth 0.5, in the middle of whatever the last scene left behind.
+  This affected every 2D draw in the client, and only bit where a stale depth
+  buffer was still being tested against.
+
+Both fixed; the loading screen now draws the full bright art with its bands,
+map-name banner, hint icon and spinner, and the world behind it is unchanged
+(269 draws/frame, HUD and chat correct). The two fixes went in together, so
+which one alone would have been enough is not measured - and is not worth a
+login on the live server to find out.
+
+The three probes are kept, armed by `/sdcard/ran/loadprobe`.
+
+### World entry hung forever — the BGM decoder (fixed 2026-09-10)
+
+Reported as "it did not even get to the real map world like before", and that
+was right: only `cha_select.wld` and `log_in.wld` ever loaded. The client
+logged `ChangeStage entered, to=2`, started the loading thread, and then the
+game thread produced no further output — for as long as the process was left
+running.
+
+**Measured, on the live stuck process, without a debugger:**
+
+* `/proc/<pid>/task/<tid>/stat` — the game thread was `S` with **zero** utime
+  growth over 5 s, and `/status` showed **zero** context switches in the same
+  window. Not a slow load and not a `Sleep` loop: a hard futex block.
+* One thread, though, was `R` at a full core and had been since login
+  (`utime` ≈ wall clock).
+
+Neither `run-as` nor root is available on LDPlayer, so `syscall`, `stack` and
+`debuggerd` are all denied. The shim was made to name the block itself
+instead, and that instrumentation is worth keeping:
+
+* `EnterCriticalSection` now tries the lock, then a 3 s `pthread_mutex_timedlock`,
+  and on timeout logs its own caller resolved through `dladdr` before blocking
+  for real. Same for the event wait and, via a watchdog thread, `pthread_join`.
+* `threadTrampoline` names every thread after the routine it runs, so
+  `/proc/<pid>/task/<tid>/comm` identifies a spinning worker on a device with
+  no debugger.
+* `DxGlobalStage::ChangeStage`, `DxStage::SetActive` and
+  `DxGameStage::InitDeviceObjects` log each step they enter.
+
+One run then said it outright:
+
+```
+E RanStall: EnterCriticalSection cs=0x7adb10040508 blocked >3s at
+           _ZN10DxBgmSound17UnLoadSoundBufferEv+0x33
+```
+
+and `comm` on the spinning thread read `laySoundEPv+0x0` — `DxBgmSound::PlaySound`,
+the music streaming thread, holding `m_csBuffer` and never giving it back.
+
+**Root cause,** `DxBgmSound::GetPCMBlock`:
+
+```cpp
+while ( bytes_to_read > 0 )
+{
+    ret = ov_read ( ... );
+    if      ( ret == 0 ) { ...; break; }
+    else if ( ret <  0 ) { /* ignore the hole and read again */ }
+    else                 { bytes_to_read -= ret; }
+}
+```
+
+A negative `ov_read` leaves `bytes_to_read` untouched. Ignoring a *transient*
+hole is what the PC code intends, but a permanent error makes every call fail
+and the loop never advances — an infinite spin. It runs under `m_csBuffer`
+(added when the buffer-release race was fixed), so the next track change parks
+the game thread in `UnLoadSoundBuffer` forever, and the world never loads.
+
+The measured error is **-131, `OV_EBADPACKET`**, with 2 bytes of the block
+still wanted.
+
+**Fix:** count consecutive negatives, and after 64 give up on the block —
+return what was decoded and report no more data, which is a path the caller
+already handles. Guarded by `RAN_MOBILE`; the log names the error code.
+
+Verified: one login walks straight into สถาบัน SG at 59/6, HUD, chat and NPC
+dialog drawing, 31 fps, and no thread above idle CPU.
+
+**Left open:** *why* `ov_read` returns `OV_EBADPACKET` at all. A bounded retry
+stops the hang but the block it drops is a real audio gap.
+
 ### iOS
 
 1. **First compile.** Every file under `native/platform/ios/`, plus

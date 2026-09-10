@@ -122,7 +122,11 @@ const char *kVS =
     "        // screen pixels -> clip space, with D3D's downward Y flipped\n"
     "        float x = (aPos.x / uViewport.x) * 2.0 - 1.0;\n"
     "        float y = 1.0 - (aPos.y / uViewport.y) * 2.0;\n"
-    "        gl_Position = vec4(x, y, aPos.z, 1.0);\n"
+    "        // D3D clip z is [0,w], GL clip z is [-w,w]: a pre-transformed\n"
+    "        // z of 0 means the near plane, and passed through unchanged it\n"
+    "        // lands at window depth 0.5 - the middle of whatever the last\n"
+    "        // scene left in the depth buffer.\n"
+    "        gl_Position = vec4(x, y, aPos.z * 2.0 - 1.0, 1.0);\n"
     "        vWorldPos = vec3(0.0);\n"
     "        vNormal = vec3(0.0, 1.0, 0.0);\n"
     "    } else if (uIndexedBlend == 1) {\n"
@@ -3636,6 +3640,92 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name) {
         if (g_notedTex[i].gl == glTex) { g_notedTex[i].name = name; return; }
     NotedTex t; t.gl = glTex; t.name = name;
     g_notedTex.push_back(t);
+}
+
+//  Read one pixel back out of whatever is currently being drawn into, and say
+//  what it is. The loading screen renders from its own thread and outside the
+//  frame path the other probes hang off, so it needs a probe it can call
+//  itself, once per draw, to find which draw blackens the screen.
+//  What GL is actually configured to do, read from GL itself rather than from
+//  the shim's own record of what it meant to set. The two disagreeing is
+//  exactly the class of bug this is for.
+extern "C" void RanGL_ProbeState(const char *tag) {
+    GLint v[4] = { 0, 0, 0, 0 };
+    GLboolean m[4] = { 0, 0, 0, 0 };
+    LOGI("gl state [%s]:", tag ? tag : "?");
+    LOGI("  BLEND=%d src=%d dst=%d  DEPTH_TEST=%d depthMask=%d",
+         (int)glIsEnabled(GL_BLEND),
+         (glGetIntegerv(GL_BLEND_SRC_RGB, v), v[0]),
+         (glGetIntegerv(GL_BLEND_DST_RGB, v), v[0]),
+         (int)glIsEnabled(GL_DEPTH_TEST),
+         (glGetBooleanv(GL_DEPTH_WRITEMASK, m), (int)m[0]));
+    glGetBooleanv(GL_COLOR_WRITEMASK, m);
+    LOGI("  colorMask=%d%d%d%d  DITHER=%d  SCISSOR=%d  CULL=%d  STENCIL=%d",
+         (int)m[0], (int)m[1], (int)m[2], (int)m[3],
+         (int)glIsEnabled(GL_DITHER), (int)glIsEnabled(GL_SCISSOR_TEST),
+         (int)glIsEnabled(GL_CULL_FACE), (int)glIsEnabled(GL_STENCIL_TEST));
+    LOGI("  SAMPLE_ALPHA_TO_COVERAGE=%d SAMPLE_COVERAGE=%d samples=%d",
+         (int)glIsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE),
+         (int)glIsEnabled(GL_SAMPLE_COVERAGE),
+         (glGetIntegerv(GL_SAMPLES, v), v[0]));
+    glGetIntegerv(GL_SCISSOR_BOX, v);
+    LOGI("  scissorBox=(%d,%d %dx%d)", v[0], v[1], v[2], v[3]);
+    glGetIntegerv(GL_VIEWPORT, v);
+    LOGI("  viewport=(%d,%d %dx%d)", v[0], v[1], v[2], v[3]);
+    LOGI("  uniforms: lighting=%d gammaOn=%d alphaTest=%lu ref=%lu stage1=%d fog=%d",
+         g_lightingOn, g_gammaOn, (unsigned long)g_dsATest,
+         (unsigned long)g_dsARef, g_stage1Mode, g_fogMode);
+    LOGI("  colorOp=%lu arg1=%lu arg2=%lu  alphaOp=%lu arg1=%lu arg2=%lu",
+         (unsigned long)g_colorOp, (unsigned long)g_colorArg1, (unsigned long)g_colorArg2,
+         (unsigned long)g_alphaOp, (unsigned long)g_alphaArg1, (unsigned long)g_alphaArg2);
+}
+
+extern "C" int RanGLR_TextureSize(unsigned glTex, int *w, int *h);
+
+//  Read a whole uploaded texture back and write it out as raw RGBA, so what
+//  the GPU actually holds can be compared byte for byte against the file it
+//  came from. Four sampled texels cannot tell a decode bug from a draw bug.
+extern "C" void RanD3D_DumpTexture(const char *want) {
+    if (!want) return;
+    for (size_t i = 0; i < g_notedTex.size(); ++i) {
+        if (g_notedTex[i].name.find(want) == std::string::npos) continue;
+
+        const unsigned tex = g_notedTex[i].gl;
+        int w = 0, h = 0;
+        RanGLR_TextureSize(tex, &w, &h);
+        if (w <= 0 || h <= 0) { LOGI("dump %s: no size", g_notedTex[i].name.c_str()); continue; }
+
+        GLuint fbo = 0; GLint prevFbo = 0;
+        glGenFramebuffers(1, &fbo);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            std::vector<unsigned char> px((size_t)w * h * 4, 0);
+            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, &px[0]);
+            std::string out = g_notedTex[i].name + ".raw";
+            FILE *f = RanPlat_DiagOpenWrite(out.c_str());
+            if (f) {
+                fwrite(&px[0], 1, px.size(), f);
+                fclose(f);
+                LOGI("dump %s: %dx%d RGBA written", out.c_str(), w, h);
+            } else {
+                LOGI("dump %s: could not open the output", out.c_str());
+            }
+        } else {
+            LOGI("dump %s: not readable", g_notedTex[i].name.c_str());
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prevFbo);
+        glDeleteFramebuffers(1, &fbo);
+    }
+}
+
+extern "C" void RanGL_ProbePixel(int x, int y, const char *tag) {
+    unsigned char px[4] = { 0, 0, 0, 0 };
+    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    LOGI("pixel probe %-12s (%d,%d) = %02X%02X%02X%02X  glErr=0x%04X",
+         tag ? tag : "?", x, y, px[0], px[1], px[2], px[3],
+         (unsigned)glGetError());
 }
 
 extern "C" void RanD3D_ProbeTextures(void) {
