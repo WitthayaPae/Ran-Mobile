@@ -4548,6 +4548,41 @@ is what to do before touching any code.
 **Worth doing routinely from now on:** pull this file after a session on the
 device. It is 5,740 lines that no instrument here was showing.
 
+## The zone loading screen renders through a black checkerboard (2026-09-10)
+
+Found while verifying login end to end. The zone loading art for
+`< สถาบัน SG >` draws dark and covered in a regular per-pixel black
+checkerboard. **Android and iOS both**, so it is not platform-specific.
+
+Ground truth: `CLIENT/textures/gui/loading_054.dds` decoded independently in
+node is **a clean, bright daytime plaza**. What reaches the screen is neither
+clean nor bright.
+
+Ruled out by measurement, not by argument:
+
+* **Not the art.** The file decodes correctly outside the client.
+* **Not the DXT1 decoder.** The file is DXT1 1024x512. 10.2% of its 32,768
+  blocks use punch-through mode (`c0 <= c1`), and **zero of those blocks use
+  index 3**, so no texel should be transparent. The shim's
+  `decodeColorBlock` implements the `c0 > c1 || !dxt1Alpha` rule correctly.
+* **Not the framebuffer.** The map name, the HINT badge and the Loading spinner
+  drawn over the same quad are clean. Only the textured quad is speckled.
+* **Not multisample coverage.** The shim has no `SAMPLE_ALPHA_TO_COVERAGE`,
+  `glSampleCoverage` or `MULTISAMPLEMASK` path at all.
+* **Not our own splash path.** `RanSplash` draws boot art from the same kind of
+  DDS cleanly, on the iPhone included.
+
+What is known about the drawing side: `LoadingThread.cpp:130 Render()` sets
+**no render state at all** - it does `SetTexture`, `SetStreamSource`,
+`SetFVF`, `DrawPrimitive` and nothing else, so it inherits whatever state the
+previous frame left. It also runs on the loading thread through the EGL context
+handover, which is why `drawlimit` cannot bisect it - the same blind spot noted
+for the touch overlay.
+
+**Next step:** instrument the blend, alpha-test and texture-stage state at the
+moment that quad is drawn. That is the one place not yet observable, and a
+leftover state from the previous frame is the remaining candidate.
+
 ## Still open
 
 ### 1. Confirm the frame-rate work on the tablet — measured, partly
