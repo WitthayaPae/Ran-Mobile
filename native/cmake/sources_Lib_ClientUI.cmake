@@ -128,6 +128,7 @@ set(Lib_ClientUI_SOURCES
   ${RAN_SRC}/Lib_ClientUI/Interface/FriendWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/FriendWindowBlockPage.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/FriendWindowNormalPage.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/FunctionOption.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/GambleAgainBox.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/GambleAnimationBox.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/GambleBox.cpp
@@ -199,6 +200,7 @@ set(Lib_ClientUI_SOURCES
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemMove.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/MobileEnhanceWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/MobileItemSheet.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/MobileChatMacroBar.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemPreviewWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemPreviewWindowRender.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/ItemRebuild.cpp
