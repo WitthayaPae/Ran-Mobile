@@ -86,6 +86,10 @@ DWORD paletteLimit() {
 //  conversion can report too).
 extern int g_logLoads;
 
+//  ...and the on-demand form, for the same reason.
+bool RanMeshLoadVerbose ();
+extern const char *g_meshLoadFile;
+
 struct Influence { DWORD vertex; float weight; };
 
 struct Bone {
@@ -785,13 +789,14 @@ HRESULT RanSkinInfo::ConvertToBlendedMesh(LPD3DXMESH pMesh, DWORD Options, const
         }
     }
 
-    if (g_logLoads > 0) {
+    if (g_logLoads > 0 || RanMeshLoadVerbose()) {
         DWORD unweighted = 0, maxInfl = 0;
         for (DWORD v = 0; v < numVerts; ++v) {
             if (infl[v].empty()) ++unweighted;
             if (infl[v].size() > maxInfl) maxInfl = (DWORD)infl[v].size();
         }
-        LOGI("blended: verts %u->%u faces %u groups %u numInfl %u maxInfl %u unweighted %u pruned %u",
+        LOGI("blended: %s verts %u->%u faces %u groups %u numInfl %u maxInfl %u unweighted %u pruned %u",
+             g_meshLoadFile,
              numVerts, (unsigned)vertexRemap.size(), numFaces, (unsigned)combos.size(),
              numInfl, maxInfl, unweighted, g_prunedFaces - prunedBefore);
     }
@@ -870,6 +875,20 @@ bool readSkinWeights(const XNode *n, std::string &boneName,
 //  One-shot load reporting: the first few files loaded print what came out, so
 //  the counts can be checked against an independent read of the same file.
 int g_logLoads = 6;
+
+//  ...and every file, on demand.
+//
+//  Six is enough to check the loader against a hand read of a known file. It is
+//  no use at all when the question is which of two hundred pieces loaded during
+//  a crowd spawn is the one that eats the process: put a file called meshload
+//  under the diagnostic root and every mesh reports itself, with the name of
+//  the file it came out of.
+const char *g_meshLoadFile = "(none)";
+
+bool RanMeshLoadVerbose ()
+{
+    return RanPlat_DiagExists ( "meshload" ) != 0;
+}
 
 //  Frames counted per file, for the same check.
 int g_frameCount = 0;
@@ -972,7 +991,7 @@ struct Loader {
                     adjacency ? (const DWORD *)adjacency->GetBufferPointer() : NULL,
                     skin, &container);
 
-                if (g_logLoads) {
+                if (g_logLoads || RanMeshLoadVerbose()) {
                     DWORD bones = skin ? skin->GetNumBones() : 0;
                     LOGI("  mesh frame=%s name=%s verts=%u faces=%u bones=%u fvf=%08X",
                          node->name.empty() ? "(none)" : node->name.c_str(),
@@ -1061,9 +1080,10 @@ HRESULT loadHierarchy(const void *bytes, size_t size, DWORD options, LPDIRECT3DD
         }
     }
 
-    if (g_logLoads > 0) {
-        --g_logLoads;
-        LOGI("loaded hierarchy: %d frames, %u mesh containers", g_frameCount, loader.meshes);
+    if (g_logLoads > 0 || RanMeshLoadVerbose()) {
+        if (g_logLoads > 0) --g_logLoads;
+        LOGI("loaded hierarchy: %s %d frames, %u mesh containers",
+             g_meshLoadFile, g_frameCount, loader.meshes);
     }
 
     delete file;
@@ -1149,6 +1169,13 @@ extern "C" HRESULT WINAPI D3DXLoadMeshHierarchyFromXA(
     const size_t got = fread(&bytes[0], 1, (size_t)size, f);
     fclose(f);
     if (got != (size_t)size) return D3DXERR_INVALIDDATA;
+
+    //  Remembered for the per-mesh lines below, which run deep inside the
+    //  parser where the file name is long gone.
+    static std::string s_name;
+    s_name = pFilename;
+    g_meshLoadFile = s_name.c_str();
+    if (RanMeshLoadVerbose()) LOGI("loading %s (%ld bytes)", pFilename, size);
 
     return D3DXLoadMeshHierarchyFromXInMemory(&bytes[0], (DWORD)bytes.size(), Options, pD3DDevice,
                                               pAlloc, pUserDataLoader, ppFrameHierarchy,

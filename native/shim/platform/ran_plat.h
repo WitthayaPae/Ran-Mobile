@@ -50,6 +50,11 @@ const char *RanPlat_FontFallback ( void );      //  full path, ready to open
 //  Is the flag set? (the file exists)
 int         RanPlat_DiagExists ( const char *name );
 
+//  Watch the resident size and, if it runs away, abort the thread that armed
+//  this - so the runaway loop shows up as a backtrace instead of a SIGKILL.
+void        RanPlat_WatchdogArm ( int limitMB );
+void        RanPlat_WatchdogDisarm ( void );
+
 //  Open a flag file for reading, or NULL. The caller closes it.
 FILE       *RanPlat_DiagOpen ( const char *name );
 

@@ -62,6 +62,7 @@ extern "C" int  RanUI_PointInControl(int x, int y);
 extern "C" void RanUI_EndEditIfOutside(int x, int y);
 extern "C" int  RanTouch_IsPinching(void);
 extern "C" void RanTouch_Frame(float elapsedSeconds);
+extern "C" void RanUIPan_Update(void);
 extern "C" void RanInput_Key(int scanCode, int down);
 extern "C" void RanInput_KeyTap(int scanCode);
 
@@ -606,11 +607,47 @@ void goFullscreen(android_app *app) {
     app->activity->vm->DetachCurrentThread();
 }
 
+//  Keeping Android's input queue moving while the frame loop is blocked.
+//
+//  A stage change blocks the loop thread for as long as the load takes:
+//
+//      DxGlobalStage::ChangeStage -> NLOADINGTHREAD::EndThread -> Sleep
+//
+//  and while it sits there nothing drains the input queue, because on a
+//  NativeActivity that is this same thread's job. Android gives a window five
+//  seconds to consume a touch and ten to consume a key; a zone load is longer
+//  than that, so a player who taps anything while the map is loading gets
+//
+//      ANR in com.ran.native ... Waited 10000ms for KeyEvent
+//      Killing 27974:com.ran.native (adj 0): user request after error
+//
+//  - the "app isn't responding" dialog, and Close sends SIGKILL. Measured on
+//  the Tab S9 on 2026-09-11: the game thread was healthy at 120 fps right up
+//  to the kill, and the Java main thread was idle in its looper. Nothing had
+//  crashed; the events were simply never picked up.
+//
+//  So the shim's Sleep calls this, and the queue keeps moving no matter how
+//  long the client blocks. Input only: an app command can destroy the surface,
+//  and doing that halfway through a stage change is a different bug. Those stay
+//  queued for the real loop, which is why the walk stops at the first one.
+bool      g_pumpBlocking = false;
+pthread_t g_loopThread;
+bool      g_loopThreadSet = false;
+
 // Touch becomes a mouse button. The pointer is moved before the press because
 // the UI hit-tests using the current position and a touch delivers both at the
 // same instant.
 int32_t onInputEvent(android_app *app, AInputEvent *event) {
     (void)app;
+
+    //  Pumped while the frame loop is blocked: swallow it.
+    //
+    //  These are events that arrived during a stage change. The client is
+    //  half way through tearing one world down and building the next, and
+    //  handing it a tap then is asking for a crash; the point of reading them
+    //  at all is only to tell Android they were delivered. Returning 1 is what
+    //  finishes the event.
+    if (g_pumpBlocking) return 1;
     const int32_t type = AInputEvent_getType(event);
 
     if (type == AINPUT_EVENT_TYPE_MOTION) {
@@ -774,8 +811,29 @@ void onAppCmd(android_app *app, int32_t cmd) {
 
 } // namespace
 
+//  Called from Sleep on any thread; does something only on the one that owns
+//  the looper. See the note above g_pumpBlocking.
+extern "C" void RanPlat_PumpEvents(void) {
+    if (!g_app || !g_loopThreadSet)                     return;
+    if (!pthread_equal(pthread_self(), g_loopThread))   return;
+    if (g_pumpBlocking)                                 return;   // no recursion
+
+    g_pumpBlocking = true;
+    for (int i = 0; i < 16; ++i) {
+        int events;
+        android_poll_source *source = NULL;
+        if (ALooper_pollOnce(0, NULL, &events, (void **)&source) < 0) break;
+        if (!source) continue;
+        if (source->id != LOOPER_ID_INPUT) break;   // app commands wait for the loop
+        source->process(g_app, source);
+    }
+    g_pumpBlocking = false;
+}
+
 extern "C" void android_main(android_app *app) {
     g_app = app;
+    g_loopThread = pthread_self();
+    g_loopThreadSet = true;
     AppState state;
     app->userData = &state;
     app->onAppCmd = onAppCmd;
@@ -829,6 +887,11 @@ extern "C" void android_main(android_app *app) {
                 s_last = now;
                 RanTouch_Frame(dt);
             }
+            //  How far the 2D layer has to slide so the field being typed
+            //  into is not under the keyboard. Once a frame, before anything
+            //  draws or any touch is handled, so the draw and the hit test
+            //  agree on the same number.
+            RanUIPan_Update();
             RanGesture_Tick();
             //  One button transition per frame, so every press and release is
             //  visible to the client for at least one frame.

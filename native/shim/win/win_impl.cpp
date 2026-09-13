@@ -67,7 +67,18 @@ DWORD timeGetTime(void)  { return (DWORD)nowMs(); }
 DWORD timeBeginPeriod(UINT) { return 0; }
 DWORD timeEndPeriod(UINT)   { return 0; }
 
+//  The platform's event queue, pumped from every sleep.
+//
+//  Win32 Sleep does not pump anything, and on a desktop nothing needs it - the
+//  message loop is a different thread's problem. On Android the loop thread
+//  owns the input queue, so any blocking wait it does is a window in which
+//  Android sees the app ignoring input and eventually offers to kill it. The
+//  client blocks like that on every stage change. Defined by each platform
+//  layer; it answers immediately unless it is called on the loop thread.
+void RanPlat_PumpEvents(void);
+
 void Sleep(DWORD ms) {
+    RanPlat_PumpEvents();
     if (ms == 0) { sched_yield(); return; }
     struct timespec ts = { (time_t)(ms / 1000), (long)((ms % 1000) * 1000000L) };
     nanosleep(&ts, NULL);

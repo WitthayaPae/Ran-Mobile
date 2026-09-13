@@ -265,6 +265,15 @@ extern "C" void RanPath_LogStats(void) {
 extern "C" FILE *ran_fopen(const char *path, const char *mode) {
     const char *real = RanPath_Resolve(path);
     FILE *f = fopen(real, mode);
+
+    //  Every open, on demand.
+    //
+    //  When a load walks off a cliff - reads a length out of a record and asks
+    //  for gigabytes - the last file it opened is the one to look at, and that
+    //  name exists nowhere else. Gated on the same meshload switch as the mesh
+    //  reporting so the two read as one trace.
+    if (RanPlat_DiagExists("meshload"))
+        RanPlat_Log(RANLOG_INFO, "RanOpen", "open %s%s", path, f ? "" : "  FAILED");
     //  Successes are capped (a boot opens thousands of files); FAILURES are
     //  always reported - a missing file is the single most common cause of an
     //  empty screen, and capping those hid several already.

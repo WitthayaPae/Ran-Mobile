@@ -190,9 +190,88 @@ extern "C" const char *RanPlat_DiagPath ( const char *name )
     return out;
 }
 
+//  Does a diagnostic file exist?
+//
+//  Cached, because the answer costs far more than it looks. The diagnostic root
+//  is on /sdcard, which on modern Android is FUSE: every access() is a round
+//  trip to a userspace daemon. Measured on the Tab S9, one call is about
+//  330 us - a third of a millisecond, per call.
+//
+//  That was not theory. DxEffectMesh::Render asked "does effmesh exist?" once
+//  per effect mesh per frame, and with a weapon and a buff card on one
+//  character that is ten calls: 3.3 ms of a 10 ms frame, spent entirely on
+//  asking the filesystem about a file that was not there. It read as "effects
+//  are expensive", and it was the instrument all along.
+//
+//  Answers from a small table and re-asks each name at most twice a second, so
+//  a file dropped in still takes effect while you are looking at the screen,
+//  and a call in a draw loop costs a string compare.
+#include <time.h>
+
 extern "C" int RanPlat_DiagExists ( const char *name )
 {
-    return access ( RanPlat_DiagPath ( name ), F_OK ) == 0 ? 1 : 0;
+    if ( !name || !*name ) return 0;
+
+    //  Room for every diagnostic name the client uses, with slack.
+    //
+    //  Sixteen was not enough and the overflow was silent: the table filled,
+    //  every name after it fell through to the live access(), and the whole
+    //  point of the cache was lost for exactly the names that arrived last.
+    //  A sampling profile put 14.8% of the process in __faccessat, under
+    //  DxEffectMesh::Render, which is what "the weapon effect is expensive"
+    //  turned out to be. There are 26 names today.
+    struct Entry { char name[32]; int present; long checkedMs; };
+    static Entry s_cache[64];
+    static int   s_count = 0;
+    static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
+
+    struct timespec ts;
+    clock_gettime ( CLOCK_MONOTONIC, &ts );
+    const long nowMs = (long)( ts.tv_sec * 1000 + ts.tv_nsec / 1000000 );
+
+    pthread_mutex_lock ( &s_lock );
+
+    Entry *e = NULL;
+    for ( int i = 0; i < s_count; ++i ) {
+        if ( strcmp ( s_cache[i].name, name ) == 0 ) { e = &s_cache[i]; break; }
+    }
+    if ( !e ) {
+        //  A name that does not fit the table is answered live rather than
+        //  wrongly; sixteen is more diagnostics than anything uses at once.
+        //  Still possible in principle, and it must be loud rather than slow:
+        //  a name that does not fit is answered live, which is correct and
+        //  expensive, so say so once.
+        if ( s_count >= (int)( sizeof(s_cache)/sizeof(s_cache[0]) ) ||
+             strlen ( name ) >= sizeof(s_cache[0].name) ) {
+            static int s_warned = 0;
+            if ( !s_warned ) {
+                s_warned = 1;
+                RanPlat_Log ( RANLOG_WARN, "RanPlat",
+                    "diagnostic cache full at %d names - \"%s\" is being stat'd live",
+                    s_count, name );
+            }
+            pthread_mutex_unlock ( &s_lock );
+            return access ( RanPlat_DiagPath ( name ), F_OK ) == 0 ? 1 : 0;
+        }
+        e = &s_cache[s_count++];
+        snprintf ( e->name, sizeof(e->name), "%s", name );
+        e->present = -1;
+        e->checkedMs = 0;
+    }
+
+    //  One second, not half: with thirty-odd names even the refresh is real
+    //  work at 120 us a stat, and no diagnostic needs to be noticed sooner.
+    if ( e->present < 0 || nowMs - e->checkedMs >= 1000 ) {
+        e->checkedMs = nowMs;
+        pthread_mutex_unlock ( &s_lock );
+        const int present = access ( RanPlat_DiagPath ( name ), F_OK ) == 0 ? 1 : 0;
+        pthread_mutex_lock ( &s_lock );
+        e->present = present;
+    }
+
+    const int answer = e->present > 0 ? 1 : 0;
+    pthread_mutex_unlock ( &s_lock );
+    return answer;
 }
 
 extern "C" FILE *RanPlat_DiagOpenWrite ( const char *name )
@@ -204,3 +283,81 @@ extern "C" FILE *RanPlat_DiagOpen ( const char *name )
 {
     return fopen ( RanPlat_DiagPath ( name ), "rb" );
 }
+
+//  A watchdog that turns "the process vanished" into a backtrace.
+//
+//  A runaway allocation ends as SIGKILL from the kernel, and SIGKILL leaves
+//  nothing: no tombstone, no log line, no stack. The loop that did it is the
+//  one thing worth knowing and it is the one thing that is never recorded.
+//
+//  So watch the resident size from a second thread, and when it crosses the
+//  line, abort the thread that armed the watchdog - not this one. debuggerd
+//  then dumps that thread as the crashing thread, with its full backtrace in
+//  the log, while it is still standing in the loop. Needs no root, which
+//  matters: neither the tablet nor the emulator has any.
+#ifdef __ANDROID__
+#include <unistd.h>
+#include <signal.h>
+#include <sys/syscall.h>
+
+namespace {
+
+pid_t           g_wdTid     = 0;        //  0 = disarmed
+int             g_wdLimitMB = 0;
+pthread_t       g_wdThread;
+bool            g_wdStarted = false;
+
+int ResidentMB ()
+{
+    FILE *fp = fopen ( "/proc/self/statm", "r" );
+    if ( !fp )  return 0;
+    long lSize = 0, lResident = 0;
+    if ( fscanf ( fp, "%ld %ld", &lSize, &lResident ) != 2 )    lResident = 0;
+    fclose ( fp );
+    return (int)( ( lResident * 4096LL ) / ( 1024LL * 1024LL ) );
+}
+
+void *WatchdogMain ( void * )
+{
+    for ( ;; )
+    {
+        usleep ( 50 * 1000 );
+
+        const pid_t tid = g_wdTid;
+        if ( !tid )     continue;
+
+        const int mb = ResidentMB ();
+        if ( mb < g_wdLimitMB )     continue;
+
+        g_wdTid = 0;
+        RanPlat_Log ( RANLOG_ERROR, "RanWatchdog",
+            "resident %d MB past the %d MB limit - aborting thread %d for a backtrace",
+            mb, g_wdLimitMB, (int) tid );
+        syscall ( SYS_tgkill, getpid(), tid, SIGABRT );
+    }
+    return NULL;
+}
+
+}   //  namespace
+
+extern "C" void RanPlat_WatchdogArm ( int limitMB )
+{
+    if ( limitMB <= 0 )     return;
+    g_wdLimitMB = limitMB;
+    g_wdTid     = (pid_t) syscall ( SYS_gettid );
+
+    if ( !g_wdStarted )
+    {
+        g_wdStarted = true;
+        pthread_create ( &g_wdThread, NULL, WatchdogMain, NULL );
+    }
+}
+
+extern "C" void RanPlat_WatchdogDisarm ()
+{
+    g_wdTid = 0;
+}
+#else
+extern "C" void RanPlat_WatchdogArm ( int )     {}
+extern "C" void RanPlat_WatchdogDisarm ()       {}
+#endif

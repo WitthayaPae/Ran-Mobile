@@ -66,7 +66,7 @@ t 1340 645 1                 # Pass field
 "$A" -s "$D" shell input text "$PASS"; sleep 1
 t 1180 788 6                 # OK
 
-wait_log "blended: verts" 180 || exit 1
+wait_log "blended:" 180 || exit 1
 t 2278 275 4                 # character row
 t 2428 705 3                 # start
 

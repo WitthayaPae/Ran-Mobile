@@ -47,6 +47,7 @@ void RanGesture_Down ( int x, int y );
 void RanGesture_Move ( int x, int y );
 void RanGesture_Up   ( int x, int y );
 void RanGesture_Tick ( void );
+void RanUIPan_Update ( void );
 void RanGesture_SetImeActive ( int active );
 void RanInput_PointerButton ( int button, int down );
 void RanInput_PumpButtons ( void );
@@ -194,6 +195,8 @@ static int  g_imeInsetPerMille = 0;
     RanTouch_Frame ( dt );
     //  A finger resting still produces no events, so the hold that becomes
     //  the right button can only be noticed here.
+    //  Keyboard pan, before draw and before touches - see ui_pan.cpp.
+    RanUIPan_Update ();
     RanGesture_Tick ();
     RanInput_PumpButtons ();
     if (!RanApp_Frame ()) return;
@@ -364,6 +367,13 @@ extern "C" void RanIME_SetNumeric ( int numeric )
 //  Cheap here, unlike Android: UIKit posts the frame, so this is a read of a
 //  variable rather than a JNI round trip, and needs no throttle.
 extern "C" int RanPlat_ImeInsetPerMille ( void ) { return g_imeInsetPerMille; }
+
+//  Nothing to pump here.
+//
+//  UIKit runs the run loop on the main thread and the client renders from the
+//  display link, so a blocking wait in the client never holds up event
+//  delivery. The symbol exists because the shared shim's Sleep calls it.
+extern "C" void RanPlat_PumpEvents ( void ) {}
 
 //  ------------------------------------------------------------ patch screen
 //

@@ -91,7 +91,7 @@ t 1331 653 2                               # Pass field
 "$ADB" -s "$D" shell input text "$RAN_PW"; sleep 1
 t 1162 790 3                               # OK - the one login the server sees
 
-wait_log "blended: verts" 180 || exit 1
+wait_log "blended:" 180 || exit 1
 t 2278 288 6                               # the character row
 t 2432 710 3                               # start
 
