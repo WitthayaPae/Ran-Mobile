@@ -436,6 +436,43 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
         const unsigned long total = cu + ct + ca + cs + cd + cb;
         LOGI("FRAME gl calls: %lu/frame = uniform %lu, texture %lu, attrib %lu, draw %lu, buffer %lu",
              total / s_frames, cu / s_frames, ct / s_frames, ca / s_frames, cd / s_frames, cb / s_frames);
+        unsigned long u[10];
+        RanGLR_TakeUniformCounts(u);
+        LOGI("FRAME uniforms/frame: palette %lu calls %lu KB, matrix %lu calls %lu KB, "
+             "small %lu calls %lu KB, lights %lu calls %lu KB, uncached %lu calls %lu KB",
+             u[0] / s_frames, u[1] / 1024 / s_frames, u[2] / s_frames, u[3] / 1024 / s_frames,
+             u[4] / s_frames, u[5] / 1024 / s_frames, u[6] / s_frames, u[7] / 1024 / s_frames,
+             u[8] / s_frames, u[9] / 1024 / s_frames);
+        unsigned long pd[6], pu[6];
+        RanGLR_TakePaletteUse(pd, pu);
+        LOGI("FRAME palette/frame (draws/uploads): none %lu/%lu, blend1 %lu/%lu, blend2 %lu/%lu, "
+             "blend3 %lu/%lu, more %lu/%lu, indexed %lu/%lu",
+             pd[0] / s_frames, pu[0] / s_frames, pd[1] / s_frames, pu[1] / s_frames,
+             pd[2] / s_frames, pu[2] / s_frames, pd[3] / s_frames, pu[3] / s_frames,
+             pd[4] / s_frames, pu[4] / s_frames, pd[5] / s_frames, pu[5] / s_frames);
+        unsigned long ph[5], psum = 0;
+        RanGLR_TakePaletteSlots(ph, &psum);
+        const unsigned long pn = ph[0] + ph[1] + ph[2] + ph[3] + ph[4];
+        LOGI("FRAME palette slots/frame (indexed draws): 1-4 %lu, 5-8 %lu, 9-12 %lu, 13-16 %lu, "
+             "more %lu, mean %.1f",
+             ph[0] / s_frames, ph[1] / s_frames, ph[2] / s_frames, ph[3] / s_frames,
+             ph[4] / s_frames, pn ? (double)psum / (double)pn : 0.0);
+        unsigned long ups = 0, uvc = 0;
+        RanGLR_TakeProgramSwitches(&ups, &uvc);
+        LOGI("FRAME programs/frame: %lu glUseProgram, %lu variant changes", ups / s_frames, uvc / s_frames);
+        RanGLR_ReportVariantFlips(s_frames);
+        unsigned long afr = 0, avb = 0;
+        RanGLR_TakeAttribCounts(&afr, &avb);
+        LOGI("FRAME attributes/frame: %lu format re-specs (~21 GL calls each), %lu vertex buffer binds",
+             afr / s_frames, avb / s_frames);
+        unsigned long upc = 0, upb = 0;
+        RanGLR_TakeUpStream(&upc, &upb);
+        LOGI("FRAME draw-path stream/frame: %lu writes, %lu KB", upc / s_frames, upb / 1024 / s_frames);
+        RanGLR_ReportStreamSections(s_frames);
+        unsigned long lc[3];
+        RanGLR_TakeLightCauses(lc);
+        LOGI("FRAME light block uploads/frame by cause: program cache %lu, count %lu, values %lu",
+             lc[0] / s_frames, lc[1] / s_frames, lc[2] / s_frames);
     }
     LOGI("FRAME draws: %lu per frame, %.0f us each",
          drawCount / s_frames,

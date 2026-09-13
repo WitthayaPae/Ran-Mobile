@@ -22,6 +22,8 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3dx9.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
 #include <vector>
+#include <map>
+#include <algorithm>
 #include <string.h>
 
 #include "d3d9_gen.h"
@@ -915,6 +917,31 @@ public:
         //  D3D starts this at opaque white; a stage that selects TFACTOR before
         //  the engine sets one must not read zero.
         m_renderState[D3DRS_TEXTUREFACTOR] = 0xFFFFFFFF;
+
+        //  The texture stages start where D3D9 starts them, not at zero.
+        //
+        //  Zero is a legal value for every one of these fields and means
+        //  something: D3DTA_DIFFUSE for an argument, and nothing at all for an
+        //  op. The engine sets what it needs and leaves the rest to the
+        //  documented defaults - so a block that sets ALPHAOP and ALPHAARG2 and
+        //  says nothing about ALPHAARG1 is asking for TEXTURE, because that is
+        //  what D3D has there.
+        //
+        //  With zeros it got DIFFUSE instead, so the fragment alpha of every
+        //  such draw was diffuse.a * tfactor.a and the sampled texture alpha
+        //  was never read. That is why the weapon's flame drew as an opaque
+        //  grey sheet the shape of its quad: the artwork's soft edge lives
+        //  entirely in the alpha channel.
+        for (int st = 0; st < 8; ++st) {
+            m_textureStageState[st][D3DTSS_COLOROP]   = (st == 0) ? D3DTOP_MODULATE
+                                                                  : D3DTOP_DISABLE;
+            m_textureStageState[st][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
+            m_textureStageState[st][D3DTSS_COLORARG2] = D3DTA_CURRENT;
+            m_textureStageState[st][D3DTSS_ALPHAOP]   = (st == 0) ? D3DTOP_SELECTARG1
+                                                                  : D3DTOP_DISABLE;
+            m_textureStageState[st][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
+            m_textureStageState[st][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
+        }
         makeFrameBuffers();
         LOGI("device created %ux%u", pp.BackBufferWidth, pp.BackBufferHeight);
     }
@@ -985,6 +1012,14 @@ public:
         if (!m_backBuffer) makeFrameBuffers();
         RanSurface *s = pRT ? (RanSurface *)pRT : m_backBuffer;
         m_renderTarget = s;
+        //  A format with no alpha channel reads its destination alpha as one in
+        //  D3D; the GL storage behind it has a real one. See gl_render.cpp.
+        {
+            const D3DFORMAT f = s->m_format;
+            RanGLR_SetTargetOpaque(f == D3DFMT_X8R8G8B8 || f == D3DFMT_X8B8G8R8 ||
+                                   f == D3DFMT_R8G8B8   || f == D3DFMT_X1R5G5B5 ||
+                                   f == D3DFMT_R5G6B5   || f == D3DFMT_X4R4G4B4);
+        }
         if (s == m_backBuffer) {
             RanGLR_SetRenderTargetTexture(0, 0, 0);
         } else {
@@ -1139,6 +1174,44 @@ public:
     HRESULT Present(const RECT *, const RECT *, HWND, const RGNDATA *) override {
         flushUIBatch();
         ++g_stats.frames;
+        //  "uiflushlog" report: sites that ended a submitted UI batch, per frame,
+        //  with one known function's address so the log can be symbolised
+        //  against the unstripped library (llvm-addr2line).
+        if ((g_stats.frames % 120) == 0) {
+            if (m_flushLog && m_flushFrames) {
+                std::vector<std::pair<unsigned long, uintptr_t> > v;
+                for (std::map<uintptr_t, unsigned long>::const_iterator it = m_flushSites.begin();
+                     it != m_flushSites.end(); ++it)
+                    v.push_back(std::make_pair(it->second, it->first));
+                std::sort(v.begin(), v.end());
+                LOGI("uiflush: %lu frames, anchor RanGLR_SetTargetOpaque=%p",
+                     m_flushFrames, (void *)&RanGLR_SetTargetOpaque);
+                for (size_t i = 0; i < v.size() && i < 16; ++i) {
+                    const std::pair<unsigned long, uintptr_t> &e = v[v.size() - 1 - i];
+                    LOGI("uiflush: site %p %.1f/frame", (void *)e.second,
+                         (double)e.first / (double)m_flushFrames);
+                }
+            }
+            if (m_flushLog && m_flushFrames) {
+                std::vector<std::pair<unsigned long, uint64_t> > st;
+                for (std::map<uint64_t, unsigned long>::const_iterator it = m_flushStates.begin();
+                     it != m_flushStates.end(); ++it)
+                    st.push_back(std::make_pair(it->second, it->first));
+                std::sort(st.rbegin(), st.rend());
+                for (size_t i = 0; i < st.size() && i < 12; ++i)
+                    LOGI("uiflush: state %u %lx -> %lx %.1f/frame",
+                         (unsigned)(st[i].second >> 40),
+                         (unsigned long)((st[i].second >> 20) & 0xFFFFF),
+                         (unsigned long)(st[i].second & 0xFFFFF),
+                         (double)st[i].first / (double)m_flushFrames);
+            }
+            m_flushStates.clear();
+            m_flushSites.clear();
+            m_flushFrames = 0;
+            m_flushLog = RanPlat_DiagExists("uiflushlog") != 0;
+            m_batchKeep = RanPlat_DiagExists("uibatchkeep") != 0;
+        }
+        if (m_flushLog) ++m_flushFrames;
         //  A new frame gets a fresh allowance of character shadows.
         RanGLR_ResetShadowBudget();
         {
@@ -1201,7 +1274,30 @@ public:
             if (State < 256) m_recording->m_rs.push_back({State, Value});
             return D3D_OK;
         }
-        if (m_uiBatch.active && m_renderState[State < 256 ? State : 0] != Value) flushUIBatch();
+        //  The epoch moves on every call, changed value or not. Moving it only
+        //  on a real change was measured to buy nothing (interface cost the
+        //  same) and shipped untested in store version 426 alongside a broken
+        //  attribute cache; reverted to the verified behaviour.
+        //  "uibatchkeep": a pending batch survives a call that changes nothing, and
+        //  a LIGHTING change while the batch is screen-space - gl_render never
+        //  lights XYZRHW, so the value cannot reach those draws. Measured with
+        //  ~100 players: 130 of 175 UI flushes a frame were LIGHTING 0 -> 1 from
+        //  the text sprite's End(). The epoch still moves on every call, so the
+        //  GL state push is unchanged; only the batch's stamp follows it.
+        //  CULLMODE likewise: gl_render never culls XYZRHW (gl_render.cpp:2774),
+        //  and it was the next restore to end the batch once LIGHTING stopped.
+        const bool keep = m_batchKeep && m_uiBatch.active &&
+            ((State < 256 && m_renderState[State] == Value) ||
+             ((State == D3DRS_LIGHTING || State == D3DRS_CULLMODE) && batchIsScreenSpace()));
+        if (keep) keepBatchAcrossCall();
+        else if (m_uiBatch.active && m_renderState[State < 256 ? State : 0] != Value) {
+            //  uiflushlog: which state change ends the batch, old value -> new.
+            if (m_flushLog && State < 256 && !m_uiBatch.verts.empty())
+                ++m_flushStates[((uint64_t)State << 40) |
+                                ((uint64_t)(m_renderState[State] & 0xFFFFF) << 20) |
+                                (uint64_t)(Value & 0xFFFFF)];
+            flushUIBatch();
+        }
         ++m_stateEpoch;
         if (State < 256) m_renderState[State] = Value;
         return D3D_OK;
@@ -1216,7 +1312,10 @@ public:
             if (Stage < 8 && Type < 33) m_recording->m_tss.push_back({Stage, Type, Value});
             return D3D_OK;
         }
-        if (m_uiBatch.active && Stage < 8 && Type < 33 &&
+        //  Every call moves the epoch - see SetRenderState.
+        if (m_batchKeep && m_uiBatch.active && Stage < 8 && Type < 33 &&
+            m_textureStageState[Stage][Type] == Value) keepBatchAcrossCall();
+        else if (m_uiBatch.active && Stage < 8 && Type < 33 &&
             m_textureStageState[Stage][Type] != Value) flushUIBatch();
         ++m_stateEpoch;
         if (Stage < 8 && Type < 33) m_textureStageState[Stage][Type] = Value;
@@ -1232,7 +1331,10 @@ public:
             if (Sampler < 16 && Type < 14) m_recording->m_ss.push_back({Sampler, Type, Value});
             return D3D_OK;
         }
-        if (m_uiBatch.active && Sampler < 16 && Type < 14 &&
+        //  Every call moves the epoch - see SetRenderState.
+        if (m_batchKeep && m_uiBatch.active && Sampler < 16 && Type < 14 &&
+            m_samplerState[Sampler][Type] == Value) keepBatchAcrossCall();
+        else if (m_uiBatch.active && Sampler < 16 && Type < 14 &&
             m_samplerState[Sampler][Type] != Value) flushUIBatch();
         ++m_stateEpoch;
         if (Sampler < 16 && Type < 14) m_samplerState[Sampler][Type] = Value;
@@ -1520,6 +1622,10 @@ public:
             weights = 3;
         }
 
+        //  Measurement: the raw value is the highest palette slot this group
+        //  filled, so +1 is how many slots its indexed vertices can reach.
+        RanGLR_NotePaletteSlots((int)mode + 1);
+
         float palette[16 * 16];
         for (int i = 0; i < 16; ++i)
             memcpy(palette + i * 16, &m_transform[(DWORD)D3DTS_WORLDMATRIX(i)], sizeof(float) * 16);
@@ -1561,6 +1667,11 @@ public:
 
     //  Append a primitive as loose triangles, so batches of different primitive
     //  types can still merge.
+    //  Above this, a draw is better off on its own - see batchUIDraw. 256
+    //  triangles is already a worthwhile submission, and every HUD or text run
+    //  is far below it.
+    static const UINT kBatchMaxPrims = 256;
+
     void appendTriangles(D3DPRIMITIVETYPE type, UINT primCount, const void *verts,
                          UINT stride, const void *indices, UINT indexBits) {
         const BYTE *v = (const BYTE *)verts;
@@ -1597,11 +1708,31 @@ public:
     }
 
     //  Everything queued goes out as one draw.
-    void flushUIBatch() {
+    //  "uiflushlog": which call site ends each batch that actually submits, by
+    //  return address, reported from Present. Measurement only: nothing about
+    //  what is drawn changes, and with the file absent it costs one bool test.
+    bool m_flushLog = false;
+    unsigned long m_flushFrames = 0;
+    std::map<uintptr_t, unsigned long> m_flushSites;
+    std::map<uint64_t, unsigned long> m_flushStates;   //  state<<40 | old<<20 | new
+
+    //  "uibatchkeep" (off unless the file exists; polled from Present).
+    bool m_batchKeep = false;
+    bool batchIsScreenSpace() const {
+        return (m_uiBatch.fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
+    }
+    //  Called just before a setter moves the epoch. Only a batch that was
+    //  current before this call follows it; one already stale stays stale.
+    void keepBatchAcrossCall() {
+        if (m_uiBatch.active && m_uiBatch.epoch == m_stateEpoch) m_uiBatch.epoch = m_stateEpoch + 1;
+    }
+
+    __attribute__((noinline)) void flushUIBatch() {
         if (!m_uiBatch.active || m_uiBatch.verts.empty()) { m_uiBatch.active = false; return; }
         const UINT corners = (UINT)(m_uiBatch.verts.size() / m_uiBatch.stride);
         m_uiBatch.active = false;
         if (corners >= 3) {
+            if (m_flushLog) ++m_flushSites[(uintptr_t)__builtin_return_address(0)];
             ++g_stats.draws;
             prepareDraw();
             RanGLR_Draw(D3DPT_TRIANGLELIST, corners / 3, m_uiBatch.verts.data(),
@@ -1616,6 +1747,26 @@ public:
                      DWORD fvf, const void *indices, UINT indexBits) {
         if (!primCount || !verts || !stride) return false;
         if (!isTriangleType(type)) return false;
+
+        //  Big draws go straight through.
+        //
+        //  Batching exists to merge many small submissions - HUD quads, text,
+        //  scattered UI - where the per-draw cost dwarfs the geometry. A large
+        //  mesh is the opposite: appendTriangles has to expand every index into
+        //  a flat vertex list and copy it, so a 25,000-triangle vehicle pays
+        //  75,000 vertex copies a frame to save one draw call it did not need.
+        //
+        //  Measured on the Tab S9 with the BMW vehicle summoned: 83 fps against
+        //  120 on foot, with 12.5% of the process in the vector insert behind
+        //  this expansion and 18% in memmove. The mesh is one draw either way.
+        //
+        //  The pending batch has to go first, or this draw would be issued
+        //  before geometry that was queued ahead of it.
+        //  Diagnostic: nobigbypass puts large draws back in the batch.
+        if (primCount > kBatchMaxPrims && !RanPlat_DiagExists("nobigbypass")) {
+            if (m_uiBatch.active) flushUIBatch();
+            return false;
+        }
         //  A skinned draw carries its own bone palette, so it cannot share a
         //  submission with anything else.
         if (m_renderState[D3DRS_VERTEXBLEND] != 0) return false;

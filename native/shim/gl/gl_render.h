@@ -91,6 +91,30 @@ double RanGLR_DrawSecondsTotal(void);
 unsigned long RanGLR_TakeDrawCount(void);
 //  Re-read the diagnostic switches under /sdcard/ran (nulldraw, notex, ...).
 void RanGLR_RefreshDiagnostics(void);
+//  Uniform uploads since the last read, reset: calls then bytes for palette,
+//  single matrix, small values, light block, uncached - ten entries.
+void RanGLR_TakeUniformCounts(unsigned long *out10);
+//  Draws and bone-palette uploads by slots read (none, blend 1-3, more, indexed).
+void RanGLR_TakePaletteUse(unsigned long *draws6, unsigned long *uploads6);
+//  The device's raw D3DRS_VERTEXBLEND + 1 before a draw, and indexed draws by
+//  that slot count (1-4, 5-8, 9-12, 13-16, more) plus the sum. Measurement only.
+void RanGLR_NotePaletteSlots(int slots);
+void RanGLR_TakePaletteSlots(unsigned long *hist5, unsigned long *sum);
+//  Light block uploads by cause (program cache stale, count changed, values
+//  changed) since the last read. Measurement only.
+void RanGLR_TakeLightCauses(unsigned long *out3);
+//  Vertices the draw path streamed from client arrays since the last read.
+void RanGLR_TakeUpStream(unsigned long *calls, unsigned long *bytes);
+//  glUseProgram calls and shader variant changes since the last read.
+void RanGLR_TakeProgramSwitches(unsigned long *useProgram, unsigned long *variantChanges);
+//  Attribute format re-specifications and glBindVertexBuffer calls since the
+//  last read, counted exactly. Measurement only.
+void RanGLR_TakeAttribCounts(unsigned long *fvfRespecs, unsigned long *vbBinds);
+//  Logs variant key bit flips and uniform uploads on switching draws, per frame.
+void RanGLR_ReportVariantFlips(unsigned frames);
+//  Logs the eight largest streamed-vertex sources (section, FVF, path) per
+//  frame since the last call, and resets. Measurement only.
+void RanGLR_ReportStreamSections(unsigned frames);
 //  GL calls issued since the last read, by kind, and reset.
 void RanGLR_TakeCallCounts(unsigned long *uniform, unsigned long *texture,
                            unsigned long *attrib, unsigned long *state,
@@ -117,6 +141,9 @@ void RanGLR_UpdateBufferRange(unsigned buffer, int isIndex, unsigned offset,
                               const void *data, unsigned size);
 void RanGLR_LogTextureStats(void);
 void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h);
+// The target now bound has no alpha channel in D3D terms (X8R8G8B8, X1R5G5B5...),
+// so its destination alpha reads as one.
+void RanGLR_SetTargetOpaque(int opaque);
 
 // Copies one render-target texture into another (D3D StretchRect).
 int  RanGLR_BlitTexture(unsigned srcTex, int sx0, int sy0, int sx1, int sy1,

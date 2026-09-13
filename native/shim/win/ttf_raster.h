@@ -39,6 +39,14 @@ public:
     int  Descender(float scale) const;      // positive value
 
     int  GlyphIndex(unsigned cp) const;
+
+private:
+    //  The uncached lookup, and the table in front of it. See the note on
+    //  GlyphIndex in ttf_raster.cpp.
+    int  GlyphIndexUncached(unsigned cp) const;
+    mutable std::vector<unsigned short> m_cmapCache;
+    mutable std::vector<unsigned char>  m_cmapKnown;
+public:
     int  Advance(int gid, float scale) const;
 
     // Rasterises one glyph. `shear` skews x by shear*y for synthetic italic;

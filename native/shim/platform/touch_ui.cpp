@@ -202,6 +202,24 @@ int      g_cacheVerts = 0;
 unsigned g_rebuilds = 0;            //  captures this second, for the report
 GLint uViewport = -1;
 
+//  The joystick while nobody holds it, cached the same way.
+//
+//  It was built live every frame - ~12,000 vertices, ~290 KB through
+//  glBufferSubData - although at rest it depends only on where it sits and how
+//  big it is. Measured with ~90 players in view: /sdcard/ran/nohud was worth
+//  ~2.3 fps, and the live stick is most of what the static cache leaves.
+//  Verified on LDPlayer 2026-09-13, ~95 players in view: 36.9 -> 39.6 fps over
+//  six interleaved rounds, touch-hud 2.6-4.1 ms -> 0.5-2.2 ms, stick unchanged
+//  by eye. On by default; "nostickcache" builds it live again. A held stick is
+//  always built live.
+GLuint   g_vboStick = 0;
+GLuint   g_vaoStick = 0;
+Seg      g_stickSegs[32];
+int      g_stickSegCount = 0;
+int      g_stickVerts = 0;
+unsigned long long g_stickSig = 0;
+bool     g_stickCacheOn = true;
+
 //  One colour, passed around as four floats, so a helper can take "a colour"
 //  rather than four parameters that can be given in the wrong order.
 struct Col { float r, g, b, a; };
@@ -255,6 +273,9 @@ bool buildProgram() {
     g_cacheVerts = 0;
     g_sig = 0;
     g_segCount = 0;
+    g_stickVerts = 0;
+    g_stickSig = 0;
+    g_stickSegCount = 0;
 
     GLuint vs = compile(GL_VERTEX_SHADER, kVS);
     GLuint fs = compile(GL_FRAGMENT_SHADER, kFS);
@@ -307,6 +328,17 @@ bool buildProgram() {
     glGenVertexArrays(1, &g_vaoCache);
     glBindVertexArray(g_vaoCache);
     glBindBuffer(GL_ARRAY_BUFFER, g_vboCache);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (const void *)(2 * sizeof(float)));
+    glBindVertexArray(0);
+
+    //  And one more pair for the resting joystick.
+    glGenBuffers(1, &g_vboStick);
+    glGenVertexArrays(1, &g_vaoStick);
+    glBindVertexArray(g_vaoStick);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vboStick);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void *)0);
     glEnableVertexAttribArray(1);
@@ -1560,72 +1592,8 @@ void drawPageLabel(float cx, float cy, float w, float h) {
 //  every frame while the player is moving or a skill is cooling, and they are
 //  drawn live instead. Including them would rebuild the whole overlay on almost
 //  every frame, which is the situation this exists to avoid.
-static unsigned long long staticSignature() {
-    unsigned long long h = 1469598103934665603ULL;   //  FNV-1a
-    const unsigned char *p; int n;
-    #define MIX(v) do { const unsigned char *q = (const unsigned char *)&(v);                         for (int k = 0; k < (int)sizeof(v); ++k) { h ^= q[k]; h *= 1099511628211ULL; } } while (0)
-    MIX(g_width); MIX(g_height); MIX(g_unit);
-    MIX(g_skillCircleCount); MIX(g_iconCount);
-    for (int i = 0; i < g_skillCircleCount && i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
-        const SkillCircle &c = g_skillCircles[i];
-        MIX(c.x); MIX(c.y); MIX(c.r); MIX(c.filled);   //  c.cool is drawn live
-    }
-    for (int i = 0; i < kButtonCount; ++i) {
-        const Button &b = g_buttons[i];
-        MIX(b.centre.x); MIX(b.centre.y); MIX(b.radius);
-        MIX(b.down); MIX(b.toggled); MIX(b.slot);
-    }
-    #undef MIX
-    (void)p; (void)n;
-    return h;
-}
-
-void RanTouch_Render(void) {
-    ageActivity();
-    if (!g_inited || !g_active || !g_prog) return;
-
-    //  Diagnostic: draw no overlay at all. Re-read once a second so it can be
-    //  switched while the game runs.
-    //
-    //  What this separates is the cost of building this geometry from the cost
-    //  of filling it. The section timer cannot tell those apart, and the fix is
-    //  different for each: caching the geometry, or drawing less of it.
-    {
-        static double s_check = 0.0;
-        static bool   s_off = false;
-        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-        const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-        if (now - s_check >= 1.0) {
-            s_check = now;
-            s_off = (RanPlat_DiagExists("nohud"));
-        }
-        if (s_off) return;
-    }
-
-    //  Save nothing, restore nothing: tell the renderer afterwards that its
-    //  cache is stale and let it re-establish what it needs.
-    glUseProgram(g_prog);
-    //  Everything below happens inside our own VAO, so nothing here can disturb
-    //  the attribute layout of the client's.
-    glBindVertexArray(g_vao);
-    //  ...but GL_ARRAY_BUFFER is NOT part of VAO state. A VAO remembers which
-    //  buffer each attribute reads from; the binding point itself is global.
-    //  Binding only the VAO left the glBufferSubData calls below writing into
-    //  whichever buffer the client had bound last - corrupting its geometry,
-    //  while these draws read whatever was stale in ours. Missing controls and a
-    //  render thread pinned at 99% were the same bug.
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform2f(uViewport, (float)g_width, (float)g_height);
-
-    //  Stick: the ring sits where the finger went down while held, so the
-    //  control follows the thumb instead of the thumb hunting for the control.
-    const Vec2 base = g_stick.held ? g_stick.origin : g_stick.centre;
-    {
+//  The joystick's shapes, exactly as RanTouch_Render used to build them inline.
+static void drawStickShapes(const Vec2 &base) {
         const float a = g_stick.held ? 1.0f : 0.82f;
         const float R = g_stick.radius;
 
@@ -1672,6 +1640,130 @@ void RanTouch_Render(void) {
         if (g_stick.held)
             drawRing(g_stick.knob.x, g_stick.knob.y, kr * kRimIn, kr,
                      kAmberH.r, kAmberH.g, kAmberH.b, 0.90f);
+}
+
+//  Everything the resting joystick's geometry depends on.
+static unsigned long long stickSignature(const Vec2 &base) {
+    unsigned long long h = 1469598103934665603ULL;   //  FNV-1a
+    #define MIX(v) do { const unsigned char *q = (const unsigned char *)&(v); for (int k = 0; k < (int)sizeof(v); ++k) { h ^= q[k]; h *= 1099511628211ULL; } } while (0)
+    MIX(g_width); MIX(g_height); MIX(g_unit);
+    MIX(base.x); MIX(base.y);
+    MIX(g_stick.radius); MIX(g_stick.knob.x); MIX(g_stick.knob.y);
+    #undef MIX
+    return h;
+}
+
+static unsigned long long staticSignature() {
+    unsigned long long h = 1469598103934665603ULL;   //  FNV-1a
+    const unsigned char *p; int n;
+    #define MIX(v) do { const unsigned char *q = (const unsigned char *)&(v);                         for (int k = 0; k < (int)sizeof(v); ++k) { h ^= q[k]; h *= 1099511628211ULL; } } while (0)
+    MIX(g_width); MIX(g_height); MIX(g_unit);
+    MIX(g_skillCircleCount); MIX(g_iconCount);
+    for (int i = 0; i < g_skillCircleCount && i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+        const SkillCircle &c = g_skillCircles[i];
+        MIX(c.x); MIX(c.y); MIX(c.r); MIX(c.filled);   //  c.cool is drawn live
+    }
+    for (int i = 0; i < kButtonCount; ++i) {
+        const Button &b = g_buttons[i];
+        MIX(b.centre.x); MIX(b.centre.y); MIX(b.radius);
+        MIX(b.down); MIX(b.toggled); MIX(b.slot);
+    }
+    #undef MIX
+    (void)p; (void)n;
+    return h;
+}
+
+void RanTouch_Render(void) {
+    ageActivity();
+    if (!g_inited || !g_active || !g_prog) return;
+
+    //  Diagnostic: draw no overlay at all. Re-read once a second so it can be
+    //  switched while the game runs.
+    //
+    //  What this separates is the cost of building this geometry from the cost
+    //  of filling it. The section timer cannot tell those apart, and the fix is
+    //  different for each: caching the geometry, or drawing less of it.
+    {
+        static double s_check = 0.0;
+        static bool   s_off = false;
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+        if (now - s_check >= 1.0) {
+            s_check = now;
+            s_off = (RanPlat_DiagExists("nohud"));
+            g_stickCacheOn = !(RanPlat_DiagExists("nostickcache"));
+        }
+        if (s_off) return;
+    }
+
+    //  Save nothing, restore nothing: tell the renderer afterwards that its
+    //  cache is stale and let it re-establish what it needs.
+    glUseProgram(g_prog);
+    //  Everything below happens inside our own VAO, so nothing here can disturb
+    //  the attribute layout of the client's.
+    glBindVertexArray(g_vao);
+    //  ...but GL_ARRAY_BUFFER is NOT part of VAO state. A VAO remembers which
+    //  buffer each attribute reads from; the binding point itself is global.
+    //  Binding only the VAO left the glBufferSubData calls below writing into
+    //  whichever buffer the client had bound last - corrupting its geometry,
+    //  while these draws read whatever was stale in ours. Missing controls and a
+    //  render thread pinned at 99% were the same bug.
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform2f(uViewport, (float)g_width, (float)g_height);
+
+    //  Stick: the ring sits where the finger went down while held, so the
+    //  control follows the thumb instead of the thumb hunting for the control.
+    const Vec2 base = g_stick.held ? g_stick.origin : g_stick.centre;
+    if (g_stickCacheOn && !g_stick.held) {
+        //  At rest: replay the stick from its own buffer, rebuilt only when
+        //  where it sits or how big it is changes. The main cache's segment
+        //  list is replayed later this frame, so it is kept aside, not reused.
+        emit();
+        const unsigned long long ssig = stickSignature(base);
+        if (ssig != g_stickSig || g_stickVerts == 0) {
+            Seg saved[32];
+            const int savedCount = g_segCount;
+            memcpy(saved, g_segs, sizeof(saved));
+
+            g_capturing = true;
+            g_bn = 0; g_capFirst = 0; g_segCount = 0; g_additive = false;
+            drawStickShapes(base);
+            emit();                             //  closes the last segment
+            g_capturing = false;
+
+            g_stickVerts = g_bn / kFloatsPerVert;
+            g_stickSegCount = g_segCount;
+            memcpy(g_stickSegs, g_segs, sizeof(Seg) * (size_t)g_segCount);
+            glBindBuffer(GL_ARRAY_BUFFER, g_vboStick);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_bn * sizeof(float)),
+                         g_batch, GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+            g_bn = 0;
+            g_stickSig = ssig;
+
+            memcpy(g_segs, saved, sizeof(saved));
+            g_segCount = savedCount;
+            ++g_rebuilds;
+        }
+        if (g_stickVerts > 0) {
+            glBindVertexArray(g_vaoStick);
+            for (int i = 0; i < g_stickSegCount; ++i) {
+                glBlendFunc(GL_SRC_ALPHA, g_stickSegs[i].add ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+                glDrawArrays(GL_TRIANGLES, g_stickSegs[i].first, g_stickSegs[i].count);
+                ++g_batchDraws;
+                g_vertsThisFrame += (unsigned)g_stickSegs[i].count;
+            }
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        }
+    } else {
+        drawStickShapes(base);
     }
 
     //  The stick moves with the thumb, so it is built live - and it has to be

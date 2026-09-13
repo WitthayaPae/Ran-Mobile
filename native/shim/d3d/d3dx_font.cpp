@@ -84,6 +84,13 @@ struct Glyph {
     int      gid;
     TtfFace *face;
     bool     isMark;
+    //  The outline mask for this glyph, built on first use by outlineFor: the
+    //  glyph padded by the outline radius, with the coverage eight offset
+    //  passes of one opaque colour would leave. Mutable because glyphs are
+    //  handed out const and the mask is a cache.
+    mutable int   outlineR = 0;          // radius the mask was built for; 0 = none yet
+    mutable bool  outlineOk = false;
+    mutable float ou0 = 0, ov0 = 0, ou1 = 0, ov1 = 0;
 };
 
 class RanD3DXFont : public ID3DXFont {
@@ -224,12 +231,24 @@ private:
     //  Rasterise and cache by glyph id. Two faces are in play (the Thai face
     //  and the Latin fallback), so the key carries which one it came from.
     const Glyph *glyphFor(TtfFace *face, int gid);
+    //  gid -> glyph, one vector per face. See glyphFor.
+    std::vector<const Glyph *> m_glyphIdxMain, m_glyphIdxFall;
     //  Codepoints -> glyph ids, with ccmp applied. Returns the face each run
     //  of glyphs belongs to alongside the ids.
     void shapeRun(const WCHAR *s, INT count,
                   std::vector<int> &gids, std::vector<TtfFace *> &faces);
+    //  Shaped runs, keyed by the string. See shapeRun.
+    typedef std::basic_string<WCHAR> ShapeKey;
+    struct ShapeResult { std::vector<int> gids; std::vector<TtfFace *> faces; };
+    std::map<ShapeKey, ShapeResult> m_shapeCache;
     void ensureAtlas();
-    INT drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format, D3DCOLOR color);
+public:
+    //  Public for RanD3DXFont_DrawOutline, which CD3DFontX calls.
+    //  outlineR > 0 draws the run's outline (one quad per glyph from its mask)
+    //  instead of the glyphs, and returns -1 if a mask could not be built.
+    INT drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format, D3DCOLOR color,
+                int outlineR = 0);
+    const Glyph *outlineFor(const Glyph *g, int r);
 };
 
 // A sprite that only has to satisfy Begin/End around text: the font draws its own
@@ -455,6 +474,24 @@ void RanD3DXFont::shapeRun(const WCHAR *s, INT count,
                            std::vector<int> &gids, std::vector<TtfFace *> &faces) {
     gids.clear(); faces.clear();
     if (!m_face) return;
+
+    //  Shaping the same string again every frame is most of what shaping costs.
+    //
+    //  The client re-measures and re-draws its labels from scratch each frame,
+    //  and the answer only depends on the characters: cmap for each, then the
+    //  face's ccmp lookups over the run. A profile put ~3% of the process in
+    //  applySubstLookup and coverageIndex alone. The result is cached by the
+    //  string itself; the table is dropped wholesale when it grows past a few
+    //  hundred entries, which is far more than a screen of text.
+    ShapeKey key(s, s + count);
+    {
+        std::map<ShapeKey, ShapeResult>::const_iterator hit = m_shapeCache.find(key);
+        if (hit != m_shapeCache.end()) {
+            gids = hit->second.gids;
+            faces = hit->second.faces;
+            return;
+        }
+    }
     gids.reserve((size_t)count); faces.reserve((size_t)count);
     for (INT i = 0; i < count; ++i) {
         const unsigned cp = (unsigned)s[i];
@@ -492,6 +529,16 @@ void RanD3DXFont::shapeRun(const WCHAR *s, INT count,
         }
         i = j;
     }
+
+    //  Kept for the next frame. A blunt clear rather than an eviction policy:
+    //  the working set is one screen of text, and the only way this grows is
+    //  chat scrolling past, where nothing old is worth keeping anyway.
+    if (m_shapeCache.size() > 512) m_shapeCache.clear();
+    {
+        ShapeResult &out = m_shapeCache[key];
+        out.gids = gids;
+        out.faces = faces;
+    }
 }
 
 const Glyph *RanD3DXFont::glyph(unsigned cp) {
@@ -510,8 +557,26 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
     //  The key has to separate the two faces: glyph 40 means different things
     //  in the Thai face and in the Latin fallback.
     const unsigned key = ((face == m_fallback) ? 0x80000000u : 0u) | (unsigned)gid;
+
+    //  The map is the store; this is the index into it.
+    //
+    //  Glyph ids are dense and small, so a vector answers in one load where the
+    //  map costs a tree walk - and this is called twice for every character
+    //  drawn (once to measure the run, once to place it), every frame. A
+    //  profile put 2.8% of the process in here. std::map never moves a node, so
+    //  a pointer into it stays good for the life of the font.
+    std::vector<const Glyph *> &index = (face == m_fallback) ? m_glyphIdxFall
+                                                            : m_glyphIdxMain;
+    if ((size_t)gid < index.size() && index[(size_t)gid]) return index[(size_t)gid];
+
     std::map<unsigned, Glyph>::iterator it = m_glyphs.find(key);
-    if (it != m_glyphs.end()) return &it->second;
+    if (it != m_glyphs.end()) {
+        if (gid >= 0) {
+            if ((size_t)gid >= index.size()) index.resize((size_t)gid + 64, (const Glyph *)0);
+            index[(size_t)gid] = &it->second;
+        }
+        return &it->second;
+    }
     ensureAtlas();
     if (!m_atlas) return NULL;
 
@@ -578,7 +643,92 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
     }
 
     m_glyphs[key] = g;
-    return &m_glyphs[key];
+    const Glyph *stored = &m_glyphs[key];
+    if (gid >= 0) {
+        if ((size_t)gid >= index.size()) index.resize((size_t)gid + 64, (const Glyph *)0);
+        index[(size_t)gid] = stored;
+    }
+    return stored;
+}
+
+//  The outline mask for one glyph.
+//
+//  CD3DFontX draws an outlined string by drawing it at every offset of a
+//  (2r+1)^2 square except the centre in one opaque colour, then the string on
+//  top. Stacking one colour n times with ordinary alpha blending leaves
+//  coverage 1 - prod(1 - a_i), so one draw of a mask holding exactly that
+//  replaces the n passes: the same edge for a ninth of the geometry. The
+//  offsets are logical pixels and the atlas is supersampled, so one logical
+//  pixel is ss texels here.
+//
+//  Measured before building this: skipping the outline passes took the crowd
+//  scene from 28.0 to 38.8 fps and the streamed interface vertices from 1,540 KB
+//  to 207 KB a frame.
+const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
+    if (!g || r <= 0 || r > 4) return NULL;
+    if (g->outlineR == r) return g->outlineOk ? g : NULL;
+    g->outlineR = r;
+    g->outlineOk = false;
+    if (!g->face || !m_atlas) return NULL;
+
+    TtfGlyphBitmap gb;
+    //  Exactly the rasterisation glyphFor used, so the mask lines up with it.
+    const float scale = (float)emPixels() / (float)g->face->UnitsPerEm();
+    const int   ss    = fontSuperSample();
+    if (!g->face->Rasterise(g->gid, scale * (float)ss, m_italic ? 0.2f : 0.0f,
+                            m_bold ? ss : 0, gb))
+        return NULL;
+    if (gb.width <= 0 || gb.height <= 0) return NULL;
+
+    const int pad = r * ss;
+    const int W = gb.width + 2 * pad, H = gb.height + 2 * pad;
+
+    if (m_penX + W + 1 > m_atlasW) {
+        m_penX = 1;
+        m_penY += m_rowH + 1;
+        m_rowH = 0;
+    }
+    if (m_penY + H + 1 > m_atlasH) return NULL;   // full: the caller falls back
+
+    D3DLOCKED_RECT lr;
+    if (FAILED(m_atlas->LockRect(0, &lr, NULL, 0)) || !lr.pBits) return NULL;
+    DWORD *base = (DWORD *)lr.pBits;
+    for (int y = 0; y < H; ++y) {
+        DWORD *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
+        for (int x = 0; x < W; ++x) {
+            float keep = 1.0f;                     // prod(1 - a_i)
+            for (int oy = -r; oy <= r; ++oy) {
+                for (int ox = -r; ox <= r; ++ox) {
+                    if (!ox && !oy) continue;
+                    const int sx = x - pad - ox * ss;
+                    const int sy = y - pad - oy * ss;
+                    if (sx < 0 || sy < 0 || sx >= gb.width || sy >= gb.height) continue;
+                    keep *= 1.0f - (float)gb.coverage[(size_t)sy * gb.width + sx] / 255.0f;
+                }
+            }
+            const int a = (int)((1.0f - keep) * 255.0f + 0.5f);
+            row[x] = ((DWORD)(a > 255 ? 255 : a) << 24) | 0x00FFFFFFu;
+        }
+    }
+    m_atlas->UnlockRect(0);
+
+    g->ou0 = (float)m_penX / m_atlasW;
+    g->ov0 = (float)m_penY / m_atlasH;
+    g->ou1 = (float)(m_penX + W) / m_atlasW;
+    g->ov1 = (float)(m_penY + H) / m_atlasH;
+    m_penX += W + 1;
+    if (H > m_rowH) m_rowH = H;
+    g->outlineOk = true;
+    return g;
+}
+
+//  CD3DFontX's outline in one pass per glyph; see outlineFor. Returns 1 if the
+//  outline was drawn, 0 if the caller should draw its offset passes as before.
+extern "C" int RanD3DXFont_DrawOutline(LPD3DXFONT font, const WCHAR *s, INT count,
+                                       LPRECT rect, DWORD format, D3DCOLOR color, int radius) {
+    if (!font || !s) return 0;
+    RanD3DXFont *f = static_cast<RanD3DXFont *>(font);
+    return f->drawRun(s, count, rect, format, color, radius) >= 0 ? 1 : 0;
 }
 
 HDC RanD3DXFont::GetDC() {
@@ -646,7 +796,7 @@ struct MarkPlacer {
 };
 
 INT RanD3DXFont::drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format,
-                         D3DCOLOR color) {
+                         D3DCOLOR color, int outlineR) {
     if (!m_face || !s) return 0;
     const float scale = fontScale();
     int ascent = 0, lineH = 0;
@@ -678,11 +828,20 @@ INT RanD3DXFont::drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format,
         // Touch every glyph so the atlas exists on the next call even if this
         // one cannot draw yet.
         for (INT i = 0; i < count; ++i) glyph((unsigned)s[i]);   // warm the atlas
-        if (!m_atlas) return lineH;
+        if (!m_atlas) return outlineR > 0 ? -1 : lineH;
     }
 
     std::vector<int> gids; std::vector<TtfFace *> faces;
     shapeRun(s, count, gids, faces);
+
+    //  Every mask first: if any one cannot be built the caller draws the old
+    //  eight passes instead, and nothing of this run has been emitted yet.
+    if (outlineR > 0) {
+        for (size_t k = 0; k < gids.size(); ++k) {
+            const Glyph *g = glyphFor(faces[k], gids[k]);
+            if (g && g->w > 0 && g->h > 0 && !outlineFor(g, outlineR)) return -1;
+        }
+    }
 
     int totalW = 0;
     for (size_t k = 0; k < gids.size(); ++k) {
@@ -702,6 +861,22 @@ INT RanD3DXFont::drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format,
     m_device->SetFVF(FONT_FVF);
     m_device->SetTexture(0, m_atlas);
 
+    //  One draw for the whole run, not one per glyph.
+    //
+    //  Every glyph shares the atlas and the state around it, so the only thing
+    //  a per-glyph draw bought was simplicity. It cost the frame: a sampling
+    //  profile of the client in the world put 19% of the process under
+    //  CD3DFontX::DrawText, almost all of it in the per-glyph DrawPrimitiveUP
+    //  and the memmove behind it - the chat box alone is hundreds of glyphs a
+    //  frame, and each one was a stream write, a state check and a draw call.
+    //
+    //  A triangle list rather than a fan, because a fan cannot be batched:
+    //  six vertices a glyph, two triangles, one call at the end. The buffer is
+    //  kept between calls so a run costs no allocation.
+    static std::vector<FontVertex> s_verts;
+    s_verts.clear();
+    if (s_verts.capacity() < 6 * 128) s_verts.reserve(6 * 128);
+
     MarkPlacer placer;
     for (size_t k = 0; k < gids.size(); ++k) {
         const Glyph *g = glyphFor(faces[k], gids[k]);
@@ -709,20 +884,37 @@ INT RanD3DXFont::drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format,
         float ox = x, oy = 0.0f;
         placer.place(g, x, scale, &ox, &oy);
         if (g->w > 0 && g->h > 0) {
-            const float gx = ox + g->bearingX;
-            const float gy = y + oy + ascent - g->bearingY;
+            float gx = ox + g->bearingX;
+            float gy = y + oy + ascent - g->bearingY;
+            float gw = g->w, gh = g->h;
+            float u0 = g->u0, v0 = g->v0, u1 = g->u1, v1 = g->v1;
+            if (outlineR > 0) {
+                //  The mask is the glyph padded by the radius on every side, in
+                //  logical pixels, so the quad grows by the same amount.
+                const float r = (float)outlineR;
+                gx -= r; gy -= r; gw += 2.0f * r; gh += 2.0f * r;
+                u0 = g->ou0; v0 = g->ov0; u1 = g->ou1; v1 = g->ov1;
+            }
             FontVertex v[4];
             const float z = 0.0f, rhw = 1.0f;
-            v[0].x = gx;            v[0].y = gy;            v[0].u = g->u0; v[0].v = g->v0;
-            v[1].x = gx + g->w;     v[1].y = gy;            v[1].u = g->u1; v[1].v = g->v0;
-            v[2].x = gx + g->w;     v[2].y = gy + g->h;     v[2].u = g->u1; v[2].v = g->v1;
-            v[3].x = gx;            v[3].y = gy + g->h;     v[3].u = g->u0; v[3].v = g->v1;
-            for (int k = 0; k < 4; ++k) { v[k].z = z; v[k].rhw = rhw; v[k].color = color; }
-            m_device->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, v, sizeof(FontVertex));
+            v[0].x = gx;            v[0].y = gy;            v[0].u = u0; v[0].v = v0;
+            v[1].x = gx + gw;       v[1].y = gy;            v[1].u = u1; v[1].v = v0;
+            v[2].x = gx + gw;       v[2].y = gy + gh;       v[2].u = u1; v[2].v = v1;
+            v[3].x = gx;            v[3].y = gy + gh;       v[3].u = u0; v[3].v = v1;
+            for (int j = 0; j < 4; ++j) { v[j].z = z; v[j].rhw = rhw; v[j].color = color; }
+
+            //  0,1,2 and 0,2,3 - the same two triangles the fan drew.
+            s_verts.push_back(v[0]); s_verts.push_back(v[1]); s_verts.push_back(v[2]);
+            s_verts.push_back(v[0]); s_verts.push_back(v[2]); s_verts.push_back(v[3]);
         }
         //  A combining mark carries no advance of its own; letting it move the
         //  pen is what spreads a Thai word out into loose, drifting glyphs.
         if (!g->isMark) x += g->advance;
+    }
+
+    if (!s_verts.empty()) {
+        m_device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_verts.size() / 3),
+                                  &s_verts[0], sizeof(FontVertex));
     }
 
     return lineH;

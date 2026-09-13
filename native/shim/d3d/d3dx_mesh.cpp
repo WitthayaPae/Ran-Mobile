@@ -60,12 +60,22 @@ public:
     DWORD m_fvf, m_options;
     DWORD m_numVerts, m_numFaces, m_stride;
     std::vector<BYTE>  m_vertices;
+    //  The same geometry on the GPU. See ensureGpuBuffers.
+    IDirect3DVertexBuffer9 *m_vb;
+    IDirect3DIndexBuffer9  *m_ib;
+    bool                    m_gpuDirty;
+    //  How many draws in a row found the geometry rewritten, and whether this
+    //  mesh has been given up on as a candidate for caching.
+    int                     m_dirtyStreak;
+    bool                    m_streamAlways;
     std::vector<WORD>  m_indices;
     std::vector<DWORD> m_attributes;              // one per face
     std::vector<D3DXATTRIBUTERANGE> m_attribTable;
 
     RanMesh(IDirect3DDevice9 *dev, DWORD numFaces, DWORD numVerts, DWORD options, DWORD fvf)
-        : m_ref(1), m_device(dev), m_fvf(fvf), m_options(options),
+        : m_ref(1), m_device(dev), m_vb(NULL), m_ib(NULL), m_gpuDirty(true),
+          m_dirtyStreak(0), m_streamAlways(false),
+          m_fvf(fvf), m_options(options),
           m_numVerts(numVerts), m_numFaces(numFaces) {
         m_stride = D3DXGetFVFVertexSize(fvf);
         m_vertices.assign((size_t)m_numVerts * m_stride, 0);
@@ -73,7 +83,11 @@ public:
         m_attributes.assign(m_numFaces, 0);
         if (m_device) m_device->AddRef();
     }
-    ~RanMesh() { if (m_device) m_device->Release(); }
+    ~RanMesh() {
+        if (m_vb) m_vb->Release();
+        if (m_ib) m_ib->Release();
+        if (m_device) m_device->Release();
+    }
 
     HRESULT __stdcall QueryInterface(REFIID, void **ppv) { *ppv = this; AddRef(); return S_OK; }
     ULONG   __stdcall AddRef() { return (ULONG)++m_ref; }
@@ -82,24 +96,114 @@ public:
     // --- ID3DXBaseMesh
     HRESULT __stdcall DrawSubset(DWORD AttribId) {
         if (!m_device || m_indices.empty()) return D3D_OK;
-        // Faces carrying this attribute are contiguous after Optimize; without
-        // it they are not, so the run is found rather than assumed.
+
+        //  Which faces carry this attribute, from the table rather than by
+        //  walking the mesh.
+        //
+        //  The scan that used to be here was O(faces) on every draw, of every
+        //  subset, of every frame - a profile of the client in the world put
+        //  DrawSubset at 9.9%, and a mesh of a few thousand faces pays that
+        //  whole walk to find a run the mesh already knows about. The table is
+        //  built once and thrown away by UnlockAttributeBuffer, which is the
+        //  only thing that can change the attributes.
+        if (m_attribTable.empty()) rebuildAttributeTable();
+
         DWORD first = 0, count = 0;
         bool found = false;
-        for (DWORD f = 0; f < m_numFaces; ++f) {
-            if (m_attributes[f] == AttribId) {
-                if (!found) { first = f; found = true; }
-                ++count;
-            } else if (found) {
-                break;
-            }
+        for (size_t i = 0; i < m_attribTable.size(); ++i) {
+            if (m_attribTable[i].AttribId != AttribId) continue;
+            first = m_attribTable[i].FaceStart;
+            count = m_attribTable[i].FaceCount;
+            found = true;
+            break;
         }
         if (!found || !count) return D3D_OK;
 
         m_device->SetFVF(m_fvf);
+
+        //  From the mesh's own GPU buffers, not by streaming it again.
+        //
+        //  DrawIndexedPrimitiveUP hands the driver the whole vertex array on
+        //  every call, and the driver copies it: with the BMW vehicle summoned
+        //  (25,000 triangles across three pieces) that was 16% of the process
+        //  in memmove and cost 37 fps against being on foot. The geometry only
+        //  changes when the client locks and writes it, which these meshes
+        //  almost never do - so it is uploaded once and drawn from there.
+        //  A mesh the client rewrites every frame stays on the streaming path.
+        //
+        //  Caching only pays when the geometry sits still: the vehicle, props,
+        //  items. An effect that scrolls its own UVs (DxSimMesh::SetMoveTex)
+        //  would otherwise pay a full blocking re-upload of its own buffer
+        //  every frame, which is worse than streaming it. Three dirty draws in
+        //  a row is enough to tell the two apart.
+        if (m_gpuDirty) {
+            if (m_dirtyStreak < 100) ++m_dirtyStreak;
+        } else {
+            m_dirtyStreak = 0;
+        }
+        if (m_dirtyStreak >= 3) {
+            if (m_vb) { m_vb->Release(); m_vb = NULL; }
+            if (m_ib) { m_ib->Release(); m_ib = NULL; }
+            m_streamAlways = true;
+        }
+
+        //  Diagnostic: nomeshvbo forces the old streaming path, so the cache
+        //  can be ruled in or out on a running client.
+        const bool noVbo = RanPlat_DiagExists("nomeshvbo") != 0;
+        if (!noVbo && !m_streamAlways && ensureGpuBuffers()) {
+            m_device->SetStreamSource(0, m_vb, 0, m_stride);
+            m_device->SetIndices(m_ib);
+            return m_device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, m_numVerts,
+                                                  first * 3, count);
+        }
+
         return m_device->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, m_numVerts, count,
                                                 &m_indices[(size_t)first * 3], D3DFMT_INDEX16,
                                                 &m_vertices[0], m_stride);
+    }
+
+    //  Creates the buffers on first use and refills them after any write.
+    //  Answers false when the device will not give them, and the caller falls
+    //  back to streaming.
+    bool ensureGpuBuffers() {
+        if (!m_device || m_vertices.empty() || m_indices.empty()) return false;
+
+        if (!m_vb) {
+            if (FAILED(m_device->CreateVertexBuffer((UINT)m_vertices.size(), 0, m_fvf,
+                                                    D3DPOOL_MANAGED, &m_vb, NULL)) || !m_vb)
+                return false;
+            m_gpuDirty = true;
+        }
+        if (!m_ib) {
+            if (FAILED(m_device->CreateIndexBuffer((UINT)(m_indices.size() * sizeof(WORD)), 0,
+                                                   D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_ib, NULL))
+                || !m_ib)
+                return false;
+            m_gpuDirty = true;
+        }
+
+        if (m_gpuDirty) {
+            //  A plain lock, NOT D3DLOCK_DISCARD.
+            //
+            //  Discard tells the shim this is streamed data and sends it to the
+            //  vertex ring, which is exactly wrong for storage that has to
+            //  survive: the ring wraps, and a mesh uploaded once then reads
+            //  back whatever later writes put there. That is what made the
+            //  weapon effect render wrong. Without the flag the buffer keeps
+            //  its own GL storage, which is the whole point of caching it.
+            void *dst = NULL;
+            if (SUCCEEDED(m_vb->Lock(0, (UINT)m_vertices.size(), &dst, 0)) && dst) {
+                memcpy(dst, &m_vertices[0], m_vertices.size());
+                m_vb->Unlock();
+            }
+            dst = NULL;
+            if (SUCCEEDED(m_ib->Lock(0, (UINT)(m_indices.size() * sizeof(WORD)), &dst, 0)) && dst) {
+                memcpy(dst, &m_indices[0], m_indices.size() * sizeof(WORD));
+                m_ib->Unlock();
+            }
+            m_gpuDirty = false;
+        }
+        return true;
     }
     DWORD __stdcall GetNumFaces() { return m_numFaces; }
     DWORD __stdcall GetNumVertices() { return m_numVerts; }
@@ -153,13 +257,13 @@ public:
         *ppData = m_vertices.empty() ? NULL : &m_vertices[0];
         return D3D_OK;
     }
-    HRESULT __stdcall UnlockVertexBuffer() { return D3D_OK; }
+    HRESULT __stdcall UnlockVertexBuffer() { m_gpuDirty = true; return D3D_OK; }
     HRESULT __stdcall LockIndexBuffer(DWORD, LPVOID *ppData) {
         if (!ppData) return D3DERR_INVALIDCALL;
         *ppData = m_indices.empty() ? NULL : &m_indices[0];
         return D3D_OK;
     }
-    HRESULT __stdcall UnlockIndexBuffer() { return D3D_OK; }
+    HRESULT __stdcall UnlockIndexBuffer() { m_gpuDirty = true; return D3D_OK; }
     HRESULT __stdcall GetAttributeTable(D3DXATTRIBUTERANGE *pAttribTable, DWORD *pAttribTableSize) {
         if (!pAttribTableSize) return D3DERR_INVALIDCALL;
         if (m_attribTable.empty()) rebuildAttributeTable();
@@ -223,6 +327,7 @@ private:
         m_indices.swap(idx);
         m_attributes.swap(att);
         m_attribTable.clear();
+        m_gpuDirty = true;
     }
 
     void rebuildAttributeTable() {

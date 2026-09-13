@@ -15,6 +15,8 @@
 
 #ifdef __cplusplus
 extern "C" void RanProf_Section ( const char *szName, double fSeconds );
+extern "C" void RanGLR_SectionEnter ( const char *szName );	//	"sectionskip" - gl_render.cpp
+extern "C" void RanGLR_SectionLeave ( const char *szName );
 
 namespace RanProf
 {
@@ -23,9 +25,10 @@ namespace RanProf
 		const char     *m_szName;
 		struct timespec m_start;
 		explicit Section ( const char *szName ) : m_szName ( szName )
-		{ clock_gettime ( CLOCK_MONOTONIC, &m_start ); }
+		{ RanGLR_SectionEnter ( szName ); clock_gettime ( CLOCK_MONOTONIC, &m_start ); }
 		~Section ()
 		{
+			RanGLR_SectionLeave ( m_szName );
 			struct timespec now;
 			clock_gettime ( CLOCK_MONOTONIC, &now );
 			RanProf_Section ( m_szName,

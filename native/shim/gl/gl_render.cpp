@@ -441,18 +441,53 @@ bool uniformChanged(GLint loc, const float *values, int count) {
     return true;
 }
 
+//  Uniform traffic by kind, for the frame report: calls then bytes for the bone
+//  palette (16 matrices), single matrices, small values, the light block, and
+//  uploads that bypass the cache. Measurement only.
+unsigned long g_uni[10] = { 0 };
+extern bool g_uniAfterSwitch;
+extern unsigned long g_uniSwitchCalls, g_uniSwitchBytes;
+inline void countUni(int kind, unsigned long bytes) {
+    ++g_uni[kind * 2]; g_uni[kind * 2 + 1] += bytes;
+    if (g_uniAfterSwitch) { ++g_uniSwitchCalls; g_uniSwitchBytes += bytes; }
+}
+enum { kUniPalette = 0, kUniMatrix = 1, kUniSmall = 2, kUniLights = 3, kUniUncached = 4 };
+//  Palette slots the current draw's shader reads, for the same report: 0 none,
+//  1..3 the blend count (that many weights + 1 matrices), 4 more, 5 indexed.
+int g_palBucket = 0;
+unsigned long g_palDraws[6] = { 0 }, g_palUploads[6] = { 0 };
+//  Bone palette trimming is on; "nopalettetrim" sends all 16 again. Verified on
+//  LDPlayer 2026-09-13: 28.8 -> 34.1 fps with ~98 players, no visual change.
+bool g_noPaletteTrim = false;
+//  Cost-attribution switches: each drops one kind of uniform upload so its
+//  price shows in the frame rate. The frame draws wrong while one is on.
+bool g_skipLightBlock = false, g_skipMatrixUni = false, g_skipSmallUni = false;
+//  Set around the palette upload, so a trimmed one still counts as the palette.
+bool g_palUploadNow = false;
+//  Light block uploads by cause: 0 program cache stale (same lights as the last
+//  block seen), 1 light count changed, 2 light values changed.
+unsigned long g_lightCause[3] = { 0 };
+//  Palette slots an indexed draw can reach (D3DRS_VERTEXBLEND + 1, from the
+//  device), bucketed 1-4, 5-8, 9-12, 13-16, more; and their sum.
+int g_palSlotsRaw = 16;
+unsigned long g_palSlotHist[5] = { 0 }, g_palSlotSum = 0;
+extern "C" void RanGLR_NotePaletteSlots(int slots) { g_palSlotsRaw = slots; }
+
 void setUniform1i(GLint loc, GLint v) {
+    if (g_skipSmallUni) return;
     const float f = (float)v;
-    if (uniformChanged(loc, &f, 1)) { glUniform1i(loc, v); ++g_callsUniform; }
+    if (uniformChanged(loc, &f, 1)) { glUniform1i(loc, v); ++g_callsUniform; countUni(kUniSmall, 4); }
 }
 
 void setUniform2f(GLint loc, GLfloat x, GLfloat y) {
+    if (g_skipSmallUni) return;
     const float v[2] = { x, y };
-    if (uniformChanged(loc, v, 2)) { glUniform2f(loc, x, y); ++g_callsUniform; }
+    if (uniformChanged(loc, v, 2)) { glUniform2f(loc, x, y); ++g_callsUniform; countUni(kUniSmall, 8); }
 }
 
 void setUniform1f(GLint loc, GLfloat v) {
-    if (uniformChanged(loc, &v, 1)) { glUniform1f(loc, v); ++g_callsUniform; }
+    if (g_skipSmallUni) return;
+    if (uniformChanged(loc, &v, 1)) { glUniform1f(loc, v); ++g_callsUniform; countUni(kUniSmall, 4); }
 }
 
 //  Polygon offset, cached: it changes rarely and every GL call is measurable.
@@ -475,15 +510,23 @@ void setPolygonOffset(float factor, float units) {
 }
 
 void setUniformVec4(GLint loc, const float *v) {
-    if (uniformChanged(loc, v, 4)) { glUniform4fv(loc, 1, v); ++g_callsUniform; }
+    if (g_skipSmallUni) return;
+    if (uniformChanged(loc, v, 4)) { glUniform4fv(loc, 1, v); ++g_callsUniform; countUni(kUniSmall, 16); }
 }
 
 void setUniform3fv(GLint loc, const float *v) {
-    if (uniformChanged(loc, v, 3)) { glUniform3fv(loc, 1, v); ++g_callsUniform; }
+    if (g_skipSmallUni) return;
+    if (uniformChanged(loc, v, 3)) { glUniform3fv(loc, 1, v); ++g_callsUniform; countUni(kUniSmall, 12); }
 }
 
 void setUniformMatrix(GLint loc, const float *m, int count) {
-    if (uniformChanged(loc, m, 16 * count)) { glUniformMatrix4fv(loc, count, GL_FALSE, m); ++g_callsUniform; }
+    if (g_skipMatrixUni && !(count == 16 || g_palUploadNow)) return;
+    if (uniformChanged(loc, m, 16 * count)) {
+        glUniformMatrix4fv(loc, count, GL_FALSE, m); ++g_callsUniform;
+        const bool palette = (count == 16 || g_palUploadNow);
+        countUni(palette ? kUniPalette : kUniMatrix, 64ul * (unsigned long)count);
+        if (palette) ++g_palUploads[g_palBucket];
+    }
 }
 
 //  The program is recreated only on init; drop the cache with it.
@@ -537,6 +580,16 @@ GLint  uMVP = -1, uViewport = -1, uPreTransformed = -1, uTex = -1,
        uTexSize = -1, uUiSharpen = -1,
        uGammaOn = -1, uGammaLut = -1, uPlain = -1;
 GLuint g_vbo = 0, g_ibo = 0, g_vao = 0;
+
+//  "fvfvao": a VAO per FVF. The vertex buffer binding is VAO state, so each one
+//  remembers its own; names are recycled after a delete, so RanGLR_DeleteBuffer
+//  clears any record naming the deleted buffer, and the whole map goes with the
+//  context.
+struct FvfVao { GLuint vao; GLuint buf; GLsizei base; UINT stride; };
+std::map<unsigned, FvfVao> g_fvfVaos;
+//  Bumped whenever the streaming VAO is created. A new context can hand back the
+//  same VAO name, and the per-attribute format cache (g_attrFmt) must not survive it.
+unsigned g_vaoGeneration = 0;
 // Stage-0 combiner, mirroring the device's texture stage state.
 DWORD g_colorOp = 4 /*MODULATE*/, g_colorArg1 = 2 /*TEXTURE*/, g_colorArg2 = 0 /*DIFFUSE*/;
 DWORD g_alphaOp = 4, g_alphaArg1 = 2, g_alphaArg2 = 0;
@@ -606,6 +659,10 @@ int g_drawLog = 0;
 //  magnified back up - so if the scene renders into one, drawing the frame at
 //  panel resolution buys nothing for it.
 unsigned long g_rtDraws = 0;
+//  Every actual framebuffer change. On a tiled GPU each one resolves what was
+//  being drawn and restores what comes next, so a pass that keeps switching
+//  costs far more than its draw count suggests.
+unsigned long g_rtSwitches = 0;
 int g_rtBiggestW = 0, g_rtBiggestH = 0;
 bool g_drawDump = false;      // /sdcard/ran/drawdump, one burst per touch
 const void *g_diagVerts = NULL;   // CPU copy of a buffer-sourced draw, dump only
@@ -670,7 +727,18 @@ struct GlState {
 };
 GlState g_gl;
 
-void useProgram(GLuint p)  { if (g_gl.program != p) { glUseProgram(p); g_gl.program = p; } }
+//  glUseProgram calls and variant key changes per report. Measurement only.
+unsigned long g_progSwitches = 0, g_variantChanges = 0;
+//  Attribute format re-specifications (all seven attributes, ~21 GL calls each)
+//  and glBindVertexBuffer calls, counted exactly. Measurement only.
+unsigned long g_fvfRespecs = 0, g_vbBinds = 0;
+//  Which variant key bits differ at each change, by bit.
+unsigned long g_variantBitFlips[32] = { 0 };
+//  Set when this draw changed variant; uniform uploads made while it is set are
+//  counted apart, as uploads a program switch caused.
+bool g_uniAfterSwitch = false;
+unsigned long g_uniSwitchCalls = 0, g_uniSwitchBytes = 0;
+void useProgram(GLuint p)  { if (g_gl.program != p) { glUseProgram(p); g_gl.program = p; ++g_progSwitches; } }
 
 //  Unit 0's binding is cached so a run of draws sharing a texture costs one
 //  glBindTexture. Every bind of unit 0 has to go through here: an upload path
@@ -725,6 +793,14 @@ void setCull(bool on, GLenum front) {
 }
 
 unsigned long g_drawCalls = 0, g_uiDraws = 0, g_texturedDraws = 0, g_vertsDrawn = 0;
+
+//  Read by engine-side probes that want to attribute draws to a section.
+extern "C" unsigned long RanGL_DrawCalls(void) { return g_drawCalls; }
+extern "C" unsigned long RanGL_RTSwitches(void) { return g_rtSwitches; }
+extern "C" unsigned long RanGL_GLCalls(void) {
+    return g_callsUniform + g_callsTexture + g_callsAttrib + g_callsState +
+           g_callsDraw + g_callsBuffer;
+}
 //  Texture traffic: full chain uploads against partial rectangle updates,
 //  the difference between a glyph costing an atlas and costing a scanline.
 unsigned long g_texUpdates = 0, g_texUpdateBytes = 0, g_texFullUploads = 0;
@@ -757,12 +833,117 @@ bool g_haveAttribFormat = false;
 //  CPU work the client and the shim do regardless of the GPU - the part that
 //  costs the same on a fast desktop emulator and on a tablet.
 bool g_nullDraw = false;
+//  "sectionskip": the name of one frame section (as the FRAME sections line
+//  prints it) whose draws are dropped while it is open. Finds which pass paints
+//  an artefact on a live frame, without a rebuild or a second login. The
+//  section markers call RanGLR_SectionEnter/Leave; nesting is counted, so a
+//  section that recurses or is re-entered inside itself stays skipped.
+int  g_sectionSkipDepth = 0;
+char g_sectionSkipName[48] = { 0 };
+//  The sections open right now, innermost last. "blendlog" tags each draw with
+//  the innermost one, so a state that paints an artefact names its own pass.
+const char *g_sectionStack[16] = { 0 };
+int  g_sectionTop = 0;
+
+extern "C" void RanGLR_SectionEnter(const char *name) {
+    if (g_sectionTop < 16) g_sectionStack[g_sectionTop] = name;
+    ++g_sectionTop;
+    if (g_sectionSkipName[0] && name && strcmp(name, g_sectionSkipName) == 0)
+        ++g_sectionSkipDepth;
+}
+
+extern "C" void RanGLR_SectionLeave(const char *name) {
+    if (g_sectionTop > 0) --g_sectionTop;
+    if (g_sectionSkipName[0] && name && strcmp(name, g_sectionSkipName) == 0 &&
+        g_sectionSkipDepth > 0)
+        --g_sectionSkipDepth;
+}
+
+//  Streamed vertex bytes by who sent them: the innermost open section, the
+//  vertex format, and whether it came through the draw path (client arrays)
+//  or a dynamic vertex buffer. Measurement only; the names are string
+//  literals, so the pointer is the key.
+struct StreamSource {
+    const char *section; unsigned fvf; int path; unsigned tex;
+    unsigned long calls, bytes, maxVerts;
+};
+StreamSource g_streamSources[64];
+int g_streamSourceCount = 0;
+
+void noteStreamSource(unsigned fvf, int path, unsigned long bytes, unsigned tex, unsigned long verts) {
+    const char *sec = (g_sectionTop > 0 && g_sectionTop <= 16) ? g_sectionStack[g_sectionTop - 1] : NULL;
+    for (int i = 0; i < g_streamSourceCount; ++i) {
+        StreamSource &s = g_streamSources[i];
+        if (s.section == sec && s.fvf == fvf && s.path == path && s.tex == tex) {
+            ++s.calls; s.bytes += bytes;
+            if (verts > s.maxVerts) s.maxVerts = verts;
+            return;
+        }
+    }
+    if (g_streamSourceCount < 64) {
+        StreamSource &s = g_streamSources[g_streamSourceCount++];
+        s.section = sec; s.fvf = fvf; s.path = path; s.tex = tex;
+        s.calls = 1; s.bytes = bytes; s.maxVerts = verts;
+    }
+}
+
+extern "C" void RanGLR_ReportStreamSections(unsigned frames) {
+    if (!frames) return;
+    for (int n = 0; n < 8; ++n) {
+        int best = -1;
+        for (int i = 0; i < g_streamSourceCount; ++i)
+            if (g_streamSources[i].bytes && (best < 0 || g_streamSources[i].bytes > g_streamSources[best].bytes)) best = i;
+        if (best < 0) break;
+        StreamSource &s = g_streamSources[best];
+        int tw = 0, th = 0;
+        std::map<unsigned, std::pair<int, int> >::const_iterator d = g_texDims.find(s.tex);
+        if (d != g_texDims.end()) { tw = d->second.first; th = d->second.second; }
+        LOGI("FRAME stream source: %s fvf %04x %s tex %u (%dx%d): %lu writes %lu KB /frame, largest %lu verts",
+             s.section ? s.section : "(none)", s.fvf, s.path ? "dynamic-vb" : "draw-path",
+             s.tex, tw, th, s.calls / frames, s.bytes / 1024 / frames, s.maxVerts);
+        s.bytes = 0;
+    }
+    g_streamSourceCount = 0;
+}
+
+//  Whether the render target in use has no alpha channel of its own.
+//
+//  D3D reads the destination alpha of such a target as 1: the back buffer is
+//  X8R8G8B8 and DxSurfaceTex makes its scratch targets X1R5G5B5, so a
+//  D3DBLEND_DESTALPHA there means "one" and INVDESTALPHA means "zero". GL keeps
+//  a real alpha channel in both - the EGL config asks for eight bits and the
+//  target textures are RGBA - holding whatever the last blend wrote. Blended
+//  against that, DESTALPHA reads back arbitrary numbers where D3D had a
+//  constant. "nodstalphafix" restores the plain mapping, for comparison.
+bool g_targetOpaque = true;
+bool g_noDstAlphaFix = false;   // /sdcard/ran/nodstalphafix
+bool g_blendLog = false;        // /sdcard/ran/blendlog
+
+extern "C" void RanGLR_SetTargetOpaque(int opaque) {
+    g_targetOpaque = (opaque != 0);
+}
 //  Finer diagnostics, same mechanism: each file removes one class of GL call
 //  from the draw path so its share of the frame can be measured directly.
 bool g_skipUniform = false;   // /sdcard/ran/nouniform
 bool g_skipTex     = false;   // /sdcard/ran/notex
 bool g_skipAttr    = false;   // /sdcard/ran/noattr
 bool g_skipStream  = false;   // /sdcard/ran/nostream
+//  One VAO per vertex format, its format described once when it is created,
+//  instead of re-describing all seven attributes on the shared streaming VAO at
+//  every FVF change (~122-139 a frame at ~21 GL calls each with ~95 players in
+//  view). Verified on LDPlayer 2026-09-13: re-specifications to 0, no encoder
+//  errors, 42.9 -> 44.3 fps over six interleaved rounds, characters unchanged.
+//  On by default; "nofvfvao" goes back to the shared VAO.
+bool g_fvfVaoOn = true;
+bool g_noFvfVao = false;        // /sdcard/ran/nofvfvao
+//  "nopaletteuni": skip the bone palette upload, to measure what its bytes cost.
+//  Measurement only; characters draw wrong while it is on.
+bool g_skipPaletteUni = false;
+//  "streamsub": stream through a second ring that never maps persistently and
+//  writes with glBufferSubData, to A/B the two write paths in one session.
+bool g_streamSub   = false;
+//  Vertices streamed by the draw path itself (client arrays), per report.
+unsigned long g_upCalls = 0, g_upBytes = 0;
 bool g_skipBlend   = false;   // /sdcard/ran/noblend
 bool g_cpuSkin     = false;   // /sdcard/ran/cpuskin
 bool g_noAttribFmt = false;   // /sdcard/ran/noattribformat
@@ -844,6 +1025,15 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
         { "nocull",    &g_noCull,      "face culling entirely" },
         { "cullflip",  &g_cullFlip,    "the world front face (CW <-> CCW)" },
+        { "nodstalphafix", &g_noDstAlphaFix, "destination alpha as one on targets with no alpha channel" },
+        { "blendlog",  &g_blendLog,    "NOT logging each new blend state per frame section" },
+        { "nofvfvao", &g_noFvfVao, "the per-FVF VAOs (the shared VAO is re-described on FVF change)" },
+        { "nopaletteuni", &g_skipPaletteUni, "bone palette uploads (cost measurement; characters draw wrong)" },
+        { "streamsub", &g_streamSub, "persistent-mapped streaming (glBufferSubData ring instead)" },
+        { "nopalettetrim", &g_noPaletteTrim, "bone palette trimming (all 16 matrices are sent again)" },
+        { "nolightblock", &g_skipLightBlock, "light block uploads (cost measurement; lighting goes wrong)" },
+        { "nomatrixuni", &g_skipMatrixUni, "single-matrix uniform uploads (cost measurement; geometry goes wrong)" },
+        { "nosmalluni", &g_skipSmallUni, "small uniform uploads (cost measurement; shading goes wrong)" },
     };
 
     //  A one-shot readback of every loaded texture. Same re-arm as the draw
@@ -899,6 +1089,24 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         if (limit != g_drawLimit) {
             g_drawLimit = limit;
             LOGI("diagnostic: draw limit %d", g_drawLimit);
+        }
+    }
+
+    {
+        char name[48] = { 0 };
+        FILE *f = (RanPlat_DiagExists("sectionskip"))
+                      ? RanPlat_DiagOpen("sectionskip") : NULL;
+        if (f) {
+            if (fread(name, 1, sizeof(name) - 1, f) > 0) {
+                size_t n = strlen(name);
+                while (n > 0 && (unsigned char)name[n - 1] <= ' ') name[--n] = 0;
+            }
+            fclose(f);
+        }
+        if (strcmp(name, g_sectionSkipName) != 0) {
+            memcpy(g_sectionSkipName, name, sizeof(g_sectionSkipName));
+            g_sectionSkipDepth = 0;
+            LOGI("diagnostic: section skip %s", name[0] ? name : "(none)");
         }
     }
 
@@ -1143,6 +1351,12 @@ void useVariant(unsigned key) {
         return;
     }
 
+    ++g_variantChanges;
+    {
+        const unsigned flips = key ^ g_variantKey;
+        for (int b = 0; b < 32; ++b) if (flips & (1u << b)) ++g_variantBitFlips[b];
+        g_uniAfterSwitch = true;
+    }
     //  Park the current program's cache before the locations change under it.
     std::map<unsigned, Variant>::iterator prev = g_variants.find(g_variantKey);
     if (prev != g_variants.end()) prev->second.cache.swap(g_uniformCache);
@@ -1218,6 +1432,9 @@ extern "C" int RanGLR_Init(void) {
     fetchUniformLocations(g_prog);
 
     glGenVertexArrays(1, &g_vao);
+    ++g_vaoGeneration;
+    //  Any per-FVF VAOs belonged to the previous context.
+    g_fvfVaos.clear();
     glGenBuffers(1, &g_vbo);
     glGenBuffers(1, &g_ibo);
 
@@ -1285,6 +1502,7 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
         if (g_rtActive) {
             glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
             g_rtActive = false;
+            ++g_rtSwitches;
         }
         glViewport(0, 0, RanGL_Width(), RanGL_Height());
         return;
@@ -1349,6 +1567,7 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
     } else {
         glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
     }
+    ++g_rtSwitches;
 
     g_rtActive = true;
     g_rtFbo = rt.fbo;
@@ -1617,7 +1836,24 @@ void applyProgramUniforms() {
     if (g_stage1Mode) setUniformMatrix(uView, g_viewMatrix, 1);
 
     setUniform1i(uVertexBlend, g_vertexBlend);
-    setUniformMatrix(uWorldM, g_worldM, 16);
+    //  "palettetrim": send only the slots this draw can index. The engine fills
+    //  WORLDMATRIX(0..VERTEXBLEND) before each group (DxSkinMesh9_NORMAL.cpp) and
+    //  every vertex's palette index is a slot inside its own group
+    //  (d3dx_hierarchy.cpp), so nothing past VERTEXBLEND is read by this draw.
+    //  Measured: 6.4 of 16 slots on average with ~100 players in view.
+    {
+        int slots = 16;
+        if (!g_noPaletteTrim) {
+            slots = g_palSlotsRaw;
+            if (slots < 1) slots = 1;
+            if (slots > 16) slots = 16;
+        }
+        if (!g_skipPaletteUni) {
+            g_palUploadNow = true;
+            setUniformMatrix(uWorldM, g_worldM, slots);
+            g_palUploadNow = false;
+        }
+    }
     setUniformMatrix(uViewProj, g_viewProj, 1);
 
     setUniform1i(uLighting, g_lightingOn);
@@ -1650,19 +1886,19 @@ void applyProgramUniforms() {
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, g_gammaLut);
         glActiveTexture(GL_TEXTURE0);
-        if (uGammaLut >= 0) glUniform1i(uGammaLut, 3);
+        if (uGammaLut >= 0) { glUniform1i(uGammaLut, 3); countUni(kUniUncached, 4); }
     }
     if (g_specularOn) {
         setUniform3fv(uMatSpecular, g_matSpecular);
         setUniform1f(uMatPower, g_matPower);
-        if (uLightSpecular >= 0) glUniform3fv(uLightSpecular, 8, g_lightSpecular);
+        if (uLightSpecular >= 0) { glUniform3fv(uLightSpecular, 8, g_lightSpecular); countUni(kUniUncached, 96); }
     }
     setUniform3fv(uGlobalAmbient, g_globalAmbient);
     setUniform3fv(uMatDiffuse, g_matDiffuse);
     setUniform3fv(uMatAmbient, g_matAmbient);
     setUniform3fv(uMatEmissive, g_matEmissive);
     setUniform1f(uMatAlpha, g_matAlpha);
-    if (g_lightCount > 0) {
+    if (g_lightCount > 0 && !g_skipLightBlock) {
         //  Compared as one block: the light set changes far less often than it
         //  is sent, and six array uploads a draw is most of the uniform traffic.
         //  Fixed storage, because this runs on every draw and a heap allocation
@@ -1675,13 +1911,21 @@ void applyProgramUniforms() {
         memcpy(lights + n, g_lightPos,     sizeof(float) * g_lightCount * 4); n += g_lightCount * 4;
         memcpy(lights + n, g_lightDir,     sizeof(float) * g_lightCount * 3); n += g_lightCount * 3;
         memcpy(lights + n, g_lightAtten,   sizeof(float) * g_lightCount * 3); n += g_lightCount * 3;
+        //  Measurement: was this block new, or only new to this program?
+        static float s_lastLights[8 * 17];
+        static int   s_lastN = -1;
+        const bool sameAsLast = (s_lastN == n && memcmp(s_lastLights, lights, sizeof(float) * n) == 0);
+        const int  cause = sameAsLast ? 0 : (s_lastN != n ? 1 : 2);
+        if (!sameAsLast) { memcpy(s_lastLights, lights, sizeof(float) * n); s_lastN = n; }
         if (uniformChanged(uLightType, lights, n)) {
+            ++g_lightCause[cause];
             glUniform1iv(uLightType, g_lightCount, g_lightType);
             glUniform3fv(uLightDiffuse, g_lightCount, g_lightDiffuse);
             glUniform3fv(uLightAmbient, g_lightCount, g_lightAmbient);
             glUniform4fv(uLightPos, g_lightCount, g_lightPos);
             glUniform3fv(uLightDir, g_lightCount, g_lightDir);
             glUniform3fv(uLightAtten, g_lightCount, g_lightAtten);
+            g_uni[kUniLights * 2] += 6; g_uni[kUniLights * 2 + 1] += (unsigned long)n * 4;
         }
     }
 
@@ -1700,12 +1944,38 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
     g_dsBlend = rs[D3DRS_ALPHABLENDENABLE]; g_dsSrc = rs[D3DRS_SRCBLEND]; g_dsDst = rs[D3DRS_DESTBLEND];
     g_dsZ = rs[D3DRS_ZENABLE]; g_dsZW = rs[D3DRS_ZWRITEENABLE]; g_dsCull = rs[D3DRS_CULLMODE];
     g_dsATest = rs[D3DRS_ALPHATESTENABLE]; g_dsARef = rs[D3DRS_ALPHAREF] & 0xFF;
+    //  "blendlog": one line per new pairing of the innermost open frame section
+    //  and the blend a draw inside it uses. Which pass puts a black panel on the
+    //  screen, and with what factors, reads straight off the log.
+    if (g_blendLog && g_sectionTop > 0) {
+        const char *sec = g_sectionStack[(g_sectionTop < 16 ? g_sectionTop : 16) - 1];
+        char key[200];
+        snprintf(key, sizeof(key),
+                 "%s blend=%lu src=%lu dst=%lu cop=%lu aop=%lu atest=%lu/%lu opaque=%d fix=%d",
+                 sec ? sec : "?", (unsigned long)g_dsBlend, (unsigned long)g_dsSrc,
+                 (unsigned long)g_dsDst, (unsigned long)g_colorOp, (unsigned long)g_alphaOp,
+                 (unsigned long)g_dsATest, (unsigned long)g_dsARef,
+                 g_targetOpaque ? 1 : 0, g_noDstAlphaFix ? 0 : 1);
+        static std::set<std::string> s_said;
+        if (s_said.size() < 300 && s_said.insert(key).second) LOGI("blendlog: %s", key);
+    }
     // The alpha-test uniforms below go to the CURRENT program, so it has to be
     // bound here and not left to the draw call that follows - through the
     // cache, since this runs once per draw and the program never changes.
 
-    setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0,
-             blendFactor(rs[D3DRS_SRCBLEND]), blendFactor(rs[D3DRS_DESTBLEND]));
+    {
+        const DWORD src = rs[D3DRS_SRCBLEND], dst = rs[D3DRS_DESTBLEND];
+        GLenum gsrc = blendFactor(src), gdst = blendFactor(dst);
+        //  A target with no alpha channel: destination alpha is one, as D3D reads
+        //  it, not whatever the GL storage behind it holds. See g_targetOpaque.
+        if (g_targetOpaque && !g_noDstAlphaFix) {
+            if (src == D3DBLEND_DESTALPHA)          gsrc = GL_ONE;
+            else if (src == D3DBLEND_INVDESTALPHA)  gsrc = GL_ZERO;
+            if (dst == D3DBLEND_DESTALPHA)          gdst = GL_ONE;
+            else if (dst == D3DBLEND_INVDESTALPHA)  gdst = GL_ZERO;
+        }
+        setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0, gsrc, gdst);
+    }
 
     //  D3DRS_DEPTHBIAS is a float packed into the state DWORD, added straight to
     //  the depth value; the engine uses it to lift decals, trims and effect
@@ -1763,8 +2033,12 @@ struct RingBuffer {
     //  this way again.
     GLsync lapFence;
 
-    RingBuffer(GLenum t) : buffer(0), target(t), capacity(0), cursor(0),
-                           mapped(NULL), lapFence(0) {}
+    //  True for the "streamsub" ring: always the glBufferSubData path.
+    bool noPersistent;
+
+    RingBuffer(GLenum t, bool noPersist = false)
+        : buffer(0), target(t), capacity(0), cursor(0), mapped(NULL), lapFence(0),
+          noPersistent(noPersist) {}
 
     //  Immutable storage, mapped once. Only ever called for a fresh name.
     bool createPersistent(GLsizei bytes) {
@@ -1801,7 +2075,7 @@ struct RingBuffer {
 
         //  The fast path: the buffer is already mapped, so the write is a
         //  memcpy and costs the driver nothing at all.
-        if (g_havePersistentMap) {
+        if (g_havePersistentMap && !noPersistent) {
             if (!mapped) {
                 GLsizei want = size * 4;
                 if (want < (16 << 20)) want = 16 << 20;
@@ -1942,6 +2216,20 @@ void forgetVaosForBuffer(unsigned buffer) {
 
 RingBuffer g_streamVerts(GL_ARRAY_BUFFER);
 RingBuffer g_streamIndices(GL_ELEMENT_ARRAY_BUFFER);
+RingBuffer g_streamVertsSub(GL_ARRAY_BUFFER, true);
+inline RingBuffer &streamRing() { return g_streamSub ? g_streamVertsSub : g_streamVerts; }
+
+//  The VAO for one FVF, created on first use with no buffer bound yet.
+FvfVao *fvfVaoFor(unsigned fvf, bool *created) {
+    std::map<unsigned, FvfVao>::iterator it = g_fvfVaos.find(fvf);
+    if (it != g_fvfVaos.end()) { *created = false; return &it->second; }
+    FvfVao v;
+    v.vao = 0;
+    glGenVertexArrays(1, &v.vao);
+    v.buf = 0xFFFFFFFFu; v.base = -1; v.stride = -1;
+    *created = true;
+    return &(g_fvfVaos[fvf] = v);
+}
 
 //  How much of a frame is spent submitting draws, as opposed to the engine
 //  deciding what to draw. Measured because "it is slow" is not a diagnosis —
@@ -1978,6 +2266,67 @@ extern "C" void RanGLR_TakeCallCounts(unsigned long *uniform, unsigned long *tex
     g_callsUniform = g_callsTexture = g_callsAttrib = g_callsState = g_callsDraw = g_callsBuffer = 0;
 }
 
+//  Uniform calls and bytes by kind since the last read; see g_uni.
+extern "C" void RanGLR_TakeUniformCounts(unsigned long *out10) {
+    for (int i = 0; i < 10; ++i) { if (out10) out10[i] = g_uni[i]; g_uni[i] = 0; }
+}
+
+//  Draws and palette uploads by palette slots read since the last read; see
+//  g_palBucket.
+extern "C" void RanGLR_TakePaletteUse(unsigned long *draws6, unsigned long *uploads6) {
+    for (int i = 0; i < 6; ++i) {
+        if (draws6) draws6[i] = g_palDraws[i];
+        if (uploads6) uploads6[i] = g_palUploads[i];
+        g_palDraws[i] = g_palUploads[i] = 0;
+    }
+}
+
+extern "C" void RanGLR_TakeAttribCounts(unsigned long *fvfRespecs, unsigned long *vbBinds) {
+    if (fvfRespecs) *fvfRespecs = g_fvfRespecs;
+    if (vbBinds) *vbBinds = g_vbBinds;
+    g_fvfRespecs = g_vbBinds = 0;
+}
+
+extern "C" void RanGLR_TakeProgramSwitches(unsigned long *useProgram, unsigned long *variantChanges) {
+    if (useProgram) *useProgram = g_progSwitches;
+    if (variantChanges) *variantChanges = g_variantChanges;
+    g_progSwitches = g_variantChanges = 0;
+}
+
+//  Logs which variant key bits flip per frame and the uniform uploads made on
+//  draws that switched program, then resets. Measurement only.
+extern "C" void RanGLR_ReportVariantFlips(unsigned frames) {
+    if (!frames) return;
+    char line[512] = "FRAME variant bit flips/frame:";
+    for (int b = 0; b < 32; ++b) {
+        if (!g_variantBitFlips[b]) continue;
+        char one[32];
+        snprintf(one, sizeof(one), " b%d=%lu", b, g_variantBitFlips[b] / frames);
+        strncat(line, one, sizeof(line) - strlen(line) - 1);
+        g_variantBitFlips[b] = 0;
+    }
+    LOGI("%s", line);
+    LOGI("FRAME uniforms on switching draws/frame: %lu calls %lu KB",
+         g_uniSwitchCalls / frames, g_uniSwitchBytes / 1024 / frames);
+    g_uniSwitchCalls = g_uniSwitchBytes = 0;
+}
+
+extern "C" void RanGLR_TakeUpStream(unsigned long *calls, unsigned long *bytes) {
+    if (calls) *calls = g_upCalls;
+    if (bytes) *bytes = g_upBytes;
+    g_upCalls = g_upBytes = 0;
+}
+
+extern "C" void RanGLR_TakeLightCauses(unsigned long *out3) {
+    for (int i = 0; i < 3; ++i) { if (out3) out3[i] = g_lightCause[i]; g_lightCause[i] = 0; }
+}
+
+extern "C" void RanGLR_TakePaletteSlots(unsigned long *hist5, unsigned long *sum) {
+    for (int i = 0; i < 5; ++i) { if (hist5) hist5[i] = g_palSlotHist[i]; g_palSlotHist[i] = 0; }
+    if (sum) *sum = g_palSlotSum;
+    g_palSlotSum = 0;
+}
+
 extern "C" unsigned long RanGLR_TakeDrawCount(void) {
     const unsigned long v = g_drawsSinceReport;
     g_drawsSinceReport = 0;
@@ -1992,6 +2341,54 @@ extern "C" double RanGLR_TakeDrawSeconds(void) {
 
 //  Monotonic, for a second reader that must not disturb the first.
 extern "C" double RanGLR_DrawSecondsTotal(void) { return g_drawSecondsTotal; }
+
+//  The streaming VAO's vertex format, one attribute at a time.
+//
+//  Any FVF change used to re-issue every attribute - format, binding and an
+//  enable or a disable-plus-constant for all seven - about twenty GL calls,
+//  when a skinned piece following a rigid one differs only in its blend
+//  weights and palette indices. A crowd alternates FVFs hundreds of times a
+//  frame. Format and enable state live in the VAO, so while the same VAO is
+//  bound only the attributes that differ need saying.
+struct RanAttrFmt {
+    bool known; bool enabled;
+    GLint size; GLenum type; GLboolean norm; GLuint off;
+};
+RanAttrFmt g_attrFmt[7];
+GLuint g_attrFmtVao = 0xFFFFFFFFu;
+unsigned g_attrFmtGen = 0xFFFFFFFFu;
+
+inline void attrForgetAll(GLuint vao) {
+    for (int i = 0; i < 7; ++i) g_attrFmt[i].known = false;
+    g_attrFmtVao = vao;
+    g_attrFmtGen = g_vaoGeneration;
+}
+
+inline void attrOn(GLuint a, GLint size, GLenum type, GLboolean norm, GLuint off) {
+    RanAttrFmt &f = g_attrFmt[a];
+    if (!f.known || f.size != size || f.type != type || f.norm != norm || f.off != off) {
+        p_glVertexAttribFormat(a, size, type, norm, off);
+        ++g_callsAttrib;
+        if (!f.known) { p_glVertexAttribBinding(a, 0); ++g_callsAttrib; }
+        f.size = size; f.type = type; f.norm = norm; f.off = off;
+    }
+    if (!f.known || !f.enabled) { glEnableVertexAttribArray(a); ++g_callsAttrib; }
+    f.known = true; f.enabled = true;
+}
+
+//  A disabled attribute reads its constant, and the constant has to be the one
+//  the old code set: glVertexAttrib3f/2f leave w at 1 and z at 0.
+inline void attrOff(GLuint a, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    RanAttrFmt &f = g_attrFmt[a];
+    if (f.known && !f.enabled) return;
+    glDisableVertexAttribArray(a);
+    glVertexAttrib4f(a, x, y, z, w);
+    g_callsAttrib += 2;
+    f.known = true; f.enabled = false;
+    //  The format is not VAO state once disabled in a way we track; describe
+    //  it again when the attribute comes back.
+    f.size = -1;
+}
 
 static void drawInternal(DWORD primType, UINT primCount, const void *verts,
                          UINT stride, DWORD fvf, unsigned glTexture,
@@ -2045,7 +2442,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
 
     //  Diagnostic: drop the draw and every GL call it would make, leaving only
     //  the client-side cost of deciding to draw.
-    if (g_nullDraw) {
+    if (g_nullDraw || g_sectionSkipDepth > 0) {
 #ifdef RAN_TIME_DRAWS
         { const double dt = nowSeconds() - drawStart;
           g_drawSeconds += dt; g_drawSecondsTotal += dt; }
@@ -2318,6 +2715,10 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  so it gets a VAO of its own and one bind instead of ten calls. Whether
     //  that VAO still has to be described is answered below.
     bool needLayout = true;
+    //  "fvfvao": this draw's own VAO, when that path is on.
+    bool fvCreated = false;
+    FvfVao *fv = (g_fvfVaoOn && !g_noFvfVao && g_haveAttribFormat && !g_noAttribFmt && !g_skipAttr)
+                     ? fvfVaoFor((unsigned)fvf, &fvCreated) : NULL;
     //  Measured on LDPlayer: binding a per-layout VAO costs more there than the
     //  ten attribute calls it saves, and the frame got slower with it. The
     //  cache is left in place but off, because on a real driver the trade goes
@@ -2354,12 +2755,16 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         g_gl.fvf = 0xFFFFFFFFu;
         g_gl.vertexBuffer = 0xFFFFFFFFu;
     } else if (glVB) {
-        bindVAO(g_vao);
+        bindVAO(fv ? fv->vao : g_vao);
         bindArray(glVB);
     } else {
-        bindVAO(g_vao);
-        if (!g_skipStream)
-            streamVertexOffset = (GLsizei)g_streamVerts.write(verts, (GLsizei)stride * vcount);
+        bindVAO(fv ? fv->vao : g_vao);
+        if (!g_skipStream) {
+            streamVertexOffset = (GLsizei)streamRing().write(verts, (GLsizei)stride * vcount);
+            ++g_upCalls;
+            g_upBytes += (unsigned long)stride * vcount;
+            noteStreamSource((unsigned)fvf, 0, (unsigned long)stride * vcount, glTexture, (unsigned long)vcount);
+        }
     }
 
     const bool preTransformed = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
@@ -2453,11 +2858,24 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     if (g_skipAttr) {
         // nothing: the layout stays whatever the last draw left behind
     } else if (g_haveAttribFormat && !g_noAttribFmt) {
-        //  Format first, and only when the shape of a vertex actually changed.
-        if (g_gl.fvf != fvf) {
-            g_gl.fvf = fvf;
+        //  Format first, and only when the shape of a vertex actually changed -
+        //  or, with a VAO per FVF, only when that VAO was just made.
+        if (fv ? fvCreated : (g_gl.fvf != fvf)) {
+            if (!fv) g_gl.fvf = fvf;
             g_callsAttrib += 10;               // format + binding + enables
+            ++g_fvfRespecs;
 
+            //  Every attribute, every time the FVF changes.
+            //
+            //  A per-attribute cache here (skip what matched the last layout)
+            //  shipped in store version 426 without being run on a device, and
+            //  broke every character: the emulator's encoder reported
+            //  "sendVertexAttributes bad offset / len" on every draw and the
+            //  models came out as flat dark shapes. Why is not yet known: the
+            //  touch overlay and the splash use VAOs of their own, so neither is
+            //  the obvious outside writer. Restored to the full re-specification
+            //  that was verified before; do not cache this again without first
+            //  reproducing the failure and finding its mechanism.
             p_glVertexAttribFormat(0, preTransformed ? 4 : 3, GL_FLOAT, GL_FALSE, (GLuint)posOff);
             p_glVertexAttribBinding(0, 0);
             glEnableVertexAttribArray(0);
@@ -2522,13 +2940,18 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
 
         //  Then where to read them from: one call, however much moved.
         const GLuint sourceBuffer = glVB ? glVB : g_gl.arrayBuffer;
-        if (g_gl.vertexBuffer != sourceBuffer || g_gl.vertexBase != vbBase ||
-            g_gl.stride != stride) {
-            g_gl.vertexBuffer = sourceBuffer;
-            g_gl.vertexBase = vbBase;
-            g_gl.stride = stride;
+        //  The binding belongs to the bound VAO, so compare against that VAO's
+        //  own record: the shared one, or this FVF's.
+        GLuint  &haveBuf    = fv ? fv->buf    : g_gl.vertexBuffer;
+        GLsizei &haveBase   = fv ? fv->base   : g_gl.vertexBase;
+        UINT    &haveStride = fv ? fv->stride : g_gl.stride;
+        if (haveBuf != sourceBuffer || haveBase != vbBase || haveStride != stride) {
+            haveBuf = sourceBuffer;
+            haveBase = vbBase;
+            haveStride = stride;
             p_glBindVertexBuffer(0, sourceBuffer, (GLintptr)vbBase, (GLsizei)stride);
             ++g_callsAttrib;
+            ++g_vbBinds;
         }
     } else if (layoutChanged) {
     g_gl.fvf = fvf; g_gl.stride = stride;
@@ -2631,11 +3054,19 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  The shader this draw wants, which decides where every uniform below
     //  goes. Everything in the key is a constant inside the program, so the
     //  driver compiles away the paths this draw does not use.
+    g_uniAfterSwitch = false;       // useVariant sets it again if this draw switches
     useVariant(variantKey(preTransformed ? 1 : 0, lightingNow, g_specularOn,
                           g_fogMode, (g_fsProbe & 2) ? 0 : g_stage1Mode,
                           ((g_fsProbe & 8) == 0 && g_dsATest) ? 1 : 0,
                           (g_gammaOn && g_gammaLut) ? 1 : 0,
                           glTexture ? 1 : 0, indexedBlend ? 1 : 0, blendCountNow));
+    g_palBucket = indexedBlend ? 5 : (blendCountNow <= 0 ? 0 : (blendCountNow > 3 ? 4 : blendCountNow));
+    ++g_palDraws[g_palBucket];
+    if (indexedBlend) {
+        const int s = g_palSlotsRaw < 1 ? 1 : g_palSlotsRaw;
+        ++g_palSlotHist[s > 16 ? 4 : (s - 1) / 4];
+        g_palSlotSum += (unsigned long)s;
+    }
     applyProgramUniforms();
 
     setUniform1i(uIndexedBlend, indexedBlend ? 1 : 0);
@@ -2659,7 +3090,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     setUniform1i(uLighting, preTransformed ? 0 : g_lightingOn);
     {
         const float viewport[2] = { (float)curWidth(), (float)curHeight() };
-        if (uniformChanged(uViewport, viewport, 2)) glUniform2f(uViewport, viewport[0], viewport[1]);
+        if (uniformChanged(uViewport, viewport, 2)) { glUniform2f(uViewport, viewport[0], viewport[1]); countUni(kUniSmall, 8); }
     }
     setUniform1f(uFlipY, g_rtActive ? -1.0f : 1.0f);
     //  The shader reads uMVP only for world geometry that is not skinned:
@@ -2912,9 +3343,11 @@ extern "C" int RanGLR_StreamVertices(const void *data, unsigned size,
                                      unsigned *outBuffer, unsigned *outOffset) {
     if (!g_inited || !data || !size) return 0;
     const double t0 = nowSeconds();
-    const GLintptr off = g_streamVerts.write(data, (GLsizei)size);
-    if (!g_streamVerts.buffer) return 0;
-    if (outBuffer) *outBuffer = g_streamVerts.buffer;
+    RingBuffer &ring = streamRing();
+    noteStreamSource(0, 1, size, 0, 0);
+    const GLintptr off = ring.write(data, (GLsizei)size);
+    if (!ring.buffer) return 0;
+    if (outBuffer) *outBuffer = ring.buffer;
     if (outOffset) *outOffset = (unsigned)off;
     ++g_bufUploads;
     g_bufUploadBytes += size;
@@ -3020,6 +3453,9 @@ extern "C" void RanGLR_DeleteBuffer(unsigned buffer) {
     //  bound - client memory, if nothing is. Force the next draw to describe
     //  itself again.
     g_gl.vertexBuffer = 0xFFFFFFFFu;
+    //  Same for every per-FVF VAO that was reading the deleted name.
+    for (std::map<unsigned, FvfVao>::iterator it = g_fvfVaos.begin(); it != g_fvfVaos.end(); ++it)
+        if (it->second.buf == b) it->second.buf = 0xFFFFFFFFu;
     g_gl.fvf = 0xFFFFFFFFu;
     g_gl.stride = 0xFFFFFFFFu;
     g_gl.vertexBase = -1;
@@ -3644,9 +4080,9 @@ extern "C" void RanGLR_LogStats(void) {
          g_drawCalls, g_uiDraws, g_texturedDraws, g_vertsDrawn,
          g_texFullUploads, g_texUpdates, g_texUpdateBytes / 1024,
          g_vaoCreated, g_vaoHits, (unsigned)g_vaoCache.size(), glGetError());
-    LOGI("into render targets: %lu draws, largest %dx%d (frame is %dx%d)",
-         g_rtDraws, g_rtBiggestW, g_rtBiggestH, RanGL_Width(), RanGL_Height());
-    g_rtDraws = 0; g_rtBiggestW = g_rtBiggestH = 0;
+    LOGI("into render targets: %lu draws, %lu switches, largest %dx%d (frame is %dx%d)",
+         g_rtDraws, g_rtSwitches, g_rtBiggestW, g_rtBiggestH, RanGL_Width(), RanGL_Height());
+    g_rtDraws = 0; g_rtSwitches = 0; g_rtBiggestW = g_rtBiggestH = 0;
     g_drawCalls = g_uiDraws = g_texturedDraws = g_vertsDrawn = 0;
     g_texUpdates = g_texUpdateBytes = g_texFullUploads = 0;
     g_vaoCreated = g_vaoHits = 0;

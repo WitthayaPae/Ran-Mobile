@@ -104,8 +104,33 @@ int TtfFace::Ascender(float scale) const  { return (int)ceilf(m_ascender * scale
 int TtfFace::Descender(float scale) const { return (int)ceilf(-m_descender * scale); }
 
 // -------------------------------------------------------------------- cmap
+//  Codepoint to glyph id, answered from a table after the first time.
+//
+//  The real lookup below scans the cmap encoding records and then walks the
+//  format-4 segments linearly. It runs for every character of every label,
+//  every frame - the client re-measures and re-draws its text from scratch -
+//  and a profile of the client in the world put 2% of the whole process in it.
+//  The mapping cannot change while the face is loaded, so 128 KB buys doing it
+//  once per codepoint.
 int TtfFace::GlyphIndex(unsigned cp) const {
     if (!m_ok) return 0;
+    if (cp > 0xFFFF) return GlyphIndexUncached(cp);
+
+    if (m_cmapKnown.empty()) {
+        m_cmapCache.assign(0x10000, 0);
+        m_cmapKnown.assign(0x10000, 0);
+    }
+    if (m_cmapKnown[cp]) return (int)m_cmapCache[cp];
+
+    const int gid = GlyphIndexUncached(cp);
+    m_cmapCache[cp] = (unsigned short)gid;
+    m_cmapKnown[cp] = 1;
+    return gid;
+}
+
+int TtfFace::GlyphIndexUncached(unsigned cp) const {
+    if (!m_ok) return 0;
+
     const unsigned char *d = &m_data[0];
     const unsigned char *cm = d + m_cmap;
     int n = (int)rdU16(cm + 2);
