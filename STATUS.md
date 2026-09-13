@@ -3,12 +3,1082 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-10
+- **Last updated:** 2026-09-13
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-13 — Chat macro buttons (ALT+1..0) on the chat box
+
+Asked: buttons for the chat macros that are set; tap sends like ALT+n; long press repeats
+every 5 s; repeat blocked for general chat; the row follows the chat when it is expanded.
+User's choices: repeat refused for general chat (tap still sends), tap the same button to
+stop, one row on the chat's top edge.
+PC mechanism read first: texts in `RANPARAM::ChatMacro[10]` (per-character .gameopt), set
+in CChatMacroWindow; ALT+n -> `CInnerInterface::AddChatMacro` -> `CBasicChat::AddChatMacro`
+-> `CBasicChatRightBody::AddChatMacro`, which takes the channel from the text's first
+character (@ private, # party, $ to-all, % club, ! alliance, ^ regional, none = general) and
+runs slash commands. Anti-spam `IsPapering` (general / to-all / regional only): the same
+text more than 7 times in a row -> 30 s chat ban; kept as on PC.
+Touch: a tap is left down/up; a 450 ms hold is a right press (touch_gesture.cpp) — the
+long press is read as RB down on the button.
+Implementation (RAN_MOBILE): `CMobileChatMacroBar` (new), id MOBILE_CHAT_MACRO_BAR; buttons
+skinned like the chat channel tabs (SIZE19_RECT, 28x19); the repeating button shows
+"n:secs" in orange; a repeat send waits while the player is typing. Placed every frame by
+`CInnerInterface::MobileChatMacroFrame` from DxGameStage right after the chat is placed.
+Data: `MOBILE_MACRO_BAR` / `MOBILE_MACRO_BUTTON` (uiinnercfg02.xml), gameword
+`MOBILE_CHAT_MACRO` (3 Thai messages).
+
+First device run (23:48, macros set in the J window: Alt+1 `macro1`, Alt+3 `#macro3`):
+buttons 1 and 3 only, on the chat's top edge. Tap 1 -> `[GameMaster]:macro1` in chat,
+correct. Long press: WRONG — the refusal printed 6 times for button 1, and button 3 printed
+start / send / stop over and over. `CHECK_MOUSE_IN_RBDOWNLIKE` is true on every frame of a
+held right button, so the toggle ran each frame. Fixed with a hold latch (acts once per
+press; released by a frame with no right button on a macro button).
+
+Second run (23:52), after the latch: tap 1 -> one `macro1`; long press 1 -> the refusal
+once; long press 3 -> start message + `#macro3` at once, button "3:4" in orange; ~6 s later
+a second `macro3`, label "3:1"; tap 3 -> stop message, label back to "3". All correct.
+Found: the macros set in the J window were EMPTY after relaunch. The profile (.gameopt,
+macros included) is written only by SAVE_PLAYERPROFILE on a clean shutdown
+(DxGameStage::DeleteDeviceObjects); a force-stopped / swiped-away Android process never gets
+there. Mobile: CChatMacroWindow's OK now saves the profile.
+Chat expand (23:52): dragging the chat's grip up to ~y=535 carried the 1 / 3 buttons to the
+new top edge in the same screenshot.
+Save verified (23:55): after OK, `Logs/PlayInfo/GameMaster.gameopt` in the private data root
+was rewritten with `CHATMACRO0 = macro1` and `CHATMACRO2 = #macro3`. Reading it back on the
+next launch is the unchanged PC LOAD_PLAYERPROFILE path — not re-tested (one login per cycle).
+**Not verified:** the Tab S9; the keyboard lifting the chat with the row on it.
+
+User: the number is not in the middle of the button. Measured: the skin's label box
+`BASIC_TEXT_BUTTON_IMAGE_TEXTBOX191` is 5,4 36x15 inside the 19-high button and aligns
+CENTER_X only, so text starts at y=4 (the chat tabs have the same offset; Thai marks above
+the line hide it, a digit does not). Fix in the macro bar only: `SetUseDynamic(FALSE)` (the
+dynamic press/release code is what snaps the label back onto the skin's box), then
+`CreateTextBox("MOBILE_MACRO_BUTTON_TEXT" 0,0 28x19, CENTER_X|CENTER_Y)`. Cost: the button
+no longer shifts 1 px while pressed.
+Measured after that build (device rows, LDPlayer): button frame 1059 / 1094, inside
+1060..1093, middle 1076.5; digits "1", "3", "3:4" all at rows 1073..1089, middle 1081 —
+still 4.5 device px (~2 logical) low. CENTER_Y centres the font's line box, which keeps room
+above for Thai marks. The label box is now 28x15 (top 0), which lifts the text 2 logical px.
+**Verified (00:0x, 09-14):** frame 1059 / 1094 (middle 1076.5); digits "1" 1070..1085
+(middle 1077.5), "3" and orange "3:4" 1069..1085 (middle 1077.0) — within 1 device px.
+
+## 2026-09-13 — Potion tray collapse arrow restored
+
+**Verified on LDPlayer (23:11):** arrow drawn at the tray's right end (beside the gear); tap
+-> tray collapses to one slot with the open arrow beside it; tap the open arrow -> full tray
+back. Works with the edge margin (the group moves as one). Tablet not checked.
+
+User: the arrow overlaps the auto-pot gear. Measured: layout (loose and packed) has the gear
+at 226..246 and the arrow at 246..261 — flush, no gap, so they read as one block and are
+easy to mis-tap. Mobile-only: the arrow moves 3 logical px right (the slots' own spacing).
+
+The user noticed the potion tray's collapse button missing. Not caused by the edge margin:
+an earlier tablet pass ("The item tray collapse arrow is gone", below) removed it on purpose —
+`BasicPotionTray` did not create QUICK_POTION_TRAY_CLOSE_BUTTON under RAN_MOBILE, and
+`CUILeftTopGroup::Update` hid QUICK_POTION_TRAY_OPEN_BUTTON and forced the tray open every
+frame. Both mobile overrides removed, so the PC code runs as-is: close arrow on the tray,
+open arrow while collapsed.
+
+## 2026-09-13 — HUD kept one margin in from every screen edge
+
+Asked: the chat already sits one small margin above the bottom; do the same on every side,
+because phone panels curve at the sides. The chat's margin is `fH * 0.02f` (logical), about
+29 device px on LDPlayer's 1440-high panel. Measured before: the status block, quick slots
+(top-left) and the minimap / date / server name (top-right) sit flush at y=0 and the screen
+sides. The touch overlay already keeps >= 40 device px from the sides.
+Change: `MobileEdgeMargin()` in DxGameStage (one number, used by the chat too) and a pass
+on the 1 s `MobileArrangeInterface` sweep that moves every visible, non-full-screen
+top-level control inside that margin. Each move logs `RanEdge id ... -> x,y`.
+
+First build (clamp each control on its own), measured by the log and a screenshot: right
+side correct (minimap 940,0 -> 926,14; the icon rows follow it). Top-left wrong two ways:
+* ids 4 (LEFTTOP_CONTROL_GROUP) and 5 (BASIC_INFO_VIEW) were re-logged every sweep —
+  `CInnerInterface::MoveBasicInfoWindow` puts them back on their dummies every frame;
+* the portrait (0..41) moved in under the bars (42..204): the block is separate controls
+  laid edge to edge, and clamping each alone broke it.
+Second build: controls chained edge to edge (gap <= 2 px, overlapping across) move as one
+group by one amount; after a move `MobileFollowBasicInfoDummies()` puts the dummies where
+the controls now are.
+
+**Verified on LDPlayer (23:06).** Every RanEdge move logged exactly once (28 controls, no
+repeats). Top-left block moved as one: portrait 0,0 -> 14,14, bars 42 -> 56, quick slots
+205 -> 219, level bar 42,72 -> 56,86; screenshot shows the block intact and inset. Top-right:
+minimap 940,0 -> 926,14, the server name moved ~27 device px in from the right, both icon
+rows followed. Ping/fps line (id 136) 2 -> 16. Chat unchanged at the same margin. The touch
+overlay already sits >= 40 device px from the sides and was not changed.
+**Not verified:** the Tab S9; windows opened later near an edge (they will be moved in the
+same way, and a window dragged against an edge is moved back in within a second).
+
+User: the bonus-time gauge did not come down with the HUD. `BONUSTIME_EVENT_GAUGE` (XML
+560,28 111x19, UI_FLAG_RIGHT) resolves to 1040,28 at 1280 wide (logged) — under the minimap's
+date/clock, which moved to 926,14. Hidden until an event and touching no edge, so the pass
+never saw it. It now keeps its layout position moved by the margin like the minimap
+(x - 14, y + 14), applied while hidden too, logged as `RanEdge bonus gauge`.
+First build moved y only (1040,28 -> 1040,42, logged); x added after.
+**Verified (23:19):** log `bonus gauge 1040,28 111x19 -> 1026,42`, once, no RanEdge line
+repeats. The gauge itself was not seen on screen — it only shows during a bonus-time event.
+Arrow gap verified (23:17): zoomed crop shows the gap; tap collapses, open arrow reopens.
+
+## 2026-09-13 — Settings "ฟังก์ชัน" tab: the PC F-key hotkeys
+
+Asked: a tab next to "เกม" in the settings window (OPTION_HW_WINDOW) that exposes the PC
+F-key hotkeys, Thai, mobile only. After a first version the user cut it to **F9, F10, F11
+only** (F1-F4 page selection, F6 auto-pots and F8 GM camera removed).
+* F9 character simple (InnerInterface, one master toggle over both flags) -> checkbox
+  "ซ่อนเครื่องแต่งกาย (F9)".
+* F10 hide skill effect -> checkbox "ซ่อนเอฟเฟกต์สกิล (F10)".
+* F11 event scoreboard (`ToggleCDMRankingHotkey`, returns at once off a CDM/CW map) ->
+  checkbox "ตารางคะแนนกิจกรรม (F11)", label grey (DARKGRAY; `DISABLE` is RED) off an event.
+Design: the checkbox queues the F key; DxGameStage::MobileTouchControls releases it with
+SetKeyState(DXKEY_DOWN) at the start of the next frame, ahead of the DxGameStage and
+InnerInterface key checks, so each runs its PC handler. The page only reads state back.
+Files: `Lib_ClientUI/Interface/FunctionOption.*` (new), BasicHWOptionWindow (tab + page),
+DxGameStage (drain), InnerInterface.h (`MobileInCDMEvent`), cmake source list; data
+`_inner_hwoptionwindow.xml` (four 54 px tabs, three rows) + gameword `HWOPTION_FUNCTION`,
+repacked into Gui.rcc. Code under RAN_MOBILE.
+
+**Device data root trap.** The app reads `/sdcard/Android/data/com.ran.native/files/`
+(`pickDataRoot` tries externalDataPath first), not `/sdcard/ran`. A Gui.rcc pushed only to
+`/sdcard/ran` changed nothing — the settings window kept three tabs. Push to the private root.
+
+**Verified on LDPlayer (x86_64 build, 22:44).** Four tabs, three Thai rows. One tap each:
+F11 off an event -> nothing, correct; F9 on -> "ตอนนี้ชุดตัวละครเป็นแบบจำลอง", box on, crowd
+drawn simple; F10 on -> "ซ่อนเอฟเฟกต์สกิล", box on; F9 and F10 off -> "แสดงเต็มแล้ว" /
+"แสดงเอฟเฟกต์สกิล", boxes off. No crash in logcat. **Not verified:** F11 on a CDM/CW event
+map (needs a running event), the Tab S9.
+
+## 2026-09-13 — Fake players on the server (in progress)
+
+The 09-12 crowd lives only in one client. The user asked for a crowd the server owns, so the
+emulator and the tablet see the same players at the same time and the sync traffic is real.
+
+### How it works
+
+`Fake +10` / `Fake +50` / `Fake Clear` run `/fake_pc N` (0 clears), which sends
+`NET_MSG_GM_FAKE_PC` (GCTRL+3990) to the agent.
+
+* **Agent** (`GLAgentServer::MsgGmFakePC`, `USER_MASTER` only) owns the gaea id space. It
+  takes ids out of `m_FreePCGIDs` into a reserved pool, capped at a quarter of max clients,
+  and never returns them. A clear only makes them reusable. The next spawn travels the same
+  connection as the clear, so the field has emptied them by then. It sends
+  `NET_MSG_GM_FAKE_PC_FLD` (GCTRL+3991) with the ids to every channel.
+* **Field** (`GLGaeaServer::GMCtrolFakePC`) acts only where the GM stands. Each fake:
+  - random class, school, face, hair and level 100–150;
+  - equipment per slot from the item table, filtered by `dwReqCharClass`;
+  - `CreatePC` with client id `FAKEPC_ID_BASE (0x7F000000) + gaea id`;
+  - `GetViewAround()`, which registers it in the land cells so nearby clients receive it.
+* **Walking.** `FrameMoveFakePC` makes about a third of the crowd walk or run somewhere
+  each second (a real `SNETPC_GOTO`), so the movement traffic is real.
+* **Clear.** Every field removes its own fakes with `DropOutPC`.
+
+Why it can't touch real players (each from reading the code):
+* `CClientManager::IsOnline` indexes `m_pClient[dwClient]` with no range check.
+  `CFieldServer::SendClient` and `SendAgent(dwClient)` now reject ids ≥ `m_nMaxClient`,
+  so a fake's id never reads past the array or reaches a real slot.
+* `CreatePC` refused client ids ≥ max×2; ids in the fake range are now let through.
+* `ClearReservedDropOutPC` saves every character leaving, and a server stop sends every
+  character through it. Fakes are now dropped there with no `CDbActSaveChar`.
+
+**Join refused after a load test, nothing on the server window (2026-09-13 18:26).**
+The user's joins failed with "cannot access character data" after spawning 50 fakes, and
+no error showed. Every agent-side refusal writes to the agent window; every refusal in
+`GLGaeaServer::CreatePC` wrote only to `Logs\ErrorLog`, so the silent refusal was the field.
+The one path found by reading the code where a fake blocks a real join: the agent's set-aside
+gaea ids live only in agent memory, so an agent restart while the field keeps its fakes hands
+those ids to players and `m_PCArray[_dwGaeaID]` refuses them. Not confirmed on the live server.
+ServerField now (1) removes a fake whose gaea id a real player needs, with a console line, and
+(2) prints every `CreatePC` refusal and its reason on the server window. ServerField rebuilt,
+0 errors (`_Bin\Tool\ServerField.exe`, 18:26); not deployed, not run.
+
+User then ran that ServerField: the client sat on the join wait box (`CHARACTERSTAGE_GAME_JOIN`,
+60 s, no reply of any kind) and ServerField printed nothing. So `CreatePC` never ran or never
+refused; the request stalls somewhere earlier and every hop on that path returns silently.
+Added a `JOIN TRACE <n>` console line at each hop, both servers (18:39, 0 errors):
+1 agent `CreatePC` ok · 2 agent `GameJoinToFieldSvr` sent to field (or STOP: char gone) ·
+3 field `MsgGameJoinChar` received, then DB `CGetChaInfoAndJoinField` loaded · 4 field
+`MsgFieldReqJoin` created · 5 agent `MsgLobbyCharJoinField` sends client to field (or STOP:
+gaea mismatch / no field in cfg) · 6 field `MsgJoinInfoFromClient` entering game (or STOP: no
+char). The last number printed names the hop that stalls. Not deployed yet.
+
+User deployed both; ServerField showed GameMaster's join complete (3, 4, 6), then the spawn line,
+then nothing, and joins hung. User: it worked before the full-gear change. Checked the one
+server-side difference that could stall a frame (level taken from item requirements, uncapped):
+`GLNEEDEXP` bounds-checks the table and level-up only fires when exp changes, so that is not
+it. Cause still not found. **Reverted the spawn to the version that worked** (6 slots, 20% left
+empty, level 100-150, no school/level filtering). ServerField rebuilt 18:51, 0 errors; mobile
+x86_64 compiles. Kept: join trace, `CreatePC` refusal lines, fake eviction. Full gear is open.
+**User deployed it: joins work again with fakes spawned (2026-09-13).**
+
+### The MSVC build was already broken, by earlier port work
+
+The first server build stopped on 106 errors, none in this change: port edits that
+were only safe on mobile.
+* **`GLCharacter.cpp`:** the `Mobile*` definitions (1451–2009) had no guard, but their
+  declarations do.
+* **`GLCharacterMsg.cpp`:** `RanShop_PurKey` is defined under `RAN_MOBILE`, but its call site
+  wasn't guarded. Restored `pNetMsg->szPurKey` for the PC build.
+* **`DxCharPart.cpp`:** `RAN_SECTION` was used, but its header is included only on mobile.
+  Added the `((void)0)` fallback, same as `DxGameStage.cpp`.
+* **`DxSoundMan.h`:** the member `operator<` was made `const` without a guard, which made
+  MSVC's free operator ambiguous.
+* **`LoadingThread.cpp`:** `LOADPROBE`, `RanGL_ProbeState`, `RanD3D_DumpTexture` and
+  `RanPlat_Log` were used unguarded. Now guarded, with a `((void)0)` `LOADPROBE` for PC.
+* **`lua_tinker.cpp`** can't find `lua.h`: the headers are in `Tik/Lua/include`, but the
+  project lists `Tik/Lua`. Not edited; the build passes `CL=/I"<SOURCE>\Tik\Lua\include"`.
+
+Result (2026-09-13): `MSBuild RanOnline.sln "/t:Servers\ServerAgent;Servers\ServerField"
+/p:Configuration=Release /p:Platform=Win32` → **0 errors**. `_Bin/Tool/ServerAgent.exe`
+(15:30) and `_Bin/Tool/ServerField.exe` (15:31) both contain the new "GM load test" code.
+The projects sit in the `Servers` solution folder, so the target names need that prefix.
+Mobile: arm64 and x86_64 both 0 errors.
+
+The server exes in `_Bin/Tool` date from 08-18, before the port began, so nothing built
+from this tree since then would have compiled. The 08-18 exes are backed up in the session
+scratchpad before the rebuild overwrote them.
+
+### Still open
+
+* Build `ServerField` + `ServerAgent` (VS 2022, v143). **Not deployed.** The user chooses
+  between the live server and a local stack (the RAN databases aren't restored locally).
+* Verify on the emulator and the tablet at once: two GM-capable accounts, one login each.
+* The PC client (`MiniA.exe`) was not rebuilt — by the user's choice. The client-only
+  projects have not been compiled by MSVC since the port began and may carry more
+  unguarded mobile edits. PC players will receive the fakes (plain server broadcast); a PC
+  GM cannot spawn them (`/fake_pc` and the buttons are `RAN_MOBILE`-only).
+* Publish the APK with `MAKE-PATCH.bat` only after the device test passes.
+* **User confirmed the server crowd works (2026-09-13).** Two findings from their test:
+  - ~~Some effects on the crowd render as plain black panels~~ **Fixed and A/B-verified.**
+    `OPTMCharParticle` blends alpha-textured character particles with
+    `DESTBLEND=DESTALPHA`. D3D reads destination alpha as 1 on the X8R8G8B8 back buffer
+    and on the X1R5G5B5 scratch targets; GL kept a real alpha channel holding whatever
+    the last blend wrote, so each particle replaced the scene under it with black.
+    `RanGLR_SetTargetOpaque` (from SetRenderTarget, by surface format) now maps
+    DESTALPHA→ONE and INVDESTALPHA→ZERO on alpha-less targets. On one live frame, blobs
+    appear only with `nodstalphafix`. Found with two new live switches:
+    - `sectionskip`: drop every draw inside one named frame section; that put it in `optm`.
+    - `blendlog`: one line per new blend state per section; that put it in
+      `optm:charparticle`, `dst=7`.
+
+    Ruled out along the way by measurement: shadows (`shadowcount 0`), every
+    character-effect type (`effskip`), the MultiTex render-target pass.
+  - 100 fake players halve the frame rate, 60 → 30. Profile and bring it back to 60.
+    **Measured so far (LDPlayer, ~85–96 players in view, debug build):**
+    - 2026-09-13 19:07, ~100 fakes, 32 fps: `uiflushlog` names one flush site,
+      `RanDevice::SetRenderState`, ~175/frame. By state: LIGHTING 0→1 131/frame,
+      ZENABLE 0→1 35/frame, FOGCOLOR 8, SRCBLEND 1 — the shim text sprite's `End()`
+      restoring state after each `CD3DFontX` draw (`D3DFontX.cpp:395`). gl_render never
+      lights XYZRHW (`gl_render.cpp:2794`), so LIGHTING cannot change a UI batch. Trying
+      `uibatchkeep` (off by default): batch survives no-op sets and screen-space LIGHTING.
+      A/B 19:17 (same session, ~82 players seen): off 80 flushes/frame, 42–45 fps; on
+      61/frame, 44–46 fps. LIGHTING and then CULLMODE (also never applied to XYZRHW,
+      `gl_render.cpp:2774`) stop flushing, but SetTexture takes 21/frame of them back and
+      ZENABLE (29/frame) is real — depth applies to UI (`gl_render.cpp:1831`). **Gain is
+      within noise; left off, no visual change.** The interface is not the lever.
+    - Same capture, sections: world 15.6 ms, ch:parts 11.1 (part:skinned 7.8,
+      part:chareff 2.6), touch-hud 3.1; 1,369 draws/frame at 7 µs. Characters are the cost.
+    - simpleperf 19:19 (15 s, ~100 fakes, 31 fps): render thread 99.5% of samples, **libc
+      memcpy 74%**, callers not unwindable (dwarf or fp). Buffer uploads only ~290 KB/frame,
+      texture uploads 0. ~10,800 GL calls/frame; LDPlayer's encoder copies each into its pipe.
+    - Skip-switch A/B 19:25 (10 s each, baseline 31.0 before / 31.8 after): nulldraw 60,
+      **nouniform 46.5**, nostream 42.8 (also drops those draws), notex 33.1, noattr 23.6
+      (worse). Attribute setup is NOT the cost; uniforms are the largest category.
+    - Uniform counters 19:32 (measurement only, 100 players seen, 28 fps, 1,790 draws):
+      palette (uWorldM, 16 matrices) 1,160 calls **1,160 KB/frame**; single matrices 1,210
+      calls 75 KB; light block 2,100 calls 57 KB; small 870 calls 7 KB. The palette is ~88% of
+      uniform bytes, sent whole by `applyProgramUniforms` (`gl_render.cpp`) on nearly every
+      skinned draw. Not yet measured: how many palette slots a draw actually reads.
+    - Palette by draw kind 19:38 (97 players seen, 28 fps): **every skinned draw is indexed**
+      (LASTBETA_UBYTE4) — ~1,140/frame, each uploading the full 16-matrix palette; ~630
+      non-skinned draws upload none; blend-1/2/3 (non-indexed) draws: 0. So "send only the
+      2-4 blend matrices" does not apply. Open: how many palette slots each indexed bone
+      combination can reach, which decides whether a partial upload is safe.
+    - Slots per indexed draw 19:42 (99 players seen, 27 fps, 1,170 indexed draws/frame):
+      1-4 slots 520, 5-8 280, 9-12 214, 13-16 155, **mean 6.4 of 16**. Read from code:
+      vertex palette indices are slots inside their group (`d3dx_hierarchy.cpp:551-592`),
+      the engine fills WORLDMATRIX(0..NumBlend) and sets VERTEXBLEND = NumBlend
+      (`DxSkinMesh9_NORMAL.cpp:121-206`), so a draw never reads past slot VERTEXBLEND.
+      Uploading only those slots would send ~40% of the palette bytes (~1,160 KB -> ~470 KB
+      per frame); the call count (1,170) would not change. Not yet known whether bytes or
+      calls are what costs on LDPlayer — the A/B of that change is the test.
+    - **`palettetrim` A/B/A 19:47 (same session, ~98 players seen):** off 28.8 fps (render
+      29.8 ms) / **on 34.1 fps (render 24.9 ms)** / off again 27.8 fps. Palette bytes 1,136 ->
+      ~450 KB/frame, calls unchanged — so on LDPlayer the uniform BYTES cost, not only calls.
+      No encoder errors. Visual check: see below.
+    - Light block uploads by cause, same capture: program cache stale ~290/frame, light
+      count changed ~85, values changed ~38. Each is 6 GL calls, so ~2,500 calls/frame, and
+      most are the same lights re-sent because each shader variant owns its own uniforms.
+    - **Single-window A/B is not reliable with the fakes walking**: players in view drift
+      91-99 and fps swings more than the effects measured (one run had trim OFF at 40.6 vs
+      ON 32-34). Use interleaved rounds. `palettetrim` interleaved 19:58, 6 rounds x 8 s,
+      92-99 seen: **on 32.4 / off 28.2 fps, on faster in every round (+4.2)**. Now the
+      default; `nopalettetrim` turns it off.
+    - Cost switches (measurement only, draw wrong while on) at 95-97 seen, single windows:
+      `nomatrixuni` +0.5, `nosmalluni` +1.1 over a 33.7 baseline — not worth pursuing.
+    - Interleaved 6 rounds x 8 s, 93-98 seen: `nolightblock` base 31.4 / skip 33.2 (at most
+      +1.8, small); **`nostream` base 32.6 / skip 50.0 fps, +17 in every round, draws
+      unchanged (~1,730)**. nostream only skips `g_streamVerts.write` (gl_render.cpp
+      ~2605) — the draws still go out. So writing streamed vertices is the largest cost
+      found, while the buffer report says only ~290 KB/frame and 0.02 ms on the CPU side.
+    - 20:13, new counter: the draw path streams **~150 client-array writes, ~800 KB per
+      frame** (not in the buffer report, which only counts dynamic-VB writes, ~340 KB).
+      `streamsub` (glBufferSubData ring instead of the persistent map), interleaved 6 rounds
+      at 60-72 seen: persistent 45.2 / subdata 45.8 fps — no difference. The write path is
+      not the cost; the streamed bytes are. Next: which frame section streams them.
+    - 20:22, stream sources by section + texture (~64 players seen): **interface, FVF 0x144,
+      texture 2980 (2048x2048): ~63 writes, 680-700 KB/frame, largest write 810-1,782
+      verts** — about 25,000 vertices a frame on one texture. Next biggest: interface tex
+      2395 66 KB, world-eff dynamic VB 72 KB, optm:sequence 42-60 KB. Checking whether 2980
+      is the font atlas and how many quads a glyph costs before choosing a fix.
+    - Read from code: 2048x2048 matches the shim font atlas (`ATLAS_W` grows to fit). On
+      mobile `CD3DFontX::DrawText` always takes the immediate path and, with
+      `D3DFONT_SHADOW`, draws the string at every offset of a (2r+1)^2 square except the
+      centre and then once more (`D3DFontX.cpp:404-472`) — 9 draws at r = 1. `drawRun`
+      emits 6 verts x 28 B per glyph (`d3dx_font.cpp` drawRun). ~65 names x ~7 glyphs x 9
+      x 168 B = ~690 KB, which is the measured 680-700 KB on that texture. Candidate fix
+      (not built): one outline draw per glyph from a pre-combined mask; stacking one colour
+      8 times gives coverage 1 - prod(1 - a_i), so the mask can match exactly if the
+      outline colour is opaque. Checking radius, colour and the atlas packer first.
+    - Confirmed: `m_iOutLine` = 1 (`D3DFontX.cpp:69`), names use `_DEFAULT_FONT_SHADOW_FLAG`
+      = SHADOW|KSC5601, outline colour ARGB(255,10,10,10) — opaque.
+    - **`nooutline` (measurement switch, `D3DFontX.cpp`, RAN_MOBILE) interleaved 20:32, 6
+      rounds x 8 s, 94-100 seen: outline on 28.0 fps / 1,540 KB streamed; skipped 38.8 fps
+      / 207 KB. +10.7 fps in every round.** The outline is the largest single cost found.
+      Building the one-pass mask behind `outlinemask` (off by default) for a pixel compare.
+    - **`outlinemask` built** (`d3dx_font.cpp` outlineFor / RanD3DXFont_DrawOutline;
+      `D3DFontX.cpp` RAN_MOBILE calls it before the offset passes, which stay as fallback).
+      Interleaved 20:41, 6 rounds x 8 s, 95-99 seen: **8-pass 26.9 fps / mask 35.0 fps, mask
+      faster every round (+8.1)**; streamed 1,440 -> 350 KB/frame; no "glyph atlas full".
+      HUD number crops (static, outlined font): **0 of 403,200 pixels differ** between the
+      8 passes and the mask; control on the same crop, outline on vs skipped: 80,752 differ
+      (20%, max 245), so the crop does go through the outline. **Now the default;
+      `nooutlinemask` restores the passes.**
+    - With palette trim + outline mask on, 20:53, interleaved 4 rounds x 8 s, 93-99 seen:
+      `nostream` 35.9 -> 40.0 (+4), `nouniform` 35.6 -> 49.7 (**+14**), `notex` 35.8 -> 38.8
+      (+3). The uniform kinds already measured account for ~4 of the +14; `nouniform` also
+      skips `useVariant`/glUseProgram and each variant's own uniform cache. Counting
+      program switches and variant changes per frame next.
+    - 20:56, counters (~95 seen, 43-44 fps): **~650 glUseProgram / ~650 variant changes per
+      frame** against ~1,690 draws — 38% of draws switch shader, and each switch brings a
+      variant's own uniform cache (stale matrices, lights, material re-sent). Measuring which
+      key bits flip and the uploads on switching draws before choosing a fix.
+    - 21:00, variant key bit flips per frame (~665 changes, ~96 seen, 38.5 fps): **alpha test
+      (b8) 352**, stage1 gloss mode (b5+b7) 178, indexed blend (b11) ~91, lighting (b1)
+      ~89, pre-transformed (b0) ~57, texture (b10) 12, fog 5 (b12-31 = 1: first switch
+      from the 0xFFFFFFFF sentinel). Uniform uploads on switching draws: ~1,770 calls,
+      175 KB per frame (~30% of uniform calls). Reading the alpha-test shader path next.
+    - `stickyatest` (reuse the alpha-test-on variant with uAlphaRef -1 for alpha-test-off
+      draws; output identical) interleaved 21:05, 6 rounds, 79-99 seen: switches ~670 ->
+      ~535, b8 flips ~355 -> ~240, but **fps 41.6 off / 40.8 on, lower every round**.
+      Program switching is not the remaining cost. **Reverted.** Next: `nopaletteuni`
+      (skip only the palette upload) against `nouniform`, to see whether palette bytes
+      are what is left of the uniform cost.
+    - 21:09, interleaved 5 rounds each (67-98 seen, crowd drifting, paired rounds):
+      `nopaletteuni` 44.5 -> 47.4 (**~+3**; trimmed palette ~330-430 KB is now small);
+      `nouniform` 43.5 -> 54.4 (**~+11**). The rest (~8) is spread over ~1,200 matrix,
+      ~2,000 light-block and ~950 small uniform calls plus ~650 program switches, each
+      worth ~1-2 fps alone. Profiling the current build before choosing the next lever.
+    - simpleperf 21:14 (current build, ~89 seen, 41 fps): libc memcpy **56%** (was 74%);
+      sections world 13.7, ch:parts 10.0 (skinned 7.4), **touch-hud 3.5 ms**, ch:pose 1.8.
+    - `nohud` (existing switch) interleaved 21:16, 6 rounds, 84-96 seen: HUD 39.6 / none
+      41.9 fps (~+2.3, noisy). touch_ui.cpp: the static half (~71,000 verts) is cached in a
+      VBO and not re-uploaded; the joystick (~12,000 verts, ~290 KB) is rebuilt and sent
+      through glBufferSubData every frame even when not held. Candidate: cache the idle
+      stick (depends only on centre and radius); keep the held stick live.
+    - **`stickcache`** (touch_ui.cpp: resting stick captured into its own VBO, rebuilt only
+      when position/size/knob change; held stick live) interleaved 21:26, 6 rounds, 92-97
+      seen: **live 36.9 / cached 39.6 fps, cached faster every round (~+2.7)**; touch-hud
+      section 2.6-4.1 ms -> 0.5-2.2 ms; 0 rebuilds/s. The stick crop differs 9.17%, but the
+      stick is translucent over ~95 moving players, so a pixel diff there cannot separate
+      background motion from a wrong stick — checking the crops by eye.
+      By eye the stick is the same (ring, bevel, rim light, 8 ticks, knob); only the player
+      walking behind it differs. **Now the default; `nostickcache` builds it live.**
+    - The `attrib` call counter adds a flat 10 per FVF change, but the ES 3.1 path issues
+      ~21 calls per re-specification, so the real attribute traffic is unknown. Counting
+      re-specifications and glBindVertexBuffer calls exactly next.
+    - 21:28, exact (~95 seen, 33-40 fps, ~1,680 draws): **~122 FVF re-specifications a frame
+      (~21 GL calls each, ~2,560 calls) + ~1,190 glBindVertexBuffer = ~3,750 attribute
+      calls**, so the flat-10 counter (~3,950) was about right. touch-hud 1.2-1.9 ms with the
+      stick cache on. Candidate: one VAO per FVF with its format set once (~-2,300 calls a
+      frame). Care needed: this is where v426 broke ("sendVertexAttributes bad offset");
+      disabled-attribute constants are context state, and the vertex/element buffer
+      bindings are VAO state, so both have to be handled per VAO. Reading the bind code.
+    - **`fvfvao`** (gl_render.cpp: a VAO per FVF, format described once at creation; each
+      VAO keeps its own buffer/base/stride record; RanGLR_DeleteBuffer clears records naming
+      a deleted buffer; the map is cleared with the context) 21:36: re-specs **139 -> 0 a
+      frame**, buffer binds ~1,250 -> ~1,180, **0 encoder errors** ("sendVertexAttributes /
+      bad offset") with it on. Interleaved 6 rounds, 94-98 seen: shared VAO 42.9 / per-FVF
+      44.3 fps (~+1.4, faster in 5 of 6). Screenshots with it off and on: characters,
+      weapons and effects draw normally (no flat dark shapes). **Now the default;
+      `nofvfvao` goes back to the shared VAO.** Not yet checked on the tablet.
+    - Running total on LDPlayer, ~95 players in view: ~27-28 fps at the start of this work
+      -> ~44 fps with palette trim, outline mask, stick cache and per-FVF VAOs (each
+      verified by interleaved A/B). Still short of 60; remaining measured levers are small
+      (uniforms spread over many calls ~+11 if all removed, streamed bytes ~+4, texture
+      binds ~+3).
+    - Combined default build 21:40 (x86_64, 0 errors; arm64 also compiles, 0 errors):
+      47.2 fps with ~71 players in view, 0 attribute re-specs, draw-path stream 244 KB,
+      touch-hud 0.8 ms, 0 encoder/GL errors; crowd and HUD draw normally.
+      **Not run on the Tab S9 yet** — everything above is LDPlayer only.
+    - Still open for 60 fps with a crowd: light block as a shared uniform buffer (~+1.8 at
+      most), remaining uniform calls per draw, texture binds, and a tablet measurement,
+      since the emulator's encoder cost is not the tablet's.
+      (One earlier attempt measured a stale APK after a failed build — build step now stops
+      the script on any error.)
+    - `nulldraw` (every GL call a draw makes dropped): steady **60 fps**, render 9.5 ms,
+      engine CPU 3 ms. The client's own work is small; the frame goes on issuing about
+      1,650 draws and 10,000–12,000 GL calls.
+    - Priced by live `sectionskip` (same scene, baseline 28–31 fps):
+      - `part:skinned` → 40 fps, submit 16.6 → 5.6 ms. Skinned character pieces, about
+        11 ms.
+      - `interface` → 41–45 fps, submit about 7 ms less. Only about 210 GL draws, yet
+        about 31 µs each against 10 µs for a world draw. UI draws stream their vertices;
+        world draws use their own buffers. Interface CPU with its draws dropped: 0.7 ms.
+      - `part:chareff` → 33.5; `glow-tex` → 32.5; `optm`, `eff-group`, `touch-hud`,
+        `part:rigid`, `environment`, `weather` → about 30 (each 1–2 ms).
+    - simpleperf (debuggable build): 73–99% of main-thread samples in `memcpy` with no
+      unwindable caller (DWARF too); with `nulldraw` it falls to 45%, the swap. It is
+      the GL submission path, not the engine.
+    - Tried, measured, **no gain:** the state epoch now moves only on a real change
+      (d3d9_impl.cpp Set*State). Interface cost is unchanged, so redundant sets were
+      not what split the UI batch. Kept, as it is correct and harmless.
+    - **Incident, store version 426 (APK versionCode 58, V041).** The patch was built from
+      the working tree while it still held two changes that had never run on a device:
+      - the per-attribute vertex-format cache in gl_render.cpp;
+      - the state epoch moving only on real changes (d3d9_impl.cpp).
+
+      On LDPlayer, every character drew as a flat dark shape and UI text smeared. The
+      emulator's GL encoder logged `sendVertexAttributes bad offset / len` on every draw.
+      Both changes are **reverted**, back to the behaviour verified on screen before
+      them; the destination-alpha fix and the diagnostic switches stay. The attribute
+      cache's failure mechanism is not identified: the touch overlay and the splash use
+      VAOs of their own. The fix goes out as the next patch, after a device check.
+    - Next measurement needed: why UI draws flush, counted by reason. Then decide
+      between cheaper streaming and fewer flushes.
+    - These are emulator numbers; the Tab S9 is the target and prices GL calls
+      differently. Four logins were used this cycle; the next changes are batched into
+      one build and one login.
+  - Fakes must wear **full gear**, every slot, or the frame-rate number flatters itself. In
+    the user's screenshot most wear nothing at all despite an 80% chance per slot, so
+    something strips the gear before it is seen — find it, then fill every slot.
+
+## 2026-09-12 (2) — A crowd test, and the 8 bytes that killed the process
+
+The ask: a GM-menu button that fills the screen with fake players, to see what a
+crowd costs. It is in the **MOB** tab as `Fake +10`, `Fake +50`, `Fake Clear`,
+and it is also driven by a file, because a button behind a GM account is no use
+to an automated run: put a count in `loadtest` under the diagnostic root and the
+client spawns that many, `0` removes them all. The file is consumed, so it can
+be re-armed.
+
+Each fake player picks a class at random out of all sixteen, a random school,
+hair, face and level, is placed at a random angle and 60-300 units from the
+player, and is dressed one slot at a time from the item table - filtered by
+`dwReqCharClass`, which is the same test the client makes before letting a piece
+on - with about one slot in five deliberately left empty. A crowd of identical
+nudes stacked on one spot would measure overdraw, not characters.
+
+Spawning is queued: three a frame. The first version placed ten in one frame,
+which is ten characters' worth of disk loading on the thread that also answers
+the window system, and Android killed it.
+
+### Then it died anyway, and not for that reason
+
+Twelve fake players took the process from 890 MB to 7.5 GB of **native heap** in
+ten seconds, every time, and the kernel killed it - `SIGKILL`, so no tombstone,
+no stack, nothing. Three instruments, in the order they were needed:
+
+* a resident-size print either side of every `DropChar`, which said the growth
+  was one character, not the crowd;
+* `meshload` under the diagnostic root, which makes every mesh and every file
+  open report itself - that named the last file before the silence;
+* **`RanPlat_WatchdogArm`** - a watchdog thread that watches resident size and,
+  past a limit, aborts *the thread that armed it*. `debuggerd` then dumps that
+  thread as the crashing thread with its backtrace in the log, no root needed.
+  That is the tool that turned "the process vanished" into one line.
+
+The backtrace named `DxEffCharLine2BoneEff::LoadFile`, and the diagnostic line
+underneath it named the cause:
+
+    s_m_kk_illust_body.cps: line2bone ver 0103, property 232 bytes in the file, 240 bytes here
+
+`EFFCHAR_PROPERTY_LINE2BONEEFF` embeds two `CMinMax<float>`, and `CMinMax` has a
+**virtual destructor**: four bytes of vtable pointer in the shipped files, eight
+here. `LoadFile` read `sizeof(m_Property)` bytes, stopped eight bytes short, and
+the next thing in the stream is a list length - so the loader asked for a few
+hundred million list entries. The flat read is wrong even where it fits: it
+lands file bytes on the vtable pointers of a live object.
+
+Fixed the way the 0101 and 0102 records already were: a field-wise reader that
+skips four bytes where the vtable pointer sat, plus a seek to the end of the
+record the file itself declares. That seek needs the size from *before* the
+branch - every branch declares its own `dwSize` and hides it, and a seek written
+against that local goes backwards to the start of the record.
+
+`CMinMax` is used by no other property struct, so this file is the whole family.
+
+### Two more, found only because a hundred characters is a hundred chances
+
+* `DxSkinMesh9::FindMeshContainer` ran `strcmp` on a container name that can be
+  `NULL`: `SetupNameOnMeshContainer` names a mesh after its frame or its parent
+  frame, and a frame with neither leaves it null. The walk tests every container
+  in the file, not only the ones that could match.
+* `DxSkeleton::UpdateBones` wrote through a null `pBoneRoot` - a skeleton whose
+  file produced no bones. It now says which file, once, and skips it.
+
+Both guarded under `RAN_MOBILE`; neither changes a byte for MSVC.
+
+### The crowd curve
+
+LDPlayer, 60 Hz cap, the same spot, camera unmoved. `present` is idle time, so
+read `render`:
+
+    players    draws/frame    render      fps
+      0            295         5.0 ms      60
+     10            385         5.4 ms      60
+     30            500         7.9 ms      60
+     60            747         8.9 ms      60
+    110           1142        13.3 ms      53
+
+`Fake Clear` returns it to 292 draws and 4.2 ms. The tablet was off for this
+run; the same build needs one pass there, since the emulator's 60 Hz cap hides
+everything above 16.6 ms and the Tab S9 runs at 120.
+
+### Still open
+
+* The curve above is the emulator's. Repeat it on the Tab S9.
+* Several fake players still render with black blocks around them.
+
+### The rest of the family, guarded
+
+The other 32 effect loaders read their property the same way, so they carry the
+same risk. `RanReadRecord` in `basestream.h` now stands in front of all of them.
+
+It deliberately does **less** than the first version of it. The record length
+these loaders write is not always the property alone - `DxEffCharNeon` and four
+others count the property *plus* the material array that follows it, and a guard
+that seeked to the end of the record threw that array away. What the length can
+always catch is the one case that is never right: a struct **bigger here than
+the whole record it lives in**, which is exactly the shape that killed the
+process. So the guard reads the struct as the client always has when it fits,
+and when it does not it names both sizes, reads only what is there, and stops at
+the record boundary. Measured at 110 characters: no site reports a mismatch, so
+`DxEffCharLine2BoneEff` was the only one.
+
+The 15 loaders under `DxEffect/Single/` were left alone - they read a matrix,
+an affine block and a property out of one record, and are a different shape.
+
+### Also found, by running 110 characters
+
+`b_9th_arwens_ear.x` loads as a skeleton with no bones. Its attachment now says
+so once instead of dereferencing a null root; why the file produces no bones is
+not yet known.
+  See `native/out/ld_crowd60.png` - the same flat effect panel the user deferred,
+  now reproducible without a buff card.
+
+---
+
+## 2026-09-12 — The file index is lower-cased; the lookup was not
+
+Second root cause behind the flat weapon effects, and this one reaches much
+further than effects.
+
+`CFileFindTree::PathRecurse` builds the index with **lower-cased** keys:
+
+    std::transform ( strName.begin(), strName.end(), strName.begin(), tolower );
+    m_mapFile.insert ( std::make_pair(strName,strPath) );
+
+and `FindPathName` looked the caller's string up **as given**:
+
+    FILEMAP_ITER iter = m_mapFile.find ( str );
+
+So any asset whose stored name carries a capital missed the index —
+`"1d_Lighting.bmp"` against `1d_lighting.bmp` on disk. On Windows that miss cost
+nothing: the fallback opens the file by its own name and NTFS does not care
+about case. Android's storage does, so the texture resolved to nothing, and an
+effect with no texture draws flat colour the shape of its own quads.
+
+Both lookups now lower-case the query, which is what the index already assumes —
+`#ifdef RAN_MOBILE`, so the PC build is byte-identical.
+
+**Verified on the Tab S9:** the weapon's fire effect went from grey cards to
+orange fire with its texture, 121 fps, nothing else changed.
+
+Not fully closed: pale translucent panels remain around the fire. `1d_Lighting.bmp`
+is a 24-bit BMP — no alpha channel — and the load carries no colour key, so those
+quads are opaque on any platform, PC included. Whether they are wrong therefore
+needs a PC reference rather than another guess.
+
+---
+
+## 2026-09-11 (11) — The texture stages started at zero, and zero means DIFFUSE
+
+"the effect of the weapon that i WEAR right now it not render correct ... you
+see the the effect of the weapon that show sqare effect plain pic there?"
+
+Grey wedges the shape of the effect's quads, around the flame. Four things were
+ruled out by measurement first: the two vehicle-era optimisations (a runtime
+toggle for each, all four combinations identical), the S3TC path (`nos3tc`, CPU
+decode, identical), and the untextured-subset path (a probe that names any
+subset drawn flat - it never fired for this effect). The effect data itself
+reads correctly: parsed offline, `black_9th_freedom_wings.egp` gives mesh
+`gt_plane.x`, flag `0x00218000` (USEOTHERTEX), texture `gt_sword_eff3-3.dds`,
+blend mode 5, and the client's draws show exactly `blend=1(5,6)`. The texture
+has a real alpha channel - 17% of it fully transparent.
+
+Right geometry, right blend, right texture. So the fault was the **fragment
+alpha**, and it was in the device's construction:
+
+    memset(m_textureStageState, 0, sizeof(m_textureStageState));
+
+and nothing else. Zero is a legal value for every field there and it *means*
+something: `D3DTA_DIFFUSE` for an argument. D3D9 starts stage 0 at
+`COLOROP=MODULATE, COLORARG1=TEXTURE, COLORARG2=CURRENT, ALPHAOP=SELECTARG1,
+ALPHAARG1=TEXTURE, ALPHAARG2=CURRENT`, and the engine sets only what it wants
+to change: `DxEffectMesh`'s state block sets `ALPHAOP=MODULATE` and
+`ALPHAARG2=TFACTOR` and says nothing about `ALPHAARG1`, because in D3D it is
+already TEXTURE.
+
+On our device it was DIFFUSE, so every such draw computed
+`alpha = diffuse.a * tfactor.a` and **never sampled the texture's alpha**. The
+artwork's soft edge lives entirely in that channel, so the quad painted solid -
+"square plain pic".
+
+The stages now start where D3D9 starts them. Verified on the Tab S9: the wedges
+are gone, the flame and the weapon read cleanly, world/HUD/text unchanged, 121
+fps.
+
+**The lesson, and it is not the first time in this port:** a shim that zeroes
+its state is asserting a default, and the client reads that default. `memset` is
+only right where zero is the documented value.
+
+---
+
+## 2026-09-11 (10) — The mesh cache put streamed data where it could not live
+
+"the effect of the weapon that i WEAR right now it not render correct" — a
+regression from the mesh buffer cache an hour earlier, and the defect was in the
+lock flag.
+
+`ensureGpuBuffers` filled the mesh's vertex buffer with `D3DLOCK_DISCARD`. That
+flag tells the shim "this is streamed data", and the shim routes it into the
+**vertex ring** — correct for geometry rewritten every frame, wrong for storage
+that has to survive: the ring wraps, and a mesh uploaded once later reads back
+whatever wrote over it. A plain lock keeps the buffer's own GL storage, which is
+the entire point of caching it.
+
+Two corrections:
+
+* the fill uses a plain lock, so the buffers are real storage;
+* a mesh found dirty on three draws in a row gives up its buffers and goes back
+  to the streaming path for good. An effect that scrolls its own UVs
+  (`DxSimMesh::SetMoveTex` rewrites every vertex every frame) would otherwise
+  pay a blocking re-upload of its own buffer per frame — worse than streaming
+  it, and byte-for-byte the behaviour it had before the cache existed.
+
+So the cache now applies to what it was aimed at — the vehicle, props, items —
+and animated effect meshes are untouched. Verified on the tablet: **mounted 120
+fps, `veh:parts` 0.2 ms, 5 us a draw**, and the weapon's own effect back on the
+path it had before.
+
+---
+
+## 2026-09-11 (9) — The vehicle: 83 fps to 120, and the batcher was making it worse
+
+"when I use the vehicle it -20 fps or even lower". Measured on the Tab S9 with
+the BMW S1000RR summoned: **83 fps mounted against 120 on foot**, 287 draws at
+20 us each, `world` 7.3 ms, `veh:parts` 3.5 ms.
+
+The profile named both halves.
+
+**1. The UI batcher was batching the vehicle.** `RanDevice::batchUIDraw` merges
+draws that share state, which is right for HUD quads and text and exactly wrong
+for a large mesh: `appendTriangles` expands every index into a flat vertex list
+and copies it, so a 25,000-triangle vehicle paid 75,000 vertex copies a frame to
+save one draw call it never needed. 12.5% of the process sat in the vector
+insert behind that expansion, with memmove behind it.
+
+A draw above **256 triangles** now goes straight through - flushing whatever is
+pending first, so nothing is reordered. **83 → 109.5 fps.**
+
+**2. `RanMesh::DrawSubset` streamed the whole mesh on every call.**
+`DrawIndexedPrimitiveUP` hands the driver the entire vertex array each time and
+the driver copies it - 20% of the process, all of it re-sending geometry that
+had not changed. `RanMesh` now keeps its own vertex and index buffers, filled on
+first use and refilled only when something writes to the mesh
+(`UnlockVertexBuffer`, `UnlockIndexBuffer`, the attribute sort), and draws from
+them with `DrawIndexedPrimitive`. **109.5 → 120 fps, and 20 us a draw → 6 us.**
+
+| mounted, Tab S9 | before | after |
+|---|---|---|
+| fps | 83 | **120–121** (vsync ceiling, same as on foot) |
+| per draw | 20 us | 6 us |
+| `world` | 7.3 ms | 1.9 ms |
+| `veh:parts` | 3.5 ms | folded into the rest; no longer in the top ten |
+
+Both changes help everything else that draws a mesh through D3DX - items,
+props, effect meshes - not just the vehicle.
+
+---
+
+## 2026-09-11 (8) — Three more, all the same shape: work repeated on unchanged data
+
+"can you check is other place can be optimize?" — read off the same profile,
+which after the /sdcard fix named its next offenders plainly.
+
+**1. `RanMesh::DrawSubset` was O(faces), per draw, per frame** (9.9% of the
+process). It walked the whole attribute array to find the run of faces carrying
+one attribute — a run the mesh already keeps in `m_attribTable`, built once and
+invalidated by the only two things that can change it (`UnlockAttributeBuffer`
+and the attribute sort). It now reads the table. Helps every mesh the shim
+draws: effects, items, props.
+
+**2. `TtfFace::GlyphIndex` re-parsed the cmap for every character** (2.0%): a
+scan of the encoding records, then a linear walk of the format-4 segments, for
+every character of every label every frame. Now a 128 KB table per face, filled
+on first sight.
+
+**3. `RanD3DXFont::glyphFor` was a `std::map` lookup per glyph** (2.8%), called
+twice per character drawn (measure, then place). Glyph ids are dense, so a
+vector of pointers into the map indexes it; `std::map` never moves a node, so
+the pointers stay good.
+
+**4. Shaping ran on the same strings every frame** (`applySubstLookup` 1.6% +
+`coverageIndex` 1.4%). The client re-measures and re-draws its labels from
+scratch, and the answer depends only on the characters, so `shapeRun` caches by
+the string (cleared wholesale past 512 entries).
+
+### Where the frame is now, on the Tab S9
+
+| profile, self time | before today | now |
+|---|---|---|
+| `__faccessat` (diagnostic stats) | **14.8%** | gone |
+| text: `DrawText` path | **19%** | ~1.4% (`drawRun`) |
+| `RanMesh::DrawSubset` | 9.9% (1.2% self) | out of the top list |
+| `__memmove_aarch64_simd` | 13.9% | 14.7% — Adreno's own, vertex streaming |
+| `__ioctl` | 4.4% | 8.6% — submission, i.e. the GPU is the work now |
+
+In the world: **120–121 fps** (the panel's ceiling), 8.3–8.5 ms a frame of which
+3–5 ms is waiting for the swap. `interface` 1.6 ms, `world` 2.1 ms, 169 draws.
+The client is no longer the bottleneck on this device; what is left in the
+profile is the driver and waiting.
+
+Text verified by eye at each step — Thai shaping, marks, the chat box and the
+outer GUI are unchanged.
+
+---
+
+## 2026-09-11 (7) — The effects were never the problem: a stat() on /sdcard was
+
+"the weapon that I equip it also cost so much fps ... can you check all like if
+have some kind of this? optimize it all"
+
+Bisecting by hand-placed timers went in circles, so it went to a sampling
+profiler instead — simpleperf, `--app com.ran.native` (the APK needs
+`DEBUGGABLE=1`; a plain `-p <pid>` record is refused with "Permission denied").
+13,242 samples over 15 s named it in one line:
+
+    15.38%   RanPlat_DiagExists          <- under DxEffectMesh::Render (15.16%)
+    14.80%   __faccessat  (1960 self)
+
+`DxEffectMesh::Render` asks "does the *effmesh* diagnostic file exist?" once per
+effect mesh per frame. The diagnostic root is on /sdcard, which is FUSE on this
+Android: **one access() is about 120 us.** Ten effect meshes a frame is 1.2 ms,
+and every other per-mesh and per-character diagnostic added more.
+
+A cache had been added earlier that day and did not help, for a reason worth
+remembering: **its table held 16 names and the client uses 26.** The table
+filled, and every name after it fell silently through to the live `access()` —
+including `effmesh`. The table is now 64, the refresh is 1 s, and a name that
+still does not fit logs a warning once instead of being quietly slow.
+
+**The second find, from the same profile:** `CD3DFontX::DrawText` was 19% of the
+process. `RanD3DXFont::drawRun` issued **one `DrawPrimitiveUP` per glyph** — a
+triangle fan of four vertices, a stream write and a draw call for every
+character on screen, and the chat box alone is hundreds a frame. Every glyph in
+a run shares the atlas and the state around it, so the run now builds one
+triangle list (six vertices a glyph, buffer kept between calls) and issues a
+single draw.
+
+### Measured on the Tab S9, same character, same spot
+
+| scene | before | after |
+|---|---|---|
+| weapon equipped, no buff | 94–100 fps, `DxEffCharSingle` **3.3 ms/f** | **120 fps**, 0.13–0.20 ms/f |
+| บัตรบัพ used | 66–85 fps, `eff-group` **2.9–3.2 ms** | **119–120 fps**, `eff-group` **0.3 ms** |
+| `world` section | 5.3–6.5 ms | 2.0–2.5 ms |
+| `w:chars` / `ch:mesh` | 4.4–5.5 ms | 1.1–1.6 ms |
+| draws per frame | 211–229 | 171 |
+
+120 fps is the panel's vsync ceiling, so the real headroom is larger than the
+number shows: frame time is 7.7–8.6 ms of which 3–5 ms is waiting for the swap.
+
+**What the profile says is left** (10,991 samples, after both fixes): 15.7%
+`__memmove_aarch64_simd` whose callers are all Adreno driver frames — vertex
+streaming, the floor for this workload; 4.4% `__ioctl` (submission); 2.8%
+`RanD3DXFont::glyphFor` + 2.0% `TtfFace::GlyphIndex`, which is per-glyph map
+lookups that could be cached per run if text ever matters again.
+
+### The instruments that found it, kept
+
+* `effprof` under the diagnostic root arms two profilers: **RanEffProf** (per
+  character-effect type: ms, calls, draws, GL calls, render-target switches, at
+  `DxCharPart`) and **RanEffNode** (exclusive ms per effect *node* type inside
+  the single-effect tree, microsecond clock). Both silent without the file.
+* `RAN_EFFNODE()` sits at the top of every `DxEffSingle` subclass's `Render`;
+  `RAN_EFFSPAN(tag,"name")` measures a region inside one.
+* And the lesson: **a diagnostic that stats a file is not free.** On FUSE it is
+  120 us. Anything called per draw has to answer from memory.
+
+---
+
+## 2026-09-11 (6) — What a buff card costs, and a budget for other people's
+
+Reported: using บัตรบัพ drops the frame rate, and "we active only our but if other do
+it active this effect it will be so bad."
+
+**Measured on the Tab S9**, logged in as the GM character, standing still:
+
+| | fps | eff-group |
+|---|---|---|
+| before the card | 100–114 | 0 groups, 0.00 ms |
+| after the card | 66–85 | **4 groups, 2.9 ms, 29 draws** |
+
+The card grants five buffs and four of them leave a persistent
+`DxEffSingleGroup` on the character. **0.7 ms per group, every frame.** At 29
+draws for 2.9 ms that is 100 µs a draw against a frame-wide average of 13 µs —
+these draws are eight times the cost of an ordinary one.
+
+Where it goes, from the same scene with `nulldraw` (every GL call a draw makes
+dropped, the engine-side work kept): eff-group fell 2.9 → 1.1 ms. So roughly
+0.4 ms per group is the engine walking the effect and 0.3 ms is the GL it emits.
+Neither half gets cheaper in a crowd, and the cost is linear in groups on
+screen: thirty buffed players in view would be 120 groups, ~90 ms a frame.
+
+### The budget
+
+`DxEffGroupPlayer::Render` is now, on mobile, ordered and capped:
+
+* the local player's own groups always draw — they are what you are looking at,
+  and they are never counted against the budget;
+* everyone else's are sorted by distance from the player and drawn nearest
+  first, up to **6 groups a frame, at most 2 per character**, so one person
+  standing next to you cannot spend the whole budget;
+* the rest are skipped for that frame. Nothing is destroyed and nothing
+  desyncs — this is a render-time decision only.
+
+`DxEffGroupPlayer::SetMobileViewer(STARGETID, pos)` is fed once a frame from
+`DxGameStage::FrameMove`, because Lib_Engine sits below Lib_Client and cannot
+ask who the player is.
+
+Both numbers are tunable at runtime with `effbudget` under the diagnostic root
+(`"6 2"`). A third field counts the player's own effects against the budget too
+— off in the game, and the only way to exercise the path on a machine with
+nobody else standing next to you. That is how it was verified:
+
+| effbudget | groups drawn | skipped | eff-group |
+|---|---|---|---|
+| default | 4 (all mine) | 0 | 2.3 ms |
+| `2 1 1` | 1 | 3 | **0.8 ms**, 29 → 6 draws |
+
+`RanEffGroup` logs a line a second while `effbudget` exists, and is silent
+otherwise.
+
+**A sticky diagnostic cost an hour of confusion.** The file was read only when
+present, so deleting it left the last values in force - and the last values were
+a test's `2 1 1`, which counts the player's own effects. The buff aura simply
+stopped appearing. The read now resets to the defaults before looking for the
+file, so no file means default behaviour. Any diagnostic that changes behaviour
+has to answer for its own absence.
+
+### Still open
+
+The 0.7 ms per group is itself the anomaly — seven draws should not cost that.
+Worth chasing next: which render states these draws churn, and whether the
+effect tree re-walks work per frame that could be cached. Fixing that would
+help the player's own effects too, which the budget deliberately does not touch.
+
+---
+
+## 2026-09-11 (5) — The lift measured itself, so it flickered
+
+v417 shipped the window lift with a feedback loop in it, reported at once: "now
+it more buggy? it flicking?"
+
+`RanUI_FocusedEditRect` reported the box's live rectangle — from inside the
+window the lift had just moved. So:
+
+    frame 1   box is 160 under the keyboard   lift 160
+    frame 2   box is clear                    lift 0, window dropped back
+    frame 3   box is 160 under again          lift 160 ...
+
+— the window bouncing between two positions at frame rate. The earlier
+whole-layer pan did not have this because panning in the shader never touched
+the control rectangles; moving the window really does.
+
+The measurement now adds the applied lift back, so it answers where the box
+*would* be with nothing lifted. That number is the same every frame, the 0.5 px
+hysteresis absorbs the keyboard-height wobble, and after the first frame nothing
+moves. The lift's state (`s_pLifted`, `s_fLiftOrigTop`, `s_fLiftApplied`) moved
+to file scope in `UIEditBox.cpp` so both functions share it.
+
+**Verified on the Tab S9:** four captures across two seconds with the split
+window up — dialog title and buttons on the same rows in every one, HUD
+untouched, 60–83 fps.
+
+---
+
+## 2026-09-11 (4) — Only the window being typed into moves
+
+The keyboard fix earlier today slid the whole pre-transformed layer up, which is
+what Android's own `adjustPan` does. It worked and it looked wrong: the health
+bars, the minimap and the icon bar all rode up for a keyboard that had nothing
+to do with them. Reported straight away — "it seem it move every UI even the
+HUD up?"
+
+Now `RanUI_LiftFocusedWindow` moves one window. From the focused box, walk
+`GetParent()` to the top — only `CreateSub` ever sets a parent, so a top-level
+window has none — and `CUIGroup::SetGlobalPos` carries every child with it. That
+is the same call the chat already uses to sit above the keyboard, so it is known
+to work at runtime; the earlier "a window's drawn position does not follow
+SetGlobalPos" note (2026-09-11, keyboard section) was wrong about the mechanism,
+and the reverted attempt must have been moving the wrong object.
+
+The original top is remembered, not re-measured: reading the current position
+and subtracting would compound once per frame and throw the window off the top,
+which is exactly what the first attempt at this did back on 2026-09-10.
+
+`shim/platform/ui_pan.cpp` still works out *how far* — `bottom + 2% − (height −
+keyboard)`, clamped to `[0, top]` so the field never leaves the top edge — and
+now calls the lift instead of feeding a shader. The shader uniform and the
+matching touch-coordinate correction are gone: when the window really moves, its
+controls' rectangles move with it, so the hit test follows for free.
+
+**Verified on the Tab S9** with the real soft keyboard: แยก on a stack → the split
+window rose clear of the keyboard while the HUD, the quick slots, the minimap
+and the open inventory all stayed exactly where they were; dismissing the
+keyboard put the window back on its centred spot; Cancel then closed it. No
+crash, 103–113 fps throughout.
+
+---
+
+## 2026-09-11 (3) — Two ways to lose the client, neither of them a crash in the usual sense
+
+### Tapping your own character took the client down
+
+Measured on LDPlayer, one frame apart:
+
+    RanTarget: tap latch -> 248 (was 4294967295, live=0, click L0 R1)
+    signal 11 (SIGSEGV), fault addr 0x0
+    #00 CInnerInterface::SetTargetInfoPlayer   InnerInterfaceSimple.cpp:1083
+    #01 GLCharacter::MobileTargetTick          GLCharacter.cpp:1773
+
+Line 1083 is `pCHAR->GetClass()`, and `pCHAR` is NULL. The two lookups disagree
+about one actor and one only — yourself:
+
+* `GLGaeaClient::GetCopyActor` answers `GetCharacter()` for our own id, so the
+  target reads as live for ever;
+* `GLGaeaClient::GetChar` answers NULL for it, because the local player is not
+  in the map's character list.
+
+`SetTargetInfoPlayer` uses `pCHAR` immediately and only checks it forty lines
+later, where it already says `if ( !pCHAR ) return`. The mobile target is fed to
+the panel every frame rather than re-picked from a cursor, so it goes down the
+moment it is latched.
+
+Fixed at both ends: the tap latch in `GLCharacter.cpp` now skips our own id —
+the same rule `MobileFindNearestPvP` already keeps ("Never ourselves") — and
+`SetTargetInfoPlayer` gets a `#ifdef RAN_MOBILE` null check at the top. A finger
+hits this where a mouse does not: the tap that targets is also the tap that
+walks, and the character stands in the middle of the screen.
+
+### "The app crashed" on the tablet was an ANR
+
+Nothing had crashed. From the tablet's own log, in order:
+
+    18:42:18  ANR in com.ran.native ... Waited 10000ms for KeyEvent
+    18:42:39  Killing 27974:com.ran.native (adj 0): user request after error
+    18:42:40  Process 27974 exited due to signal 9 (Killed)
+
+— that last line is the Close button on Android's "isn't responding" dialog.
+The game thread was healthy at 120 fps right up to the kill and the Java main
+thread was idle in its looper. The dump says where it actually was:
+
+    DxGlobalStage::ChangeStage -> NLOADINGTHREAD::EndThread -> Sleep
+
+A stage change blocks the loop thread for the whole load, and on a
+NativeActivity that thread is what drains the input queue. Android gives a
+window five seconds to consume a touch and ten for a key; a zone load is longer,
+so anyone who taps during one gets the dialog.
+
+`RanPlat_PumpEvents` now keeps the queue moving: the shim's `Sleep` calls it,
+and it does something only on the loop thread. Input sources only — an app
+command can destroy the surface, and doing that halfway through a stage change
+is a different bug, so those stay queued for the real loop. Events read this way
+are finished and discarded rather than dispatched; the client is between two
+worlds and is in no state to handle a tap.
+
+**Verified on the Tab S9** (SM-X710, the device the report came from): entered
+the world while sending 25 key events across the load — no ANR, process alive,
+116 fps after. Tapped and long-pressed the character's own body: no latch, no
+crash. The keyboard pan from earlier today also confirmed on real hardware —
+Enter opened the chat, the layer rose, Back closed it and everything went back.
+
+---
+
+## 2026-09-11 (2) — The whole 2D layer pans out of the keyboard's way
+
+On the tablet the soft keyboard covers the split window's number box. The
+earlier measurement said it would not, and it was right about a *phone*: a 400‰
+keyboard clears a centred window. A tablet keyboard is a far larger share of the
+screen, and at 550‰ the field is buried — along with, in principle, every other
+edit box that happens to sit low.
+
+**Why the window mover failed, and what replaced it.** Moving the window itself
+was tried on 2026-09-10 and reverted: a client window's drawn position does not
+follow `SetGlobalPos` at runtime the way the chat's does. Rather than keep
+pulling that thread, this does what Android's own `adjustPan` does — slide the
+entire pre-transformed layer up, by exactly as much as it takes to show the
+focused box and no more. The window never resizes (`adjustNothing`, deliberate),
+so something has to move, and moving the whole layer moves the window, its text,
+its caret and its cursor together, with no client-side layout code at all.
+
+Three pieces, and the only new client code is a getter:
+
+| file | what it does |
+|---|---|
+| `SOURCE/Lib_ClientUI/Interface/UIEditBox.cpp` | `RanUI_FocusedEditRect` — the top and bottom of `s_pMobileEditing`, the box that raised the keyboard |
+| `MOBILE/native/shim/platform/ui_pan.cpp` | computes the pan once a frame: `bottom + 2% - (height - keyboard)`, clamped to `[0, top]` so the field never leaves the top edge |
+| `shim/gl/gl_render.cpp` | `uUIPanY`, subtracted from `aPos.y` in the pre-transformed branch of the vertex shader |
+| `shim/platform/touch_gesture.cpp` | adds the same pan back to every touch before it enters the client |
+
+The draw and the hit test read one number, so what you press is what you see.
+`g_rtActive` gates it: an off-screen pass has its own coordinate space, and
+panning there would move a reflection instead of the UI. The touch overlay
+(stick, skill ring) has its own GL path and its own hit test, so it stays under
+your thumbs — which is right, it is not what you are typing into.
+
+**Measured on LDPlayer with `fakekb` 550** (the emulator will not raise a real
+keyboard, so the inset is forced):
+
+| step | result |
+|---|---|
+| outer register window, bottom field focused | layer up 218 px, field and its dialog clear of the keyboard |
+| tapped Cancel *where it was drawn* | dialog closed — hit test agrees with the draw |
+| login dialog, Pass focused | up 38 px, only what that box needed |
+| in-world แยก split modal, number box focused | modal fully above the keyboard line, chat and HUD moved with it |
+| tapped the modal's Cancel at its drawn place | closed, pan returned to 0, UI back where it was |
+
+Not re-tested: typing in the chat. The chat still lifts itself in
+`MobileArrangeInterface` and that keeps its own box above the keyboard, so the
+pan computes 0 for it and the two do not fight — but LDPlayer would not open the
+chat's edit box (Enter is a scan code a soft keyboard cannot send), so that is
+reasoned, not measured.
 
 ---
 
