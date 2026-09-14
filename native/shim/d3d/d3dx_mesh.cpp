@@ -224,15 +224,73 @@ public:
                                    LPD3DXMESH *ppCloneMesh) {
         if (!ppCloneMesh) return D3DERR_INVALIDCALL;
         RanMesh *m = new RanMesh(pDevice ? pDevice : m_device, m_numFaces, m_numVerts, Options, FVF);
-        // Same FVF: a straight copy. Different: keep position and let the rest
-        // default, which is what every caller here needs (they re-fill it).
+        //  Same FVF: a straight copy. Different: each element goes from where
+        //  the source layout puts it to where the destination layout puts it,
+        //  as D3DX does; elements the source lacks stay zero.
+        //
+        //  This used to copy the first min(stride) bytes of every vertex. Effect
+        //  meshes load as XYZ|NORMAL|TEX1 and DxSimMesh clones them to XYZ|TEX1,
+        //  so the "UV" it then read back (m_pTexUV) was the normal's x and y:
+        //  gt_plane.x logged UV (0,0) on every vertex against 0.037-0.963 in the
+        //  file. Every flame / smoke plane sampled one texel and drew as a flat,
+        //  hard-edged rectangle.
         if (FVF == m_fvf) {
             m->m_vertices = m_vertices;
         } else {
-            for (DWORD i = 0; i < m_numVerts; ++i)
-                memcpy(&m->m_vertices[(size_t)i * m->m_stride],
-                       &m_vertices[(size_t)i * m_stride],
-                       m->m_stride < m_stride ? m->m_stride : m_stride);
+            struct Layout {
+                UINT posSize, normal, psize, diffuse, specular;   // offsets; ~0u = absent
+                DWORD posType;
+                UINT texCount, tex[8], texSize[8];
+                explicit Layout(DWORD f) {
+                    const UINT none = ~0u;
+                    posType = f & D3DFVF_POSITION_MASK;
+                    switch (posType) {
+                        case D3DFVF_XYZ:    posSize = 12; break;
+                        case D3DFVF_XYZRHW: posSize = 16; break;
+                        case D3DFVF_XYZB1:  posSize = 16; break;
+                        case D3DFVF_XYZB2:  posSize = 20; break;
+                        case D3DFVF_XYZB3:  posSize = 24; break;
+                        case D3DFVF_XYZB4:  posSize = 28; break;
+                        case D3DFVF_XYZB5:  posSize = 32; break;
+                        case D3DFVF_XYZW:   posSize = 16; break;
+                        default:            posSize = 0;  break;
+                    }
+                    UINT off = posSize;
+                    normal   = (f & D3DFVF_NORMAL)   ? (off += 12, off - 12) : none;
+                    psize    = (f & D3DFVF_PSIZE)    ? (off += 4,  off - 4)  : none;
+                    diffuse  = (f & D3DFVF_DIFFUSE)  ? (off += 4,  off - 4)  : none;
+                    specular = (f & D3DFVF_SPECULAR) ? (off += 4,  off - 4)  : none;
+                    texCount = (f & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+                    if (texCount > 8) texCount = 8;
+                    for (UINT t = 0; t < texCount; ++t) {
+                        const DWORD fmt = (f >> (16 + t * 2)) & 0x3;
+                        UINT sz = 8;
+                        if (fmt == D3DFVF_TEXTUREFORMAT1) sz = 4;
+                        else if (fmt == D3DFVF_TEXTUREFORMAT3) sz = 12;
+                        else if (fmt == D3DFVF_TEXTUREFORMAT4) sz = 16;
+                        tex[t] = off; texSize[t] = sz; off += sz;
+                    }
+                }
+            };
+            const Layout src(m_fvf), dst(FVF);
+            const UINT none = ~0u;
+            //  Position: xyz always; the whole block when the two agree on it.
+            UINT posCopy = (src.posType == dst.posType) ? dst.posSize
+                         : ((src.posSize >= 12 && dst.posSize >= 12) ? 12 : 0);
+            if (posCopy > src.posSize) posCopy = src.posSize;
+            for (DWORD i = 0; i < m_numVerts; ++i) {
+                const BYTE *s = &m_vertices[(size_t)i * m_stride];
+                BYTE *d = &m->m_vertices[(size_t)i * m->m_stride];
+                if (posCopy) memcpy(d, s, posCopy);
+                if (src.normal != none && dst.normal != none)     memcpy(d + dst.normal,   s + src.normal,   12);
+                if (src.psize != none && dst.psize != none)       memcpy(d + dst.psize,    s + src.psize,    4);
+                if (src.diffuse != none && dst.diffuse != none)   memcpy(d + dst.diffuse,  s + src.diffuse,  4);
+                if (src.specular != none && dst.specular != none) memcpy(d + dst.specular, s + src.specular, 4);
+                const UINT tn = src.texCount < dst.texCount ? src.texCount : dst.texCount;
+                for (UINT t = 0; t < tn; ++t)
+                    memcpy(d + dst.tex[t], s + src.tex[t],
+                           src.texSize[t] < dst.texSize[t] ? src.texSize[t] : dst.texSize[t]);
+            }
         }
         m->m_indices = m_indices;
         m->m_attributes = m_attributes;

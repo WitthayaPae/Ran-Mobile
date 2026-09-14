@@ -3,12 +3,311 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-13
+- **Last updated:** 2026-09-14
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-14 (8) — Selected-target panel hidden on mobile
+
+Asked for: the info panel at the bottom right that opens when a mob, player or
+NPC is selected should not show on mobile.
+
+**What it is:** `CROW_TARGET_INFO` (mob), `CROW_TARGET_INFO_NPC` and
+`CROW_TARGET_INFO_PLAYER` - `RNCROW_TARGET_INFO*`, right/bottom aligned - shown
+from seven places in `InnerInterfaceSimple.cpp` (874, 933, 1068, 1211, 1245,
+1268, 1318). Nothing reads their visibility; mobile code only fills them
+(`SetTargetInfoNpc` / `SetTargetInfoPlayer` from `GLCharacter.cpp`).
+
+**Fix (RAN_MOBILE):** each of the three classes overrides the virtual
+`SetVisibleSingle` to always pass FALSE, so every show call leaves it hidden while
+the data is still filled in. The HP bar over the target's head is a different
+control and is unchanged.
+
+**Verified (LDPlayer, one login):** auto-target selected a Little Vulgarian (red
+HP bar over it, target button lit) and no panel appeared bottom right; before,
+this showed "Lv.2 Little Vulgarian 180/180". x86_64 and arm64 build with 0
+errors. **Not seen directly:** a player or NPC selection (a tap on a walking fake
+player landed on the ground) - same override, same mechanism; the Tab S9.
+
+## 2026-09-14 (7) — Item shop icon drawn over the menu strip tooltip
+
+Reported: the item shop icon was on top of the tooltip, unlike the other icons.
+
+**Cause:** the menu strip's icon tooltip is its own child (`CBasicGameMenu::m_pInfo`,
+opened 40 px up-left of the finger, over the corner button row), so it draws
+with `GAME_MENU` in the bottom list - not in the top list like the corner
+buttons' `SHOW_COMMON_LINEINFO` tooltips. `GAME_MENU` is shown at
+`InnerInterfaceSimple.cpp:3929`; `AUCTION_BUTTON` (4751), `BOSS_VIEWER_BUTTON`
+(4835) and `ITEMMALL_BUTTON` (5983) come after it and were drawn over the tooltip.
+
+**Fix (RAN_MOBILE):** in the same end-of-creation block as the world labels,
+`GAME_MENU` is moved to the tail of the bottom list. Nothing else in the bottom
+list overlaps the strip, so only the tooltip's cover changes.
+
+**Verified (LDPlayer, one login, long-press on the strip's inventory icon):**
+before, the shop icon covered the "ช่องเก็บของ(I)" tooltip; after, the tooltip is
+drawn whole over the bag, shop and ranking icons. x86_64 and arm64 build with 0
+errors. Not verified on the Tab S9.
+
+## 2026-09-14 (6) — Pet and vehicle status boxes under the buffs
+
+Reported: with a vehicle or pet out, its status icon sat behind the chat box.
+
+**Cause:** `PET_STATUS_BOX` (357,538) and `VEHICLE_STATUS_BOX` (307,538) are
+right- and bottom-aligned 42x35 groups; on the 1280 layout they land at about
+787/837,658, which is under the chat box's tab row now that the chat is centred
+on the bottom edge. Nothing on mobile moved them (only the edge pass).
+
+**Fix (RAN_MOBILE, `DxGameStage::MobileArrangeInterface`, every frame):** the
+visible boxes (vehicle, then pet) are laid left to right from the buff row's
+left edge, 4 px below it (`SKILL_TIME_DISPLAY`, measured at 56,86 588x35, one
+row of 14 units, so the boxes start at y 125). If the capture-the-flag holder
+icon (`PVP_CAPTURE_THE_FLAG_HOLD_ICON`, 57,146) is showing in that column they go
+below it instead.
+
+**Verified (LDPlayer, one login):** vehicle called out with the bike button; its
+box (bike picture + power gauge) is at the top left under the status block, and
+the chat box area is clear. x86_64 and arm64 build with 0 errors.
+**Not verified:** the pet box (same loop, not summoned), placement with buffs
+actually showing, and the Tab S9.
+
+## 2026-09-14 (5) — Player names drawn over buttons
+
+Reported: the ranking icon sat behind player names while other icons did not;
+then the same for all the new GUI buttons.
+
+**Cause, two parts.**
+- The UI bottom list draws in the order groups were first shown
+  (`CUIMan::ShowGroupBottom` InsertTail, `RenderList` head to tail).
+  `GLOBAL_RANKING_BUTTON` is shown at `InnerInterfaceSimple.cpp:3597`, before
+  `NAME_DISPLAY_MAN` at 3640; every other corner button comes after it.
+- The touch pad (`RanTouch_Render`, own GL path) was drawn in
+  `DxGameStage::Render` before the whole interface, and the names are part of
+  the interface, so every name painted over the pad buttons.
+
+**Fix (all RAN_MOBILE).**
+- End of `CInnerInterface` creation: the world labels (`SIMPLE_HP`,
+  `NAME_DISPLAY_MAN`, `PRIVATE_MARKET_SHOW_MAN`, `TARGETINFO_DISPLAY`,
+  `DAMAGE_MAN`, `HEADCHAT_MAN`, `ITEM_SHOP_ICON_MAN`) move to the head of the
+  bottom list in their original order, so every HUD button draws above them.
+- `CUIMan` gets an underlay hook (`SetMobileUnderlay` id + func). `CUIMan::Render`
+  walks the bottom list itself and, right after the last world label, flushes
+  `CUIRenderQueue` and calls the pad draw. `DxGameStage` hands over
+  `RanTouch_Render` and only draws the pad itself when the interface is off.
+  Resulting order: world labels, touch pad, HUD, windows, top list.
+
+**Verified (LDPlayer, one login):** "Little Vulgarian" is clipped by the corner
+buttons; "Load010", "Load030" and "Little Vulgarian" are clipped by the pad's
+skill, eye and crossed-swords buttons; with the inventory open the window still
+covers both the names and the pad buttons. No crash in the log. x86_64 and arm64
+build with 0 errors. Not seen: a name right on the ranking icon itself (the
+cause is the same list order, fixed for all), and the Tab S9.
+
+## 2026-09-14 (4) — A minimap in place of the compass (mobile only)
+
+Asked for: no compass on the screen; a minimap the same size in its place, with
+a faded transparent edge; the original minimap (`CLargeMapWindow`) untouched.
+
+**What changed**
+- `CMiniMap` (`MiniMap.cpp/.h`), all `#ifdef RAN_MOBILE`: the dial
+  `MINIMAP_BACK` is hidden but kept as the position, the needle
+  `MINIMAP_DIRECTION` is not drawn, and a new `CMobileMiniMap` draws into the
+  dial's global rect (98x97 logical). The compass centre point stays on top as
+  the player marker. `SetMapAxisInfo` forwards the level's `GLMapAxisInfo`.
+  Nothing on the PC path changed.
+- New `Lib_ClientUI/Interface/MobileMiniMap.h/.cpp` (whole file RAN_MOBILE,
+  added to `sources_Lib_ClientUI.cmake`): loads the level's minimap texture
+  through `TextureManager`, centres on `GetCharacterPos()` using
+  `CLargeMapWindow`'s own world-to-texel formula (in floats), one texel per
+  logical pixel and north-up, the same as the large map. The fade is a 64x64
+  radial alpha texture made once (opaque to 62 % of the radius, smoothstep to 0
+  at the edge) on stage 1, read with coordinate set 1. All states it changes
+  are saved and restored.
+- Shim stage-1 **mode 7**: a second 2D texture with `COLOROP SELECTARG2/CURRENT`,
+  `ALPHAOP MODULATE TEXTURE/CURRENT` and `TEXCOORDINDEX 1` multiplies alpha by
+  that texture's alpha at `vUV2` (`d3d9_impl.cpp`, `gl_render.cpp`). Before this
+  the configuration fell through to mode 0 and the mask would have been
+  ignored.
+
+**Verified (LDPlayer, x86_64, one login):** in the school (`w_school_01`) the
+compass is gone and the map sits in its place, the edge fades out into the
+scene, and the view is centred at the Sacred Gate where the character stands.
+The red dot under the centre marker is part of the map art (the texture has a
+red marker at texel ~604,964 by the gate), not a stray draw. No stage-1 warnings
+in the log. arm64 and x86_64 both build with 0 errors.
+
+**Not verified:** the Tab S9; other maps and map changes (the texture is released
+and reloaded when the name changes); how it reads while moving.
+
+**Follow-up (same day):**
+- Player marker is now the large map's own `LARGEMAP_MARK` (CharInven.dds
+  305,321 37x37, the blue arrow disc), centred on the map and turned by the
+  camera direction with the same maths as `CLargeMapWindow::UPDATE_CHAR_ROTATE`,
+  linear filtered. The compass centre dot is no longer drawn.
+- Tapping the minimap toggles `LARGEMAP_WINDOW`, the same call as the menu
+  strip's map button: `MINIMAP_BACK` got id `MINIMAP_MOBILE_MAP` and stays
+  visible for input, hidden only while the group draws.
+- `MENU_LARGEMAP_BUTTON` removed from the menu strip (`BasicGameMenu.cpp`, with
+  quest and item shop): chat macro / item bank / run slide to 168 / 193 / 218,
+  strip 75 px narrower. The M key still opens the map.
+- Verified on LDPlayer: marker shows as on the PC large map; the strip shows 9
+  icons with no map icon; a tap at the minimap opened the large map. arm64 and
+  x86_64 build with 0 errors.
+
+## 2026-09-14 (3) — Interface icon outlines like the PC
+
+Reported: some HUD icons have an "off" outline, not like PC. PC reference: the user's
+screenshot of the top-right menu buttons (shop, stats, shield, magnifier, bag, Q, arm,
+blue). On PC each has a 1-texel black outline on all four sides; on mobile it was solid
+top/left and grey or missing right/bottom.
+
+**Measured** on the shop button (`chatting_group_aa.dds` 35,36 35x35, UV inset +0.25 texel
+from `InterfaceCfg`), mean luminance of the outline band, 0 = black:
+
+| | left | top | right | bottom |
+|---|---|---|---|---|
+| PC capture | 0.0 | 0.0 | 0.0 | 6.5 |
+| mobile before | grey | grey | ~0 | 80.7 |
+| mobile after | 0.0 | 0.0 | 0.0 | 6.5 |
+
+**Two causes, both fixed:**
+1. **My HUD edge margin put controls on fractional positions** (`SOURCE/Lib_Client/DxGameStage.cpp`).
+   The margin is 2% of the height (14.4 on 720), moves were not rounded: the top-right group
+   went 940,0 -> 925.6,14.4. A fit of the texture to the capture put the button at 858.5, 68.5.
+   Now the edge pass and the bonus gauge round to whole logical pixels (log: 940,0 -> 926,14).
+   This alone left the outline uneven (bottom 80.7 -> 43.3).
+2. **Magnified interface art sampled at GL pixel centres** (`MOBILE/native/shim/gl/gl_render.cpp`).
+   The GUI is laid out at 1280 and drawn at 2x; a pre-transformed D3D9 pixel samples at its
+   whole-number centre, GL at +0.5, so the second screen pixel of every 1-texel line blended
+   with its neighbour. Simulated against the texture: D3D9 1:1 sampling magnified 2x equals the
+   PC capture exactly (error 0.0); the old sampling error 18.3, a half-pixel shift 10.4.
+   The fragment shader now samples magnified pre-transformed textures (texels > 1.33 px, main
+   framebuffer only, new `uPanelH` uniform = framebuffer height, 0 in render targets) at the D3D9
+   sample point of the fragment's logical pixel. Everything else keeps sharpUV.
+
+**Verified (LDPlayer):** outline numbers above; the whole menu row matches the PC shot;
+HP/MP/SP/EXP text and the level box are pixel-identical before and after (glyphs are
+rasterised at the drawn size, one texel a pixel, so they are not snapped); no shader errors.
+
+**Not verified:** Tab S9; other windows and art (inventory, dialogs) against PC captures.
+
+---
+
+## 2026-09-14 (2) — Effect weapons (Load002's bow, the GM's spear): three shim bugs
+
+Reported: Load002's `m_gt_bow_flame_red.cps` bow "did not load correctly", same
+kind as the GameMaster's weapon (`w_gt_spear_flame_red.cps`). The piece loads
+(`ok` in the per-slot log); what is wrong is how its effects draw. Both pieces
+carry DxEffCharSingle x2-3 (flame .egp), DxEffCharLevel, DxEffCharMultiTex (+Blur).
+
+**1. The device was reported as HARDWARE vertex processing** (`shim/d3d/d3d9_impl.cpp`
+GetCreationParameters). The PC client's `CGameClient2Wnd::ConfirmDevice` refuses every
+HARDWARE mode, so on PC the device is MIXED. `DxEffectMan::InitDeviceObjects` clears
+REALSPECULAR (and keeps the software-shader path) without MIXED, and every
+DxEffCharLevel layer past ambient returns early.
+- Measured (effprof): DxEffCharLevel ~60 calls/s, **0 draws**. Now reports
+  MIXED|MULTITHREADED: realspec 1 on all 64 logged pieces, Level ~48 draws/s.
+
+**2. Level's specular layer: stage 1 SELECTARG1(cube by camera-space normal) was not
+implemented** ("stage 1 cube map with op 2 ... is not implemented"), so the pass drew
+stage 0 = white TFACTOR, additively, lit - the whole weapon washed white-orange.
+- Added stage-1 mode 6 (`gl_render.cpp` shader + RanGLR_SetStage1, `d3d9_impl.cpp`):
+  cube colour replaces the stage-0 result, no vLit (no stage reads DIFFUSE).
+- Verified on LDPlayer: warning gone, variants `04c2`/`0cc2` built, spear blade and
+  shaft show their own dark metal with a faint reflection (screenshots before/after).
+
+**3. D3DRS_BLENDOP was ignored** - no glBlendEquation anywhere, every blend was ADD.
+Effect meshes use SUBTRACT/REVSUBTRACT/MIN/MAX (`DxEffectMesh`, `DxEffectParticleSysDraw`),
+the sky REVSUBTRACT, glow and toon MAX. Measured on these flames: most
+`flame_sword_eff.dds` layers are blend 4 (MAX). Now mapped in RanGLR_ApplyState.
+- Verified: flames no longer blown out. Not verified: the sky and glow passes
+  (no sky in the test view).
+
+**4. Dark rectangles / flameless planes: CloneMeshFVF threw the UVs away** (`shim/d3d/d3dx_mesh.cpp`).
+With a different FVF it copied the first min(stride) bytes of each vertex. Effect meshes
+load as XYZ|NORMAL|TEX1 and DxSimMesh clones them to XYZ|TEX1, so the UV it read back
+was the normal's x,y. Every flame / smoke plane sampled one texel: flat hard-edged squares,
+and the flame sprite sheets never showed their frames.
+- Found by: PC reference screenshots from the user (bow and spear fully in flame, soft
+  smoke), a mesh-effect skip bisect (only the `black_hall_1304251.dds` layer made the
+  squares), then a load-time UV log against the file parsed offline.
+- Measured: `gt_plane.x` loaded UV (0,0) on every vertex vs 0.037-0.963 in the file;
+  `att_001.x` all (0,1); `fire100827.x` all (0.081,0.781).
+- Fix: copy each element (position, normal, psize, colours, each tex set) from its source
+  offset to its destination offset, as D3DX does. After: `gt_plane.x` (0.963,1)(0.037,1)
+  (0.963,-0.006)(0.037,-0.006), `fire100827.x`, `plane.x`, `att_001.x`, `04_plane.X` all
+  equal the file. Screenshot: spear head and tip are red-orange flame spikes with a soft
+  glow and no squares, like the PC reference.
+- Scope: every DxSimMesh effect mesh cloned to a smaller FVF (135 meshes logged at load)
+  had wrong UVs before; all effects using them change.
+- Also measured, not a bug: MultiTex's 128x128 target holds real fire colour
+  (D9A521 / B34600 / 8B2100 at probed texels).
+
+Not compared yet at close range against the PC shot: Load002's bow (same effect files).
+
+**Also:** the `texprobe` diagnostic crashed the emulator client
+(SIGSEGV in the emulator's GLClientState::checkFramebufferCompleteness from
+RanD3D_ProbeTextures). Pre-existing tool, not the fix; do not use it on LDPlayer.
+
+Kept: `effskip` now also applies to DxCharPart::RenderEff (the Single/Blur pass).
+Not verified on the Tab S9.
+
+---
+
+## 2026-09-14 — Costumes that never appeared: compressed meshes zlib refused
+
+Reported: some characters' costumes do not show like on PC (Load002 given as the example).
+
+**Measured**, with a temporary per-slot log in `GLCharClient::UpdateSuit` (removed
+again) over 86 fake players: 14 worn pieces failed to load. Load002 itself was not
+one of them: the server sent it a weapon only (slots 0-4 empty), so it shows the
+default body - that is what the server gave it, not a load failure.
+
+The 14, by cause:
+
+| Cause | Pieces | Same on PC? |
+|---|---|---|
+| **MSZip stored block with no NLEN** (fixed) | Mihawk_body, Mihawk_feet, Nami_hand, w_cos_op_carrotsulong_hand, w_cos_december_body, m_sbx_jf_naruto_link_body | No - D3DX9 loads them |
+| `.cps` not in client data | w_merchant1, Tai0004_W_E, w_sword_fire, w_cos_bm_leg, m_shark_upperbody_white | data gap |
+| mesh `s_m_cos_mummy.x` not in client data | m_cos_mummy_hand | data gap |
+| whole `.cps` byte-encoded `(b ^ 0x34) + 0x30`, header included | w_cos_holdem_leg (56 files have this; 15 `xv*` and 4 `yoyoman*` another variant) | MiniA runs the same LoadPiece, not tested on PC |
+| truncated read past EOF | w_hp_ADexPL | the check is in MiniA too, not tested on PC |
+
+**The fix** (`native/shim/d3d/xfile_parse.cpp`). Some `bzip` `.x` files end an MSZip
+block with a stored deflate block that has LEN and then the bytes, no NLEN. zlib
+stops with "invalid stored block lengths" and the whole mesh was dropped. Evidence:
+- `d3dx9_43.dll` on this PC (`D3DXLoadMeshFromXW`) loads all five meshes: mihawk.x
+  23543 faces / 18269 verts, naruto_link 37032 / 21970, nami 26942 / 18787 ...
+- Decoding the block as LEN + data gives exactly the header's total size and a
+  token stream that parses to the end with those same counts; reading NLEN gives
+  a short output and a bad token part way.
+
+zlib now decodes one block at a time (`Z_BLOCK`); at each block boundary a stored
+header whose NLEN does not match is copied by hand and zlib restarted after it
+with the last 32K as dictionary. Everything else stays zlib's.
+
+**Verified:**
+- Old vs new decoder built for x86_64 and run on the emulator over every `.x` in
+  `skin/`, `skinobject/`, `object/` (769 bzip): 755 byte-identical, the 14 the old
+  one refused now decode to their exact size and parse (also lwing_m/w, m_brooks,
+  m_garp, w_blackwindow_eg, s_m_sbx_cos_l2_jdk, s_w_sbx_cos_aion_lfpl_a10a,
+  s_w_cou_natsirtbspidey, s_w_blackcatyb_soraka_weapon). 0 failures left.
+- In game (LDPlayer, one login): the 6 pieces log `ok`; Load016 wears the blue
+  december dress, Load005 Mihawk's cloak, Load054 the carrot tail.
+
+**Not verified:** Tab S9 (arm64 lib built, not run); whether PC shows holdem / hp_ADexPL.
+
+### Still open
+- Fake players are dressed more sparsely than the generator intends (about a third
+  of armour slots filled against 80% per slot) - server side, not looked at.
+- 5 missing `.cps` + `s_m_cos_mummy.x`: data.
+- The `(b ^ 0x34) + 0x30` whole-file `.cps` encoding: check on PC before deciding
+  whether to decode it.
 
 ---
 

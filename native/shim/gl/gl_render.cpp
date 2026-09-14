@@ -277,6 +277,7 @@ const char *kFS =
     "#endif\n"
     "uniform vec2  uTexSize;\n"     // texels of the bound texture, 0 if unknown
     "uniform float uUiSharpen;\n"   // magnification the interface is drawn at
+    "uniform highp float uPanelH;\n" // framebuffer height, 0 when drawing into a render target
     "#ifndef uAlphaTest\n"
     "uniform int   uAlphaTest;\n"
     "#endif\n"
@@ -331,8 +332,28 @@ const char *kFS =
     "void main() {\n"
     "    //  Interface only. World geometry is as often minified as magnified,\n"
     "    //  and this is a magnification filter.\n"
-    "    vec2 uvS = (uPreTransformed == 1 && uUseTexture == 1 &&\n"
-    "                uTexSize.x > 1.0 && uUiSharpen > 1.0) ? sharpUV(vUV) : vUV;\n"
+    "    vec2 uvS = vUV;\n"
+    "    if (uPreTransformed == 1 && uUseTexture == 1 && uTexSize.x > 1.0 && uUiSharpen > 1.0) {\n"
+    "        //  Interface art the frame magnifies (texels bigger than a pixel)\n"
+    "        //  samples where D3D9 samples the logical pixel it belongs to: a\n"
+    "        //  pre-transformed pixel's centre sits on the whole number. Sampled\n"
+    "        //  at GL's half-pixel centres instead, the second screen pixel of\n"
+    "        //  every one-texel line blended with its neighbour, and icon\n"
+    "        //  outlines went grey or vanished on two sides. Simulated against\n"
+    "        //  the texture this reproduces the PC capture exactly. Glyphs are\n"
+    "        //  rasterised at the drawn size (one texel a pixel) and keep sharpUV.\n"
+    "        highp vec2 dUx = dFdx(vUV);\n"
+    "        highp vec2 dUy = dFdy(vUV);\n"
+    "        highp float tpp = max(length(dUx * uTexSize), length(dUy * uTexSize));\n"
+    "        if (uPanelH > 0.0 && tpp < 0.75) {\n"
+    "            highp float s = uUiSharpen;\n"
+    "            highp vec2 lg = vec2(gl_FragCoord.x, uPanelH - gl_FragCoord.y) / s;\n"
+    "            highp vec2 d = floor(lg) - lg;\n"
+    "            uvS = vUV + dUx * (d.x * s) - dUy * (d.y * s);\n"
+    "        } else {\n"
+    "            uvS = sharpUV(vUV);\n"
+    "        }\n"
+    "    }\n"
     "    vec4 tex = (uUseTexture == 1) ? texture(uTex, uvS) : vec4(1.0);\n"
     "    if (uPlain == 1) { oColor = tex * vColor; return; }\n"
     "    //  With lighting on, the pipeline's diffuse alpha is the material's;\n"
@@ -362,6 +383,12 @@ const char *kFS =
     "        vec3 vn = normalize(mat3(uView) * normalize(vNormal));\n"
     "        vec3 vp = (uView * vec4(vWorldPos, 1.0)).xyz;\n"
     "        rgb *= texture(uTexCube, reflect(normalize(vp), vn)).rgb;\n"
+    "    } else if (uStage1 == 6) {\n"
+    "        //  SELECTARG1(TEXTURE) with the cube by camera-space normal: the\n"
+    "        //  cube colour replaces the stage 0 result. DxEffCharLevel's\n"
+    "        //  specular layer; no stage reads DIFFUSE, so no lighting below.\n"
+    "        vec3 cn = normalize(mat3(uView) * normalize(vNormal));\n"
+    "        rgb = texture(uTexCube, cn).rgb;\n"
     "    } else if (uStage1 == 5) {\n"
     "        //  MODULATE2X(TEXTURE, CURRENT) with a 2D texture on stage 1 and\n"
     "        //  coordinate set 0. This is the shine on hair and on the coloured\n"
@@ -390,11 +417,14 @@ const char *kFS =
     "    //  only its alpha as the mask. Reading set 0 for both meant the mask\n"
     "    //  was the whole sheet, and all four moons showed at once.\n"
     "    if (uStage1 == 4) alpha = texture(uTex, vUV2).a * diffuse.a;\n"
+    "    //  Stage 1 as an alpha mask: MODULATE(TEXTURE, CURRENT) on alpha with\n"
+    "    //  the colour passed through, read with coordinate set 1.\n"
+    "    if (uStage1 == 7) alpha *= texture(uTexStage1, vUV2).a;\n"
     "\n"
     "    vec4 c = vec4(rgb, alpha);\n"
     "\n"
     "    if (uLighting == 1) {\n"
-    "        c.rgb *= vLit;\n"
+    "        if (uStage1 != 6) c.rgb *= vLit;\n"
     "        if (uSpecularOn == 1) c.rgb += uMatSpecular * vSpec;\n"
     "    }\n"
     "\n"
@@ -566,6 +596,7 @@ unsigned g_stage1Cube = 0;
 float  g_viewMatrix[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 GLint  uFlipY = -1, uWorldM = -1, uViewProj = -1, uVertexBlend = -1, uIndexedBlend = -1;
 GLint  uTexStage1 = -1;
+GLint  uPanelH = -1;
 //  The 2D texture bound to stage 1, on its own unit so the cube map can keep
 //  unit 1 and stage 0 can keep unit 0.
 unsigned g_stage1Tex2D = 0;
@@ -710,6 +741,7 @@ struct GlState {
 
     int    blendEnabled;
     GLenum blendSrc, blendDst;
+    GLenum blendEq;
     int    depthTest;
     GLenum depthFunc;
     int    depthMask;
@@ -763,7 +795,7 @@ void bindVAO(GLuint v)     { if (g_gl.vao != v) { glBindVertexArray(v); g_gl.vao
 void bindArray(GLuint b)   { if (g_gl.arrayBuffer != b) { glBindBuffer(GL_ARRAY_BUFFER, b); g_gl.arrayBuffer = b; ++g_callsAttrib; } }
 void bindElements(GLuint b){ if (g_gl.elementBuffer != b) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b); g_gl.elementBuffer = b; ++g_callsAttrib; } }
 
-void setBlend(bool on, GLenum src, GLenum dst) {
+void setBlend(bool on, GLenum src, GLenum dst, GLenum eq = GL_FUNC_ADD) {
     if (g_gl.blendEnabled != (int)on) {
         if (on) glEnable(GL_BLEND); else glDisable(GL_BLEND);
         g_gl.blendEnabled = on;
@@ -771,6 +803,10 @@ void setBlend(bool on, GLenum src, GLenum dst) {
     if (on && (g_gl.blendSrc != src || g_gl.blendDst != dst)) {
         glBlendFunc(src, dst);
         g_gl.blendSrc = src; g_gl.blendDst = dst;
+    }
+    if (on && g_gl.blendEq != eq) {
+        glBlendEquation(eq);
+        g_gl.blendEq = eq;
     }
 }
 
@@ -1167,6 +1203,7 @@ void fetchUniformLocations(GLuint prog) {
     uStage1         = glGetUniformLocation(prog, "uStage1");
     uTexSize        = glGetUniformLocation(prog, "uTexSize");
     uUiSharpen      = glGetUniformLocation(prog, "uUiSharpen");
+    uPanelH         = glGetUniformLocation(prog, "uPanelH");
     uGammaOn        = glGetUniformLocation(prog, "uGammaOn");
     uPlain          = glGetUniformLocation(prog, "uPlain");
     uGammaLut       = glGetUniformLocation(prog, "uGammaLut");
@@ -1223,7 +1260,7 @@ GLint *const kLocationVars[] = {
     &uMVP, &uViewport, &uPreTransformed, &uFlipY, &uMatAlpha, &uWorldM, &uViewProj,
     &uVertexBlend, &uIndexedBlend, &uTex, &uUseTexture, &uAlphaTest, &uAlphaRef,
     &uColorOp, &uColorArg1, &uColorArg2, &uAlphaOp, &uAlphaArg1, &uAlphaArg2,
-    &uTexFactor, &uTexCube, &uStage1, &uTexSize, &uUiSharpen, &uGammaOn, &uPlain,
+    &uTexFactor, &uTexCube, &uStage1, &uTexSize, &uUiSharpen, &uPanelH, &uGammaOn, &uPlain,
     &uGammaLut, &uSpecularOn, &uMatSpecular, &uMatPower, &uLightSpecular, &uView,
     &uWorld, &uCameraPos, &uCameraPosF, &uLighting, &uLightCount, &uGlobalAmbient,
     &uMatDiffuse, &uHasVertexColor, &uMatAmbient, &uMatEmissive, &uLightType,
@@ -1775,8 +1812,8 @@ extern "C" void RanGLR_SetStage1(int mode, unsigned glCubeTex, unsigned gl2DTex,
     //  Mode 3 used to fall through to 0 here, so the reflection addressing the
     //  caller asks for never reached the shader even though the shader has a
     //  branch for it.
-    if ((mode == 1 || mode == 3) && glCubeTex)  g_stage1Mode = mode;
-    else if (mode == 5 && gl2DTex)              g_stage1Mode = mode;
+    if ((mode == 1 || mode == 3 || mode == 6) && glCubeTex)  g_stage1Mode = mode;
+    else if ((mode == 5 || mode == 7) && gl2DTex) g_stage1Mode = mode;
     else if (mode == 2 || mode == 4)            g_stage1Mode = mode;
     else                                        g_stage1Mode = 0;
 
@@ -1974,7 +2011,21 @@ extern "C" void RanGLR_ApplyState(const DWORD *rs) {
             if (dst == D3DBLEND_DESTALPHA)          gdst = GL_ONE;
             else if (dst == D3DBLEND_INVDESTALPHA)  gdst = GL_ZERO;
         }
-        setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0, gsrc, gdst);
+        //  D3DRS_BLENDOP. Never read before, so every blend was an ADD: the
+        //  effect meshes' SUBTRACT / REVSUBTRACT / MIN / MAX modes (flame
+        //  planes on weapons, DxEffectMesh / DxEffectParticleSysDraw), the sky's
+        //  REVSUBTRACT and the glow's MAX all drew as additive sheets. D3D's
+        //  SUBTRACT is src - dest and REVSUBTRACT dest - src, the same as GL's.
+        //  0 is what an untouched state array holds; D3D's default is ADD.
+        GLenum geq = GL_FUNC_ADD;
+        switch (rs[D3DRS_BLENDOP]) {
+            case D3DBLENDOP_SUBTRACT:    geq = GL_FUNC_SUBTRACT;         break;
+            case D3DBLENDOP_REVSUBTRACT: geq = GL_FUNC_REVERSE_SUBTRACT; break;
+            case D3DBLENDOP_MIN:         geq = GL_MIN;                   break;
+            case D3DBLENDOP_MAX:         geq = GL_MAX;                   break;
+            default:                     geq = GL_FUNC_ADD;              break;
+        }
+        setBlend(rs[D3DRS_ALPHABLENDENABLE] != 0, gsrc, gdst, geq);
     }
 
     //  D3DRS_DEPTHBIAS is a float packed into the state DWORD, added straight to
@@ -3134,6 +3185,10 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         }
         setUniform2f(uTexSize, s_lastW, s_lastH);
         setUniform1f(uUiSharpen, g_noUiSharp ? 1.0f : (float)RanGL_UIScale());
+        //  gl_FragCoord is in framebuffer pixels from the bottom; the logical
+        //  pixel a fragment belongs to needs the height. 0 inside a render
+        //  target, whose draws are not magnified and must not be snapped.
+        setUniform1f(uPanelH, g_rtActive ? 0.0f : (float)RanGL_Height());
     }
     }
 

@@ -1079,7 +1079,14 @@ public:
         pParameters->AdapterOrdinal = 0;
         pParameters->DeviceType = D3DDEVTYPE_HAL;
         pParameters->hFocusWindow = NULL;
-        pParameters->BehaviorFlags = D3DCREATE_HARDWARE_VERTEXPROCESSING;
+        //  What the PC client actually creates. CGameClient2Wnd::ConfirmDevice
+        //  refuses every HARDWARE_VERTEXPROCESSING mode, so CD3DApplication
+        //  settles on MIXED (d3dapp.cpp) and creates with |MULTITHREADED.
+        //  DxEffectMan::InitDeviceObjects reads this flag: without MIXED it clears
+        //  REALSPECULAR and keeps the software-shader path, and every
+        //  DxEffCharLevel layer past ambient (specular, reflect, flow, glow) never
+        //  drew - the glow and flowing texture on upgraded / effect weapons.
+        pParameters->BehaviorFlags = D3DCREATE_MIXED_VERTEXPROCESSING | D3DCREATE_MULTITHREADED;
         return D3D_OK;
     }
 
@@ -1859,6 +1866,14 @@ public:
                         //  of the raw normal.
                         cube = RanD3D_CubeGlTexture((IDirect3DCubeTexture9 *)m_texture[1]);
                         mode = cube ? 3 : 0;
+                    } else if (op == D3DTOP_SELECTARG1 && arg1 == D3DTA_TEXTURE &&
+                               tci == D3DTSS_TCI_CAMERASPACENORMAL) {
+                        //  DxEffCharLevel's specular layer: the cube colour
+                        //  REPLACES the stage 0 result (a white TFACTOR), drawn
+                        //  additively. Without it stage 1 was dropped and the
+                        //  pass added lit white over the whole weapon.
+                        cube = RanD3D_CubeGlTexture((IDirect3DCubeTexture9 *)m_texture[1]);
+                        mode = cube ? 6 : 0;
                     } else {
                         static bool said = false;
                         if (!said) {
@@ -1901,6 +1916,17 @@ public:
                     //  phase. Without it the mask is the whole sheet and all
                     //  four moons show at once.
                     mode = 4;
+                } else if (m_texture[1] && m_texture[1] != m_texture[0] &&
+                           op == D3DTOP_SELECTARG2 && arg2 == D3DTA_CURRENT &&
+                           m_textureStageState[1][D3DTSS_ALPHAOP] == D3DTOP_MODULATE &&
+                           m_textureStageState[1][D3DTSS_ALPHAARG1] == D3DTA_TEXTURE &&
+                           m_textureStageState[1][D3DTSS_ALPHAARG2] == D3DTA_CURRENT &&
+                           m_textureStageState[1][D3DTSS_TEXCOORDINDEX] == 1) {
+                    //  An alpha mask: a second texture that passes the colour
+                    //  through and multiplies the alpha, read with coordinate
+                    //  set 1. The mobile minimap fades its edge out this way.
+                    stage2D = ((RanTexture *)m_texture[1])->GlTexture();
+                    mode = stage2D ? 7 : 0;
                 } else if (!m_texture[1]) {
                     static bool said = false;
                     if (!said) {

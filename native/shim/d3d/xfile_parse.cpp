@@ -32,29 +32,74 @@ void warnOnce(const char *what) {
 // Not a zlib container: a u32 total size, then blocks of
 //   u16 uncompressed size, u16 compressed size, 'CK', raw deflate data
 // where each block after the first back-references up to 32K of the PREVIOUS
-// block's output. Rather than the dictionary API, the history is prepended as
-// an uncompressed *stored* deflate block and dropped from the output — the
-// back-references then resolve against real stream data.
-bool inflateWithHistory(const BYTE *chunk, size_t chunkSize,
-                        const std::vector<BYTE> &history, std::vector<BYTE> &out) {
-    std::vector<BYTE> stream;
-    if (!history.empty()) {
-        size_t len = history.size();          // <= 32768, one stored block
-        stream.push_back(0x00);               // BFINAL=0, BTYPE=00 (stored)
-        stream.push_back((BYTE)(len & 0xFF));
-        stream.push_back((BYTE)((len >> 8) & 0xFF));
-        stream.push_back((BYTE)(~len & 0xFF));
-        stream.push_back((BYTE)((~len >> 8) & 0xFF));
-        stream.insert(stream.end(), history.begin(), history.end());
-    }
-    stream.insert(stream.end(), chunk, chunk + chunkSize);
+// block's output, handed to zlib as the dictionary.
+//
+// Stored deflate blocks without NLEN.
+//
+// Some costume meshes (Mihawk.X, Nami.x, m_sbx_jf_naruto_link.X, ...) were
+// written by a compressor that ends an MSZip block with a stored block holding
+// LEN and then the bytes - no NLEN. zlib rejects that ("invalid stored block
+// lengths") and the whole mesh failed, so the costume never appeared. D3DX on
+// Windows loads the same files: decoding that block as LEN + data gives
+// exactly the header's total size and a token stream that parses to the end
+// with D3DX's own vertex and face counts, reading NLEN does neither.
+//
+// So zlib decodes one deflate block at a time (Z_BLOCK), and at each block
+// boundary the next header is looked at here. A stored block whose NLEN does
+// not match is copied by hand and zlib restarted after it; everything else,
+// standard stored blocks included, stays zlib's.
 
-    z_stream zs;
+//  The header at bit position (bytePos, nBits unused bits of chunk[bytePos-1])
+//  is a stored block with no NLEN: its final flag, where its data starts and
+//  how long it is.
+static bool storedBlockWithoutNlen(const BYTE *p, size_t size, size_t bytePos, int nBits,
+                                   bool *pFinal, size_t *pData, unsigned *pLen) {
+    if (nBits < 0 || nBits > 7) return false;
+    unsigned header;
+    size_t aligned;                           // stored data is byte-aligned after the header
+    if (nBits >= 3) {
+        header = (unsigned)(p[bytePos - 1] >> (8 - nBits)) & 7;
+        aligned = bytePos;
+    } else {
+        if (bytePos >= size) return false;
+        unsigned low = nBits ? (unsigned)(p[bytePos - 1] >> (8 - nBits)) : 0;
+        header = (low | ((unsigned)p[bytePos] << nBits)) & 7;
+        aligned = bytePos + 1;
+    }
+    if ((header >> 1) != 0) return false;     // not a stored block
+    if (aligned + 2 > size) return false;
+    unsigned len = (unsigned)p[aligned] | ((unsigned)p[aligned + 1] << 8);
+    if (aligned + 4 <= size) {
+        unsigned nlen = (unsigned)p[aligned + 2] | ((unsigned)p[aligned + 3] << 8);
+        if (nlen == (~len & 0xFFFF)) return false;   // standard block: zlib's
+    }
+    if (aligned + 2 + len > size) return false;
+    *pFinal = (header & 1) != 0;
+    *pData = aligned + 2;
+    *pLen = len;
+    return true;
+}
+
+//  (Re)start raw inflate at chunk[at], with the last 32K of history followed by
+//  what this block has produced so far as the dictionary.
+static bool startInflate(z_stream &zs, bool &open, const BYTE *chunk, size_t chunkSize, size_t at,
+                         const std::vector<BYTE> &history, const std::vector<BYTE> &buf, size_t produced) {
+    if (open) inflateEnd(&zs);
+    open = false;
     memset(&zs, 0, sizeof(zs));
     if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return false;
-    zs.next_in = &stream[0];
-    zs.avail_in = (uInt)stream.size();
+    open = true;
+    std::vector<BYTE> dict(history);
+    dict.insert(dict.end(), buf.begin(), buf.begin() + produced);
+    if (dict.size() > 32768) dict.erase(dict.begin(), dict.end() - 32768);
+    if (!dict.empty() && inflateSetDictionary(&zs, &dict[0], (uInt)dict.size()) != Z_OK) return false;
+    zs.next_in = (Bytef *)(chunk + at);
+    zs.avail_in = (uInt)(chunkSize - at);
+    return true;
+}
 
+bool inflateWithHistory(const BYTE *chunk, size_t chunkSize,
+                        const std::vector<BYTE> &history, std::vector<BYTE> &out) {
     //  Capped, not grown without end.
     //
     //  MSZip is one deflate stream per block and a block decompresses to at
@@ -66,25 +111,62 @@ bool inflateWithHistory(const BYTE *chunk, size_t chunkSize,
     //  conformant file can reach it, and a file that does says so in the log
     //  rather than failing silently.
     const size_t kBlockMax = 65536;
-    std::vector<BYTE> buf(history.size() + kBlockMax);
+    std::vector<BYTE> buf(kBlockMax);
     size_t produced = 0;
+
+    z_stream zs;
+    bool open = false;
+    if (!startInflate(zs, open, chunk, chunkSize, 0, history, buf, produced)) {
+        if (open) inflateEnd(&zs);
+        return false;
+    }
+
+    bool ok = true;
+    bool atBoundary = true;                   // the next deflate block header is at (bytePos, nBits)
+    size_t bytePos = 0;
+    int nBits = 0;
     for (;;) {
-        if (produced == buf.size()) {
+        bool final = false;
+        size_t dataAt = 0;
+        unsigned len = 0;
+        if (atBoundary && storedBlockWithoutNlen(chunk, chunkSize, bytePos, nBits, &final, &dataAt, &len)) {
+            if (produced + len > kBlockMax) {
+                warnOnce("MSZip: block inflates past 64 KB, refusing it");
+                ok = false;
+                break;
+            }
+            memcpy(&buf[produced], chunk + dataAt, len);
+            produced += len;
+            warnOnce("MSZip: stored block without NLEN, read as LEN + data (as D3DX does)");
+            if (final) break;
+            bytePos = dataAt + len;
+            nBits = 0;
+            if (!startInflate(zs, open, chunk, chunkSize, bytePos, history, buf, produced)) { ok = false; break; }
+            continue;
+        }
+
+        if (produced == kBlockMax) {
             warnOnce("MSZip: block inflates past 64 KB, refusing it");
-            inflateEnd(&zs);
-            return false;
+            ok = false;
+            break;
         }
         zs.next_out = &buf[produced];
-        zs.avail_out = (uInt)(buf.size() - produced);
-        int r = inflate(&zs, Z_NO_FLUSH);
-        produced = buf.size() - zs.avail_out;
+        zs.avail_out = (uInt)(kBlockMax - produced);
+        int r = inflate(&zs, Z_BLOCK);
+        produced = kBlockMax - zs.avail_out;
         if (r == Z_STREAM_END) break;
-        if (r != Z_OK) { inflateEnd(&zs); return false; }
-        if (zs.avail_in == 0 && zs.avail_out != 0) break;
+        if (r != Z_OK) { ok = false; break; }
+        atBoundary = (zs.data_type & 128) != 0;
+        if (atBoundary) {
+            bytePos = (size_t)(zs.next_in - chunk);
+            nBits = zs.data_type & 7;
+        }
+        //  Input ran out without a final block: keep what came out, as before.
+        if (zs.avail_in == 0 && zs.avail_out != 0 && (!atBoundary || nBits < 3)) break;
     }
-    inflateEnd(&zs);
-    if (produced < history.size()) return false;
-    out.assign(buf.begin() + history.size(), buf.begin() + produced);
+    if (open) inflateEnd(&zs);
+    if (!ok) return false;
+    out.assign(buf.begin(), buf.begin() + produced);
     return true;
 }
 
