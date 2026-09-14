@@ -25,25 +25,14 @@
     <key>UIStatusBarHidden</key>             <true/>
     <key>UIViewControllerBasedStatusBarAppearance</key> <false/>
 
-    <!--  The patch host is plain HTTP (143.14.11.244:1521), which App Transport
-          Security blocks by default. This is the narrowest exception that
-          allows it - the whole store is signed and verified by the client
-          anyway (manifest.sig, P-256), so the transport is not what protects
-          it. See MOBILE/IOS-PORT-PLAN.md: shipping on the App Store means
-          moving the host to HTTPS and deleting this block.  -->
-    <!--  NSAllowsArbitraryLoads, not an exception domain, and the difference
-          matters: NSExceptionDomains keys must be DOMAIN NAMES. An IP address
-          is not a valid key, and a domain listed without usable subkeys gets
-          FULL ATS enforcement rather than none - so the exception written here
-          first did the exact opposite of what it looked like, and the patch
-          fetch to 143.14.11.244 was blocked on the first run on a device.
-
-          The store is signed and verified by the client either way
-          (manifest.sig, P-256), so the transport is not what protects it. The
-          real fix is a hostname with HTTPS, and then this whole block goes.  -->
+    <!--  The patch host is HTTPS (ran-legacy-m.com), which App Transport
+          Security allows as it stands, so the old NSAllowsArbitraryLoads
+          exception for plain http://143.14.11.244 is gone. Local networking
+          stays allowed for testing against a patch server on the dev machine.
+          The game server itself is a raw socket, which ATS does not govern. -->
     <key>NSAppTransportSecurity</key>
     <dict>
-        <key>NSAllowsArbitraryLoads</key> <true/>
+        <key>NSAllowsLocalNetworking</key> <true/>
     </dict>
 
     <!--  The launch screen, without a storyboard file: a storyboard has to be

@@ -65,7 +65,7 @@ import java.util.Map;
 public class RanLauncher extends Activity {
 
     /*  The patch host. Everything else about publishing is derived from this. */
-    private static final String BASE_DEFAULT = "http://143.14.11.244:1521/launcher_mobile/";
+    private static final String BASE_DEFAULT = "https://ran-legacy-m.com/launcher_mobile/";
 
     /*  An override, read from /sdcard/ran/.patchbase when it exists. Testing a
      *  patch against a local server otherwise means rebuilding the APK to

@@ -39,7 +39,7 @@ extern "C" const char *RanIOS_DataRoot ( void );
 static NSString *const kManifestPubKey =
     @"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/kqyu7XQLuP/WlBSpgnfKrN91qevUOtyVEMA3nL6hMX+lBTv9K7PHs/tQ1t1BZgpb9ugHasRVkTOk8b1F93jUQ==";
 
-static NSString *const kBaseDefault = @"http://143.14.11.244:1521/launcher_mobile/";
+static NSString *const kBaseDefault = @"https://ran-legacy-m.com/launcher_mobile/";
 
 static NSString *const kVerFile   = @".patchver";
 static NSString *const kIndexFile = @".patchindex";

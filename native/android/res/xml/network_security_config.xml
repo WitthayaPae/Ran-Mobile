@@ -1,19 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--  Cleartext is off everywhere except the patch host.
+<!--  Cleartext is off everywhere except loopback.
 
-      Android 9 and later refuse plain http:// by default, which silently broke
-      the patcher: every fetch failed and the launcher fell through to "could
-      not reach the patch server". Turning cleartext on application-wide with
-      usesCleartextTraffic would also permit it for the game's own traffic, so
-      it is scoped to the hosts that actually need it.
+      The patch host is HTTPS (https://ran-legacy-m.com/launcher_mobile/,
+      Cloudflare), so the old exception for 143.14.11.244 is gone: the app has
+      no reason to speak plain HTTP to any real host.
 
-      The right end state is HTTPS on the patch host - the box already has
-      OpenSSL - at which point this file can go. -->
+      Loopback stays for testing only: `adb reverse` plus a .patchbase override
+      points the launcher at a patch server on the dev machine without
+      rebuilding the APK. Nothing outside the device can answer on it. -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">143.14.11.244</domain>
-        <!--  adb reverse, for testing a patch against a server on the dev
-              machine without rebuilding the APK. -->
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>

@@ -55,7 +55,7 @@ const STORE = path.join(ROOT, 'MOBILE/native/out/launcher_mobile');
 /*  The same base the client already patches from. One host, one upload.
  *  Overridable, because a test server is a different machine.               */
 const BASE = process.env.RAN_PATCH_BASE ||
-             'http://143.14.11.244:1521/launcher_mobile/';
+             'https://ran-legacy-m.com/launcher_mobile/';
 
 /* ------------------------------------------------- what is inside the .ipa */
 //

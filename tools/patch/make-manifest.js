@@ -694,7 +694,7 @@ if (changes) {
 
 console.log('');
 console.log('upload the contents of ' + UP);
-console.log('to http://<host>/launcher_mobile/');
+console.log('to https://ran-legacy-m.com/launcher_mobile/');
 console.log('');
 console.log('that is the whole upload - see out/UPLOAD.txt. Sending all of');
 console.log(OUT);

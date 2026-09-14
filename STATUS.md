@@ -12,6 +12,180 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-14 (14) — Patch host moved to HTTPS (patch.ran-legacy-m.com)
+
+**Moved again, same day:** the store now lives at
+`https://ran-legacy-m.com/launcher_mobile/` (root domain; the patch. name no
+longer answers). Measured before switching: manifest.json / manifest.sig
+byte-identical to the earlier copies (0c213c08.. / 739cb8f7..), version 432,
+Range 206, cf-cache-status DYNAMIC. All code addresses below now read the root
+domain; the measurements further down were taken on the patch. name.
+
+The server now serves the mobile store through Cloudflare, Full (strict), at
+`https://patch.ran-legacy-m.com/launcher_mobile/`. The old
+`http://143.14.11.244:1521/launcher_mobile/` is being closed (see below).
+
+Changed: `RanLauncher.java` BASE_DEFAULT, `ran_ios_patch.mm` kBaseDefault,
+`make-ios-source.js` default BASE. Nothing else: HttpURLConnection does TLS
+itself, and manifest.sig / per-blob SHA-256 checks are transport-independent.
+
+Measured (curl, Dalvik UA): manifest.json and manifest.sig byte-identical over
+HTTPS and old HTTP (sha 0c213c08.. / 739cb8f7..); store version 432, APK 63
+V046; blob 488b89cf.. (3.1 MB) full 200 with matching hash, Range 1000-1999
+returns 206 with the right bytes (resume works); manifest cf-cache-status
+DYNAMIC (not cached). LDPlayer, this APK: log `patch base https://patch.
+ran-legacy-m.com/launcher_mobile/`, "Up to date | version 432"; with .patchver
+removed it reconciled and downloaded data/effect/char/EffectChar.rcc over
+HTTPS, sha 85dd3131.. matching the manifest.
+
+Plain HTTP closed (server not live, no players on the old address): the
+cleartext exception for 143.14.11.244 removed from network_security_config.xml
+(loopback kept for adb-reverse testing), iOS ATS NSAllowsArbitraryLoads
+replaced by NSAllowsLocalNetworking. Measured on LDPlayer: default HTTPS "Up to
+date | version 432"; .patchbase pointing at http://143.14.11.244:1521 fails
+with "Cleartext HTTP traffic to 143.14.11.244 not permitted". Server side the
+user closes 1521/80. Test devices with the old APK must be reinstalled by hand.
+No http->https redirect is relied on; Bot Fight Mode would block the launcher.
+iOS not tested on the new host.
+
+Not yet shipped: needs a MAKE-PATCH (versionCode bump) uploaded to the HTTPS
+store. Libs touched after the hand build-apk.sh.
+
+## 2026-09-14 (13) — Taps on the skill arc and the minimap no longer reach the ground
+
+Reported: tapping a skill slot also acted on the world behind it; then check the
+other new HUD pieces.
+
+**Mechanism:** `GLCharacter::PlayerUpdate` takes a left press/release as a ground
+click unless `CInnerInterface::IsCharMoveBlock()`. That flag is reset every UI
+frame and set by `CInnerInterface::TranslateUIMessage` when a top-level window
+reports the pointer - except for the ids on its no-block list, and only within
+the window's own rect.
+
+**Skill arc:** the slots were moved out of the tray window's rect, so the tray
+never reported the pointer (and `QUICK_SKILL_TRAY_TAB_WINDOW` has its own case
+that does not block anyway). Now `CSkillTrayTab::MobileArcCoversPoint` tests the
+visible page's ten slots out to the ring the overlay draws (1.6 half-widths),
+and `CInnerInterface::FrameMove` blocks the ground click when a press or release
+lands there. Press/release only: on touch the pointer stays where the last tap
+left it, and a rest-over block would stop `PlayerUpdate` every frame.
+
+**Minimap:** `MINIMAP` is on the no-block list (the PC compass is not tapped) and
+only blocked for its fullscreen button, but the mobile map tile opens the large
+map. `CMiniMap` now sends `UIMSG_MOBILE_MAP_PRESS` (`UIMSG_USER2`) on a press or
+release on the tile, and the `MINIMAP` case blocks for it.
+
+**Measured (LDPlayer, temporary clicklog in PlayerUpdate, one login per round):**
+before - ground click, minimap click; after - ground click only. No ground click
+from: minimap, large map X, skill slot 5 (empty), skill slot 1 (filled), chat
+macro 1 and 2, menu strip icon (open and close), top-right ranking button, HP
+bar. The bonus time gauge still passes a tap through: it is a passive display the
+PC client also does not block (like buffs and the status block), left as is.
+The log was removed afterwards. Tab S9 not checked.
+
+## 2026-09-14 (12) — GM load test (fake players) switched off for production
+
+Asked for: disable the load-test feature and its GM menu buttons for prod, but
+keep the code (it may be needed again).
+
+**Switch:** `SOURCE/Lib_Client/G-Logic/GLGMLoadTest.h` - `RAN_GM_LOADTEST`,
+commented out. Nothing was deleted; only the ways in are guarded:
+- GM tool MOB tab: the "Fake +10 / Fake +50 / Fake Clear" labels and their
+  `DoButton` cases (`GMGenItemWindow.cpp`) - with no label the buttons are not made;
+- the `/fake_pc` command (`dxincommand.cpp`);
+- the client-only crowd: `MobileLoadTestTick` and the `loadtest` diagnostic file
+  (`DxGameStage.cpp`);
+- agent: the `NET_MSG_GM_FAKE_PC` dispatch (`GLAgentServerMsg.cpp`);
+- field: the `NET_MSG_GM_FAKE_PC_FLD` dispatch (`GLGaeaServerMsg.cpp`).
+Handlers, `FrameMoveFakePC` (returns at once with no fakes) and the send guards
+for ids past the slot table stay compiled.
+
+**To turn it back on:** uncomment the define, rebuild the client and the agent
+and field servers.
+
+**Verified:** mobile x86_64 and arm64 build with 0 errors; MSBuild Release|Win32
+of Lib_Client, Lib_ClientUI, ServerAgent and ServerField all exit 0 (no errors).
+LDPlayer, one login: the GM tool's มอนส tab shows only its six mob/NPC buttons, no
+Fake buttons. The server-side guard applies only once the new ServerAgent.exe /
+ServerField.exe (in `SOURCE\_Bin\Data`) are deployed; they were not deployed.
+No fake players were on the map at the time of the check.
+
+## 2026-09-14 (11) — Skill arc: outer row spaced like the inner row
+
+Asked for: slots 6 7 8 9 0 with the same gap between them as 1 2 3 4 5.
+
+**Cause:** `CSkillTrayTab::MobileArrangeArc` spread both rows over the same
+quarter turn (22.5 degrees a step), so the outer row, on the larger radius, was
+further apart in pixels by fOuter / fInner.
+
+**Change (RAN_MOBILE):** the outer row's angle step is the inner step times
+fInner / fOuter, so the distance along the arc between neighbours is the same on
+both rows; its shorter sweep is centred on the quarter, so 6 and 0 each come in
+by the same amount.
+
+**Verified (LDPlayer, one login), centres read off the screenshot (display px,
++-5):** inner 1-2 96, 2-3 98, 3-4 97, 4-5 97; outer 6-7 97, 7-8 95, 8-9 99,
+9-0 97 (6-7 was ~143 before). x86_64 and arm64 build with 0 errors; both
+`libran.so` touched after the test APK so the next MAKE-PATCH bumps the version.
+Tab S9 not checked.
+
+## 2026-09-14 (10) — Tips (คำแนะนำ) removed on mobile
+
+Asked for: the settings option คำแนะนำ is not needed on mobile; disable the feature
+completely.
+
+**What it is:** `RANPARAM::bSHOW_TIP` shows `SIMPLE_MESSAGE_MAN`, the rotating
+keyboard/mouse hints at the top centre ("Press 'H'...", "Holding 'Ctrl'..."),
+from `CInnerInterface` every frame (`InnerInterface.cpp`, the only place that
+shows it). The option is `HWOPTION_GAMEPLAY_OPTION` index 7 in the เกม tab
+(`HWOPTION_GAMEPLAY_SHOW_TIP_STATIC` / `_BUTTON`).
+
+**Change (RAN_MOBILE):** `CInnerInterface` always hides `SIMPLE_MESSAGE_MAN`
+whatever a saved profile says; `CBasicGamePlayOption` hides the tip label and
+checkbox. It was the last row of its column (y 184, next to แสดงชื่อ on the right),
+so nothing moves. The loading-screen hint is separate (`StartThreadLOAD` is passed
+TRUE by every caller) and unchanged.
+
+**Verified (LDPlayer, one login):** no tip text in the world screenshots; the
+settings window's เกม tab lists the left column down to สื่อสาร with no คำแนะนำ row.
+x86_64 and arm64 build with 0 errors. Both `libran.so` were touched after the
+hand-packaged test APK, so the next MAKE-PATCH bumps the version.
+
+## 2026-09-14 (9) — Item action panel flicker on open
+
+Reported: tapping an inventory item, the new button panel (อัพเกรด / ลิงก์ในแชท /
+ทิ้ง / ปิด) flickers a bit.
+
+**How it was seen:** screencap and screenrecord on LDPlayer keep ~3 frames a
+second, so a temporary capture read the panel's rect back with `glReadPixels`
+in `RanGL_Present` for 40 presented frames, alongside a per-frame log of the
+panel and item-detail rects with the frame index. One frame in the set showed the
+panel displaced by 28 px (14 logical) up and left; the log for that frame had the
+detail at 972,262 instead of 986,276, and the panel beside it.
+
+**Cause:** `DxGameStage::MobileArrangeInterface`'s edge pass. Once a second it
+moves every visible top-level control closer than the margin (14 logical) to a
+screen edge in by that margin. The pinned item detail (`INFO_DISPLAY`, 294x444
+at 986,276) is flush with the right and bottom edges, so every sweep pushed it
+14 px up and left; its own `RePosControl` put it back the next frame, and the
+action panel, placed against the detail each frame, jumped with it. A one-frame
+jump of both, once a second, for as long as the panel is open.
+
+**Fix (RAN_MOBILE):** the edge pass skips the controls that place themselves
+every frame - `INFO_DISPLAY*`, `ITEM_INFOR_TOOLTIP*`, `SKILL_INFOR_TOOLTIP*` and
+`MOBILE_ITEM_SHEET`. Verified with the same capture: 60 logged frames with one
+panel/detail state, no edge move, and the captured panel rows identical frame to
+frame (remaining pixel changes are names moving behind the translucent frame).
+
+**Also (first attempt, kept):** `CMobileItemSheet::Open` sets every row
+`SetFlip ( FALSE )` before the panel's first frame. The panel is shown from
+inside the focus list's update, which walks a copy of the list, so it is drawn
+once before its first `Update`, and rows were logged still flipped from
+`CreateSubControl` (`flip before 1`) - one frame of pressed-looking buttons on
+the first open. Not the reported flicker, but real.
+
+The capture and logs were removed afterwards. Tab S9 not tested.
+
 ## 2026-09-14 (8) — Selected-target panel hidden on mobile
 
 Asked for: the info panel at the bottom right that opens when a mob, player or
