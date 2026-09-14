@@ -12,6 +12,21 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (5) — One branch per repo: main
+
+SOURCE: the 69 commits not yet on GitHub carried 49 Visual Studio caches under
+`.vs/` (21 of them 155-186 MB, over GitHub's 100 MB limit). Stripped with
+`git filter-branch --index-filter "git rm -r --cached .vs" -- origin/main..main`;
+commits already on GitHub untouched, so main pushed as a fast-forward (no
+force). Checked: old and new tip differ only in .vs paths, 0 blobs over 100 MB
+left, origin/main still an ancestor. `.vs/` added to .gitignore. The old tip
+is kept locally as `refs/backup/main-before-vs-strip` (not pushed).
+
+The iOS workflow now checks out SOURCE `main`; `ci/ios-source` and
+`tools/sync-ci-source.sh` are gone. MOBILE and SOURCE both keep only `main`
+(local and GitHub); the mobile-port/effects-resolution-and-text branches are
+deleted after being fully merged. Work continues on main.
+
 ## 2026-09-15 (4) — Music freeze on song change (POWER UP box) fixed; volume-0 crash not reproduced
 
 Reported: with music on, a POWER UP box froze the game just before the song

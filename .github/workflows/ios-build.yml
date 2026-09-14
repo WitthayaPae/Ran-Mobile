@@ -39,13 +39,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: WitthayaPae/RAN-ASURA-SOURCE
-          #  ci/ios-source, not the default branch: the port branch carries 49
-          #  Visual Studio IntelliSense files - a 186 MB Browse.VC.db and a dozen
-          #  174 MB .ipch - which GitHub refuses outright, so it cannot be pushed.
-          #  ci/ios-source is that same working tree squashed onto main without
-          #  them. Re-push it after changing anything under SOURCE/, or this job
-          #  compiles the old file.
-          ref: ci/ios-source
+          #  main. The port branch used to carry 49 Visual Studio caches (a 186 MB
+          #  Browse.VC.db, a dozen 150-190 MB .ipch) that GitHub refuses, so this built a
+          #  squashed copy on ci/ios-source. They were stripped from the history and
+          #  .vs/ is ignored (2026-09-15), so main is pushed and built directly.
+          ref: main
           token: ${{ secrets.SOURCE_REPO_TOKEN }}
           path: SOURCE
 
