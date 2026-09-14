@@ -51,6 +51,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /*  The patcher, and the first thing that runs.
  *
@@ -616,7 +621,12 @@ public class RanLauncher extends Activity {
                 if (key != null && key.equals(want)) ok = true;      //  trusted
                 else ok = sha.equalsIgnoreCase(sha256(f));           //  verify
             }
-            if (!ok) { todo.add(new String[]{ p, sha, String.valueOf(size) }); todoBytes += size; }
+            if (!ok) {
+                JSONArray parts = e.optJSONArray("parts");
+                todo.add(new String[]{ p, sha, String.valueOf(size),
+                                       parts == null ? null : parts.toString() });
+                todoBytes += size;
+            }
             if ((i & 255) == 0) say(null, "checked " + i + " / " + arr.length(), i * 1000 / arr.length());
         }
 
@@ -628,30 +638,7 @@ public class RanLauncher extends Activity {
         }
 
         say("Downloading update", todo.size() + " files, " + mb(todoBytes), 0);
-        long done = 0;
-        for (int i = 0; i < todo.size(); i++) {
-            String[] t = todo.get(i);
-            File dest = safeDest(rootDir, t[0]);
-            File parent = dest.getParentFile();
-            if (parent != null && !parent.exists()) parent.mkdirs();
-
-            File tmp = new File(dest.getPath() + ".tmp");
-            httpToFile(base() + "blobs/" + t[1], tmp, Long.parseLong(t[2]));
-
-            String got = sha256(tmp);
-            if (!got.equalsIgnoreCase(t[1])) {
-                tmp.delete();
-                throw new Exception("checksum failed for " + t[0]);
-            }
-            /*  Replace only once the bytes are known good, so being killed
-             *  mid-download can never leave a corrupt file behind. */
-            if (dest.exists() && !dest.delete()) throw new Exception("cannot replace " + t[0]);
-            if (!tmp.renameTo(dest)) throw new Exception("cannot rename " + t[0]);
-
-            done += Long.parseLong(t[2]);
-            say(null, (i + 1) + " / " + todo.size() + "   " + mb(done) + " of " + mb(todoBytes),
-                (int) (todoBytes == 0 ? 1000 : done * 1000 / todoBytes));
-        }
+        downloadAll(todo, rootDir, todoBytes, base() + "blobs/");
 
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
@@ -783,6 +770,133 @@ public class RanLauncher extends Activity {
      *  an error message. The real manifest is 1.2 MB.                         */
     private static final int MANIFEST_MAX = 64 << 20;
 
+    /*  How many files download at once.
+     *
+     *  A fresh install is 23,368 files, and for most of them the time goes to
+     *  the round trip each request costs, not to bytes: one at a time, 1,351
+     *  small files took 43.8 s on LDPlayer (32 ms a file). Riot measured eight
+     *  connections as the point past which more stopped helping their patcher,
+     *  and the CDN serves any number.                                          */
+    private static final int DL_THREADS = 8;
+
+    private void downloadAll(final List<String[]> todo, final File rootDir,
+                             final long todoBytes, final String blobBase) throws Exception {
+        /*  The keep-alive pool holds 5 idle sockets by default, so three of the
+         *  eight workers would reconnect - a fresh TLS handshake - every file.  */
+        System.setProperty("http.maxConnections", String.valueOf(DL_THREADS));
+
+        final AtomicInteger next = new AtomicInteger(0);
+        final AtomicInteger files = new AtomicInteger(0);
+        final AtomicLong bytes = new AtomicLong(0);
+        final AtomicReference<Exception> failed = new AtomicReference<Exception>();
+
+        ExecutorService pool = Executors.newFixedThreadPool(DL_THREADS);
+        for (int w = 0; w < DL_THREADS; w++) {
+            pool.execute(new Runnable() { public void run() {
+                int i;
+                while (failed.get() == null && (i = next.getAndIncrement()) < todo.size()) {
+                    String[] t = todo.get(i);
+                    try {
+                        downloadOne(rootDir, blobBase, t);
+                        files.incrementAndGet();
+                        bytes.addAndGet(Long.parseLong(t[2]));
+                    } catch (Exception e) {
+                        failed.compareAndSet(null, e);
+                    }
+                }
+            }});
+        }
+        pool.shutdown();
+
+        /*  Progress is reported from here, four times a second, not once per
+         *  file from the workers: that was 23,000 UI posts and log lines.       */
+        while (!pool.awaitTermination(250, TimeUnit.MILLISECONDS)) {
+            long b = bytes.get();
+            say(null, files.get() + " / " + todo.size() + "   " + mb(b) + " of " + mb(todoBytes),
+                (int) (todoBytes == 0 ? 1000 : b * 1000 / todoBytes));
+        }
+        /*  A failure stops new files from starting; the ones already running
+         *  finish or fail on their own. Nothing half-written is ever renamed
+         *  into place, so the next launch resumes cleanly.                     */
+        if (failed.get() != null) throw failed.get();
+        say(null, files.get() + " / " + todo.size() + "   " + mb(bytes.get()) + " of " + mb(todoBytes), 1000);
+    }
+
+    private void downloadOne(File rootDir, String blobBase, String[] t) throws Exception {
+        File dest = safeDest(rootDir, t[0]);
+        File parent = dest.getParentFile();
+        /*  Two workers can create the same directory at the same moment, and
+         *  mkdirs() then returns false for one of them - not a failure.        */
+        if (parent != null && !parent.exists() && !parent.mkdirs() && !parent.isDirectory())
+            throw new Exception("cannot create " + parent);
+
+        File tmp = new File(dest.getPath() + ".tmp");
+        if (t[3] != null) downloadParts(dest, tmp, blobBase, t);
+        else httpToFile(blobBase + t[1], tmp, Long.parseLong(t[2]));
+
+        String got = sha256(tmp);
+        if (!got.equalsIgnoreCase(t[1])) {
+            tmp.delete();
+            throw new Exception("checksum failed for " + t[0]);
+        }
+        /*  Replace only once the bytes are known good, so being killed
+         *  mid-download can never leave a corrupt file behind. */
+        if (dest.exists() && !dest.delete()) throw new Exception("cannot replace " + t[0]);
+        if (!tmp.renameTo(dest)) throw new Exception("cannot rename " + t[0]);
+    }
+
+    /*  A file the store also keeps as slices ("parts" in its manifest entry).
+     *
+     *  Cloudflare caches nothing over 512 MB, and Map.rcc is 548 MB: whole, it
+     *  came from the origin at about 1 MB/s; as 64 MB parts it comes out of the
+     *  cache like everything else. Each part is its own blob, downloaded
+     *  resumably, checked against its own hash, and appended; the caller then
+     *  checks the joined file against the whole-file hash before it is renamed
+     *  into place, so a wrong part list cannot install anything either.
+     *
+     *  A part is deleted once appended, which keeps the peak at the file plus
+     *  one part. If the launcher is killed part way, the next launch starts the
+     *  join again - the parts already fetched come back out of the cache.      */
+    private void downloadParts(File dest, File tmp, String blobBase, String[] t) throws Exception {
+        JSONArray parts = new JSONArray(t[3]);
+        long total = 0;
+        for (int k = 0; k < parts.length(); k++) {
+            String psha = parts.getJSONObject(k).getString("sha256");
+            if (!psha.matches("[0-9a-fA-F]{64}")) throw new Exception("bad part hash for " + t[0]);
+            total += parts.getJSONObject(k).getLong("size");
+        }
+        if (total != Long.parseLong(t[2])) throw new Exception("parts do not add up for " + t[0]);
+
+        tmp.delete();
+        OutputStream out = new FileOutputStream(tmp);
+        boolean joined = false;
+        try {
+            byte[] buf = new byte[1 << 16];
+            for (int k = 0; k < parts.length(); k++) {
+                String psha = parts.getJSONObject(k).getString("sha256");
+                long psize = parts.getJSONObject(k).getLong("size");
+                File pf = new File(dest.getPath() + ".part" + k);
+                httpToFile(blobBase + psha, pf, psize);
+                if (pf.length() != psize || !psha.equalsIgnoreCase(sha256(pf))) {
+                    pf.delete();
+                    throw new Exception("checksum failed for part " + k + " of " + t[0]);
+                }
+                InputStream in = new FileInputStream(pf);
+                try {
+                    int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                } finally { in.close(); }
+                pf.delete();
+            }
+            joined = true;
+        } finally {
+            out.close();
+            /*  A failed join is restarted from nothing next time, so the
+             *  partial file is only disk space - up to 548 MB of it.          */
+            if (!joined) tmp.delete();
+        }
+    }
+
     private byte[] httpGet(String url) throws Exception {
         HttpURLConnection c = open(url);
         try {
@@ -828,8 +942,13 @@ public class RanLauncher extends Activity {
             } finally { out.close(); in.close(); }
         } catch (Exception e) {
             if (bad) tmp.delete();
+            c.disconnect();
             throw e;
-        } finally { c.disconnect(); }
+        }
+        /*  No disconnect() on success. The body was read to its end and closed,
+         *  which hands the socket back to the keep-alive pool; disconnect() may
+         *  close it instead, and then every file pays a new TCP and TLS
+         *  handshake - 130 ms a file through Cloudflare instead of 75.          */
     }
 
     private HttpURLConnection open(String url) throws Exception {

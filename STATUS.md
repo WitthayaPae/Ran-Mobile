@@ -12,6 +12,244 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (4) — Music freeze on song change (POWER UP box) fixed; volume-0 crash not reproduced
+
+Reported: with music on, a POWER UP box froze the game just before the song
+changed; on the Tab S9, volume 0 crashed the game.
+
+**Cause (freeze).** The shim's `WaitForSingleObject` on a *thread* handle with a
+finite timeout was `Sleep(ms); return WAIT_TIMEOUT;` - it never looked at the
+thread. `DxBgmSound::StopThread` waits `10000` ms for the music thread, which
+exits within a millisecond of its terminate event. Every song change goes
+through it: the ?-item BGM in `GLCharacter` (ForceStop -> Stop -> StopThread),
+map changes (`DxLandMan`), leaving the lobby, and muting music in the options
+(`AudioOption_OK` -> `SetMute` -> `Stop`). Each froze the game thread for the
+full 10 s. BgmSound is the only mobile caller of a timed thread wait.
+
+**Fix (`shim/win/win_impl.cpp`).** Thread handles carry a shared exit record
+(mutex, cond, done, two refs - handle and thread). The trampoline, `_endthreadex`,
+`_endthread` and `ExitThread` mark it done; a timed wait blocks on its cond until
+done or the deadline, then joins; `CloseHandle` drops the handle's ref. All three
+thread creators go through one `ranStartThread`. `BgmSound.cpp` (RAN_MOBILE) logs
+`music thread stop: exited|TIMED OUT after N ms`.
+
+**Measured, LDPlayer x86_64, one login:** leaving the lobby into the world
+`exited after 10 ms` (was a fixed 10,000 ms by construction); muting music in
+the options `exited after 15 ms`, unmuting restarted the stream (new 1 MB ring
+buffer), process alive throughout. POWER UP box itself not triggered - the
+character has none; it runs the same ForceStop/SetFile/Play sequence.
+
+**Volume 0 (Tab S9 crash): not reproduced.** SFX, ambience and music sliders all
+dragged to 0 and OK pressed on LDPlayer: no crash, no ANR, no RanStall. The
+slider path only stores a number and the mixer maps -10000 to gain 0. Best
+unverified guess: the 10 s freeze on the loop thread tripping an Android ANR on
+the tablet when the music was muted - the fix removes that, but it needs the
+tablet's log (wireless debugging was off; mDNS found nothing) to confirm.
+Both ABIs built 0 errors. Not patched.
+
+## 2026-09-15 (3) — iPhone "update failed": manifests had no minIos
+
+The iOS patcher (ran_ios_patch.mm) refuses a manifest without `minIos` ("this
+patch server does not support the iOS client yet"). make-manifest.js only wrote
+it when given --min-ios, and MAKE-PATCH.bat never passes it: the live 434 and
+the earlier 433 both lacked the key (checked), so a fresh iPhone install could
+not pass the gate. ran.log could not be pulled from the phone (not written
+yet), so the cause is from the code path plus the live manifest, not a device
+log.
+
+Fix: make-manifest.js carries minIos forward from the previous manifest when
+--min-ios is not given, and prints a REFUSE warning when a manifest would go
+out without one. Rebuilt with --min-ios 1: version stays 434 (minIos is not in
+the change key), out/upload = manifest.json + manifest.sig only. Note its
+summary still says "nothing changed - no upload needed"; the manifest bytes did
+change and must be uploaded. Not yet verified on the iPhone.
+
+## 2026-09-15 (2) — Full fresh install: 4.7 GB in 2 min 11 s on LDPlayer
+
+LDPlayer wiped (adb uninstall - Android/data/com.ran.native gone; the old
+/sdcard/ran moved to /sdcard/ran.bak-freshtest so it could not be adopted),
+V048 installed, launched. Store 434, cache warm, parts live.
+
+"Downloading update | 23368 files, 4693.6 MB" at 00:07:36.254 -> "Updated |
+version 434" at 00:09:47.688: **2 min 11 s** (about 36 MB/s including
+hashing). 13,430 files / 2,935 MB after the first ~80 s. No permission prompt.
+After: .patchver 434, 4,844 MB on disk, 0 .tmp/.part files, Map.rcc sha
+cf01891b.. matches, the game activity took focus. The earlier estimate for the
+old path was ~142 min.
+
+Not measured: the Tab S9 or a real phone on Wi-Fi/4G (the emulator shares this
+PC's ~860 Mbps line), iOS (still one file at a time, whole Map.rcc).
+
+## 2026-09-15 (1) — 404s were cached for a month; purged, rule now never stores errors
+
+The user uploaded manifest 434 before its blobs. I HEAD-checked the new blobs
+while they were missing, and the Cache Rule (Edge TTL "ignore cache-control,
+1 month") cached those 404s. After the upload the origin had 15/15 (checked
+with a cache-busting query) but Cloudflare served cached 404 for 13 of 15 -
+players would have failed on Map.rcc and the V048 APK. My probing caused it.
+
+Fixed from the dashboard: Caching > Configuration > Custom Purge by URL, the 15
+blob URLs -> all 15 then 200. Cache Rule "patch" now has Status code TTL:
+>= 400 -> No store; verified a missing blob returns 404 cf-cache-status BYPASS
+three times. The 14 parts pre-warmed with full GETs, each SHA-256 checked;
+repeat GETs HIT at 70-94 MB/s. APK blob warm: HIT, 4.1 min.
+
+Rule for the future: upload blobs first, manifest last; do not probe new blob
+URLs before they are uploaded (or use a query string, which is its own cache
+key).
+
+## 2026-09-14 (20) — Patch 434 / V048 built (parts + parallel launcher)
+
+build-and-publish.js --verify, run from here (the user saw MAKE-PATCH look
+frozen: build.sh output is piped, so nothing prints until both ABIs finish).
+Both ABIs ok; versionCode 64 -> 65, V047 -> V048; store 434; Map.rcc 9 parts,
+Animation.rcc 5 parts, all present and summing to the file sizes; verify ok;
+exit 0. It pruned the old V047 APK blob locally (331.6 MB).
+
+make-manifest.js did not stage an upload set: 15 new blobs = 1,172.7 MB is
+over its 1 GB "wholesale" limit, so it said to send the whole store. Staged by
+hand into out/upload instead: the 15 blobs (each re-hashed against its name)
++ manifest.json/.sig, .since 434, UPLOAD.txt. Live server before upload: store
+433 / V047, 0 of the 15 blobs present, iOS source 1.0.64.
+
+After upload: pre-warm the new blobs, then time a full fresh install.
+
+## 2026-09-14 (19) — Files over 256 MB also stored as 64 MB parts (Map.rcc cacheable)
+
+Cloudflare caches nothing over 512 MB; Map.rcc is 548 MB and came from the
+origin at ~1 MB/s. The game file is unchanged - only delivery:
+
+* `make-manifest.js`: a file over SPLIT_OVER (256 MB) is sliced into PART_SIZE
+  (64 MB) blobs, each named by its SHA-256, listed as `parts: [{sha256,size}]`
+  in its manifest entry. The whole-file blob is still written (old launchers
+  and iOS ask for it). Slicing is deterministic. Parts count in the version
+  key, the prune "need" set and fsck. Today that splits Map.rcc (9 parts) and
+  Animation.rcc (293 MB, 5 parts).
+* `RanLauncher.java` `downloadParts`: validates part hashes are 64 hex and sizes
+  sum to the file size, downloads each part resumably, checks each part hash,
+  appends it and deletes it (peak = file + one part), then the existing
+  whole-file hash check runs before the rename. A failed join deletes the
+  partial file.
+
+Tested on LDPlayer against a local signed copy of the live manifest (version
+433, parts added, served over adb reverse with .patchbase, both removed
+after):
+
+| test | result |
+|---|---|
+| Map.rcc deleted, parts store | 9 part requests, whole blob never requested, 547.9 MB in 11.1 s, sha cf01891b.. matches, no .part/.tmp left |
+| one part served with a flipped byte | `checksum failed for part 3 of data/map/Map.rcc`, nothing installed, no leftovers, .patchver not written, launcher continued into the game |
+| same, clean store | re-downloaded in 10.8 s, sha matches, .patchver 433 |
+
+Not shipped yet: the live store has no parts until MAKE-PATCH runs this
+make-manifest.js, and parts then need uploading (about 841 MB) and
+pre-warming. iOS still uses the whole blob and one-at-a-time downloads.
+
+## 2026-09-14 (18) — Launcher downloads 8 files at once, sockets kept alive
+
+`RanLauncher.java`: the one-at-a-time loop is now `downloadAll` - a fixed pool
+of 8 workers pulling from a shared index, first failure stops new files and is
+rethrown (nothing half-written is ever renamed in, so the next launch resumes).
+`httpToFile` no longer calls disconnect() on success (body read to EOF and
+closed returns the socket to the keep-alive pool); `http.maxConnections` raised
+to 8 (default 5 idle). Progress is reported 4x a second from the patch thread
+instead of once per file (1,351 -> 121 progress lines). Blob base resolved once
+instead of a .patchbase stat per file.
+
+Measured on LDPlayer, cache warm, same test both times (delete the folder and
+.patchver, launch, "Downloading update" -> "Updated"):
+
+| | before | after |
+|---|---|---|
+| data/skeleton, 1,351 files, 17.9 MB | 43.8 s | 7.5 s |
+| textures/mob, 1,193 files, 232.9 MB | not measured | 10.5 s (22 MB/s incl. hashing) |
+
+Files all present afterwards, no .tmp left, .patchver 433. Not tested: the
+failure path under parallel workers, the Tab S9, iOS (ran_ios_patch.mm is still
+one at a time). Map.rcc (548 MB, uncacheable) is now the largest remaining cost.
+
+## 2026-09-14 (17) — Cloudflare cache rule fixed: patch files now cached
+
+The existing Cache Rule "patch" matched `URI Path equals /launcher_mobile/blobs/`,
+which only matches the folder itself, so every blob stayed DYNAMIC. Changed
+(driven from the dashboard with the user's permission) to
+`starts_with(http.request.uri.path, "/launcher_mobile/blobs/")`, Eligible for
+cache, Edge TTL ignore cache-control 1 month. Saved; list shows "URI Path starts
+with".
+
+Measured after: small blobs MISS then HIT, TTFB 115-417 ms -> 55-61 ms.
+manifest.json still DYNAMIC (correct). Same 20 MB range of the APK blob: MISS
+169.8 s (0.12 MB/s - Cloudflare pulls the whole 331 MB object from the origin
+first), then HIT 0.32 s (63 MB/s) and 0.43 s (46 MB/s).
+
+**Pre-warmed (2026-09-14 23:00-23:16).** scratchpad warm.js GET every blob
+under 512 MB once through Cloudflare, 8 at a time, SHA-256 checked: 21,818
+files, 4,269 MB in 15.9 min, MISS 21,815 / HIT 3, 0 failures, 4.4-5.3 MB/s
+average (origin-limited). Map.rcc (548 MB) skipped - over the cache cap.
+After: 40 random small blobs 36 HIT / 4 MISS, 74 ms per file on one connection
+(per-request latency, not bytes, is now the small-file cost); Animation.rcc
+full 3.17 s (97 MB/s) HIT; APK 332 MB full 3.22 s (108 MB/s) HIT. Cache is per
+Cloudflare location and can be evicted when cold; new blobs from each patch
+need warming again.
+
+Still true: the first request per Cloudflare location pays the slow origin
+fetch; Map.rcc (548 MB) is over the 512 MB cache cap and is never cached;
+the launcher still downloads one file at a time with a new connection each.
+
+## 2026-09-14 (16) — Why a fresh install downloads so slowly (analysis only, nothing changed)
+
+Fresh install = 23,368 files, 4,694 MB (+332 MB APK); 22,796 files are under
+1 MB. Measured from the dev PC (Thai ISP, 10 hops to the origin, not the same
+LAN):
+
+* Cloudflare edge (BKK) to PC: 63 MB/s (speed.cloudflare.com, 50 MB).
+* Origin direct: 68.8 MB/s; 14 ms per small file.
+* Through Cloudflare, uncached (blobs have no extension, cf-cache-status
+  DYNAMIC): 0.86-0.94 MB/s; TTFB 109 ms of which TLS is done at 33 ms, so
+  ~76 ms per request is the edge-to-origin fetch. 75 ms/file on one reused
+  connection, 130 ms/file with a new connection per file.
+* 6 parallel streams through Cloudflare: 3.47 MB/s total.
+* Loose data compresses to 0.43 with gzip (.dds 0.43, .x 0.34); .rcc and .ogg
+  do not (0.97-1.0). Store ~4.7 GB raw -> ~2.6 GB compressed.
+
+So the slow leg is Cloudflare edge <-> origin on uncached requests, not the
+player side. The launcher also makes it worse: one file at a time, a new
+HttpURLConnection + disconnect() per file (Android may close the socket), and
+no compression. Estimated fresh install: ~142 min now.
+
+What others do: Riot (League) moved from binary deltas to content-defined
+chunks bundled into <5,000 files, zstd, 8 parallel HTTP/1.1 connections with
+range requests - updates from 8+ min to <40 s. Steam: ~1 MB compressed chunks
+on a CDN. General pattern: content-addressed packs on a caching CDN, compressed,
+parallel, resumable. Cloudflare CDN terms restrict large-file serving unless
+the content is on R2/Stream/Images; R2 has free egress (10 GB free storage).
+The CDN cache cap is 512 MB (Map.rcc is 548 MB). APAC R2 speed complaints
+exist in the community - must be measured before committing.
+
+Not decided. See the chat report for options.
+
+## 2026-09-14 (15) — iOS 1.0.64 built on HTTPS; patch downloads slow through Cloudflare
+
+**iOS.** Actions billing works again. SOURCE committed (287348a), synced to
+ci/ios-source (fb393b8); MOBILE pushed (44f5103); run 34859841470 green in
+14m42s. The .ipa carries `https://ran-legacy-m.com/launcher_mobile/` (the only
+launcher_mobile string in the binary), version 1.0.64 (64), ATS
+NSAllowsLocalNetworking only. make-ios-source.js wrote ios/source.json with
+HTTPS URLs; the dead 1.0.45 http entry dropped; ios/ copied into out/upload.
+The installed 1.0.45 cannot reach anything (HTTP closed), so the phone needs
+one manual Sideloadly install. Not run on a device yet.
+
+Note: sync-ci-source.sh does not delete files removed on the port branch -
+ci/ios-source still has Lib_ClientUI/Interface/MobileCountSheet.cpp/.h, which
+nothing references.
+
+**Android patch speed.** V047 (store 433, APK 331.6 MB) downloaded at ~0.54
+MB/s on LDPlayer. Same 30 MB range from the PC: through Cloudflare 0.94 MB/s
+(cf-cache-status DYNAMIC - blobs have no extension, never cached), direct to
+origin 68.8 MB/s. Proposed: Cache Rule eligible-for-cache on
+/launcher_mobile/blobs/ (content-addressed), else a DNS-only dl. host for
+blobs with the manifest kept on Cloudflare.
+
 ## 2026-09-14 (14) — Patch host moved to HTTPS (patch.ran-legacy-m.com)
 
 **Moved again, same day:** the store now lives at

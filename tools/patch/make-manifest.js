@@ -244,6 +244,49 @@ function place(abs, dest) {
   return 'copied';
 }
 
+/* ------------------------------------------------------------------- parts
+   A file over SPLIT_OVER is also stored as PART_SIZE slices, each a blob named
+   by its own SHA-256 and listed under "parts" in the file's manifest entry.
+
+   Why: Cloudflare caches nothing over 512 MB on this plan, and Map.rcc is
+   548 MB, so every player pulled it uncached from the origin at about 1 MB/s
+   while every other blob came out of the cache at about 100 MB/s (both
+   measured 2026-09-14). Slices are cached like any other blob.
+
+   The whole-file blob stays in the store as well: a launcher from before
+   "parts", and the iOS patcher, still ask for it. Slicing is deterministic, so
+   an unchanged file keeps the same part names and nothing is re-uploaded.      */
+const SPLIT_OVER = 256 * 1024 * 1024;
+const PART_SIZE  = 64 * 1024 * 1024;
+
+function splitParts(abs, size) {
+  const parts = [];
+  const fd = fs.openSync(abs, 'r');
+  const buf = Buffer.alloc(PART_SIZE);
+  try {
+    for (let off = 0; off < size; off += PART_SIZE) {
+      const want = Math.min(PART_SIZE, size - off);
+      let got = 0;
+      while (got < want) {
+        const n = fs.readSync(fd, buf, got, want - got, off + got);
+        if (n <= 0) throw new Error('short read in ' + abs + ' at ' + (off + got));
+        got += n;
+      }
+      const slice = buf.subarray(0, want);
+      const hash = crypto.createHash('sha256').update(slice).digest('hex');
+      const dest = path.join(OUT, 'blobs', hash);
+      if (!fs.existsSync(dest)) {
+        const tmp = dest + '.tmp';
+        fs.writeFileSync(tmp, slice);
+        fs.renameSync(tmp, dest);
+        NEW_BLOBS.add(hash);
+      }
+      parts.push({ sha256: hash, size: want });
+    }
+  } finally { fs.closeSync(fd); }
+  return parts;
+}
+
 /* ---------------------------------------------------------------------- run */
 console.log('root   : ' + ROOT);
 console.log('client : ' + CLIENT);
@@ -381,6 +424,7 @@ for (const rel of wanted) {
   if (how === 'linked') linked++; else if (how === 'copied') copied++; else kept++;
   files.push({ path: rel.replace(/\\/g, '/'), size: st.size, sha256: hash });
   if (seeded.has(files[files.length - 1].path)) files[files.length - 1].seed = true;
+  if (st.size > SPLIT_OVER) files[files.length - 1].parts = splitParts(abs, st.size);
   bytes += st.size;
   if (++n % 500 === 0) process.stdout.write('  hashed ' + n + '/' + wanted.length + '\r');
 }
@@ -462,7 +506,9 @@ const changes = (() => {
   //  The seed flag is part of what a client is told to do with a file, so a
   //  change to it has to bump the version like a content change would -
   //  otherwise the new rule sits in a manifest nobody ever fetches.
-  const key = f => f.sha256 + (f.seed ? ':seed' : '');
+  //  Parts too: a file newly split has to reach clients as a new manifest.
+  const key = f => f.sha256 + (f.seed ? ':seed' : '') +
+                   (f.parts ? ':parts' + f.parts.length : '');
   const was = new Map(PREV.files.map(f => [f.path, key(f)]));
   const now = new Map(files.map(f => [f.path, key(f)]));
   //  A new APK is a reason to publish on its own: without this a build whose
@@ -498,7 +544,13 @@ if (Number.isFinite(versionArg)) {
 
 let signed = 0;   //  signature length, 0 when the payload is unsigned
 const manifest = { version: version, minApk: minApk, files: files };
-if (minIos !== null) manifest.minIos = minIos;
+/*  Carried forward when not given. MAKE-PATCH.bat never passes --min-ios, so a
+    routine publish used to drop the key - and the iOS patcher refuses a
+    manifest without one ("this patch server does not support the iOS client
+    yet"). Store 434 went out that way on 2026-09-15 and every iPhone failed.  */
+const minIosOut = minIos !== null ? minIos
+                : (PREV && Number.isFinite(PREV.minIos) ? PREV.minIos : null);
+if (minIosOut !== null) manifest.minIos = minIosOut;
 if (apk) manifest.apk = apk;
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
 
@@ -652,7 +704,9 @@ console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept +
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
             (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
-if (minIos !== null) console.log('           minIos: ' + minIos);
+if (minIosOut !== null) console.log('           minIos: ' + minIosOut +
+                                    (minIos === null ? '  (carried from the previous manifest)' : ''));
+else console.log('           minIos: none - the iOS patcher will REFUSE this manifest (pass --min-ios <n>)');
 console.log('upload   : ' + global.__uploadSummary);
 console.log('apk      : ' + (apk
   ? 'versionCode ' + apk.versionCode + ' "' + apk.versionName + '", ' + mb(apk.size)
@@ -712,6 +766,7 @@ if (argv.includes('--fsck')) {
   const blobDir = path.join(OUT, 'blobs');
   const names = fs.readdirSync(blobDir).filter(n => !n.endsWith('.tmp'));
   const live = new Set(files.map(f => f.sha256));
+  for (const f of files) for (const p of f.parts || []) live.add(p.sha256);
   let bad = [], seen = 0;
   console.log('');
   console.log('fsck     : verifying ' + names.length + ' blobs');
@@ -785,6 +840,7 @@ if (argv.includes('--fsck')) {
   const blobDir = path.join(OUT, 'blobs');
   const need = new Set(files.map(f => f.sha256));
   if (apk) need.add(apk.sha256);       //  the offered APK is referenced too
+  for (const f of files) for (const p of f.parts || []) need.add(p.sha256);   //  and every part
   let stale = [], staleBytes = 0;
   for (const name of fs.readdirSync(blobDir)) {
     if (need.has(name)) continue;

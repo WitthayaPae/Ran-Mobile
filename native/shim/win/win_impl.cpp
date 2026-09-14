@@ -170,6 +170,40 @@ BOOL TryEnterCriticalSection(LPCRITICAL_SECTION cs) {
 }
 
 // ---------------------------------------------------------- threads / events
+//  Whether a thread has returned, shared by its handle and the thread itself.
+//
+//  A timed wait on a thread handle needs to know when the thread ends, and
+//  bionic at this API level has no timed join. This used to be Sleep(ms) and
+//  WAIT_TIMEOUT: DxBgmSound::StopThread waits up to 10 s for the music thread,
+//  which exits within a millisecond of being told to, so every song change -
+//  a POWER UP box, a map change, muting the music - froze the game for the
+//  full 10 seconds. Two owners (handle, thread); freed by whichever lets go last.
+struct RanThreadExit {
+    pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t  cond = PTHREAD_COND_INITIALIZER;
+    bool done = false;
+    int  refs = 2;
+};
+static void ranThreadExitRelease(RanThreadExit *ex) {
+    if (!ex) return;
+    pthread_mutex_lock(&ex->mtx);
+    const bool last = --ex->refs == 0;
+    pthread_mutex_unlock(&ex->mtx);
+    if (last) delete ex;
+}
+//  The exit record of the thread that is running, for the exits that leave
+//  through pthread_exit instead of returning to the trampoline.
+static thread_local RanThreadExit *t_threadExit = NULL;
+static void ranThreadDone(RanThreadExit *ex) {
+    if (!ex) return;
+    pthread_mutex_lock(&ex->mtx);
+    ex->done = true;
+    pthread_cond_broadcast(&ex->cond);
+    pthread_mutex_unlock(&ex->mtx);
+    t_threadExit = NULL;
+    ranThreadExitRelease(ex);
+}
+
 struct RanHandle {
     enum Kind { Thread, Event, Mutex, File, Find } kind;
     pthread_t thread = 0;
@@ -178,6 +212,7 @@ struct RanHandle {
     // and the client does exactly that — CNetClient::CloseConnect waits on its
     // network thread and then closes the handle.
     bool threadConsumed = false;
+    RanThreadExit *threadExit = NULL;
     pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
     bool signalled = false, manualReset = false;
@@ -213,9 +248,11 @@ static void ranWatchDone() {
     if (t_joinWatch) { t_joinWatch->done = true; t_joinWatch = NULL; }
 }
 
-struct ThreadStart { DWORD (*fn)(LPVOID); LPVOID arg; unsigned (*fn2)(void *); void (*fn3)(void *); };
+struct ThreadStart { DWORD (*fn)(LPVOID); LPVOID arg; unsigned (*fn2)(void *); void (*fn3)(void *);
+                     RanThreadExit *exit; };
 static void *threadTrampoline(void *p) {
     ThreadStart *ts = (ThreadStart *)p;
+    t_threadExit = ts->exit;
     //  Name the thread after the routine it runs. /proc/<pid>/task/<tid>/comm
     //  then says which worker is spinning without a debugger on the device.
     {
@@ -234,43 +271,44 @@ static void *threadTrampoline(void *p) {
     if (ts->fn)  ts->fn(ts->arg);
     else if (ts->fn2) ts->fn2(ts->arg);
     else if (ts->fn3) ts->fn3(ts->arg);
+    ranThreadDone(t_threadExit);
     delete ts;
     return NULL;
 }
-HANDLE CreateThread(LPSECURITY_ATTRIBUTES, SIZE_T stack, DWORD (*start)(LPVOID),
-                    LPVOID param, DWORD, LPDWORD tid) {
+//  One place that makes a thread handle, so every kind carries the exit record
+//  a timed wait needs.
+static RanHandle *ranStartThread(ThreadStart *ts, unsigned stack) {
     RanHandle *h = new RanHandle; h->kind = RanHandle::Thread;
-    ThreadStart *ts = new ThreadStart{start, param, NULL, NULL};
+    h->threadExit = ts->exit = new RanThreadExit;
     pthread_attr_t attr; pthread_attr_init(&attr);
     if (stack) pthread_attr_setstacksize(&attr, stack < 65536 ? 65536 : stack);
-    if (pthread_create(&h->thread, &attr, threadTrampoline, ts) != 0) { delete ts; delete h; return NULL; }
+    const int rc = pthread_create(&h->thread, &attr, threadTrampoline, ts);
     pthread_attr_destroy(&attr);
+    if (rc != 0) { delete h->threadExit; delete ts; delete h; return NULL; }
+    return h;
+}
+HANDLE CreateThread(LPSECURITY_ATTRIBUTES, SIZE_T stack, DWORD (*start)(LPVOID),
+                    LPVOID param, DWORD, LPDWORD tid) {
+    RanHandle *h = ranStartThread(new ThreadStart{start, param, NULL, NULL, NULL}, (unsigned)stack);
+    if (!h) return NULL;
     if (tid) *tid = (DWORD)(uintptr_t)h->thread;
     return (HANDLE)h;
 }
 uintptr_t _beginthreadex(void *, unsigned stack, unsigned (*start)(void *), void *arg, unsigned, unsigned *tid) {
-    RanHandle *h = new RanHandle; h->kind = RanHandle::Thread;
-    ThreadStart *ts = new ThreadStart{NULL, NULL, start, NULL};
-    ts->arg = arg;
-    pthread_attr_t attr; pthread_attr_init(&attr);
-    if (stack) pthread_attr_setstacksize(&attr, stack < 65536 ? 65536 : stack);
-    if (pthread_create(&h->thread, &attr, threadTrampoline, ts) != 0) { delete ts; delete h; return 0; }
-    pthread_attr_destroy(&attr);
+    RanHandle *h = ranStartThread(new ThreadStart{NULL, arg, start, NULL, NULL}, stack);
+    if (!h) return 0;
     if (tid) *tid = (unsigned)(uintptr_t)h->thread;
     return (uintptr_t)h;
 }
 uintptr_t _beginthread(void (*start)(void *), unsigned stack, void *arg) {
-    RanHandle *h = new RanHandle; h->kind = RanHandle::Thread;
-    ThreadStart *ts = new ThreadStart{NULL, arg, NULL, start};
-    pthread_attr_t attr; pthread_attr_init(&attr);
-    if (stack) pthread_attr_setstacksize(&attr, stack < 65536 ? 65536 : stack);
-    if (pthread_create(&h->thread, &attr, threadTrampoline, ts) != 0) { delete ts; delete h; return 0; }
-    pthread_attr_destroy(&attr);
+    RanHandle *h = ranStartThread(new ThreadStart{NULL, arg, NULL, start, NULL}, stack);
     return (uintptr_t)h;
 }
-void _endthreadex(unsigned) { pthread_exit(NULL); }
-void _endthread(void)       { pthread_exit(NULL); }
-void ExitThread(DWORD)      { pthread_exit(NULL); }
+//  These leave the trampoline without passing its end, so they have to say the
+//  thread is done themselves, or a timed wait on it would never see it finish.
+void _endthreadex(unsigned) { ranThreadDone(t_threadExit); pthread_exit(NULL); }
+void _endthread(void)       { ranThreadDone(t_threadExit); pthread_exit(NULL); }
+void ExitThread(DWORD)      { ranThreadDone(t_threadExit); pthread_exit(NULL); }
 BOOL TerminateThread(HANDLE, DWORD) { return FALSE; }
 BOOL GetExitCodeThread(HANDLE, LPDWORD code) { if (code) *code = 0; return TRUE; }
 BOOL SetThreadPriority(HANDLE, int) { return TRUE; }
@@ -393,8 +431,32 @@ DWORD WaitForSingleObject(HANDLE hh, DWORD ms) {
             }
             return WAIT_OBJECT_0;
         }
-        Sleep(ms);
-        return WAIT_TIMEOUT;
+        //  Timed: wait for the thread to say it is done, then reap it. The
+        //  platform queue is pumped first, as Sleep did, so a wait on the loop
+        //  thread still answers input.
+        RanPlat_PumpEvents();
+        if (h->threadConsumed) return WAIT_OBJECT_0;
+        RanThreadExit *ex = h->threadExit;
+        bool done = true;
+        if (ex) {
+            pthread_mutex_lock(&ex->mtx);
+            if (!ex->done && ms != 0) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += ms / 1000;
+                ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                while (!ex->done)
+                    if (pthread_cond_timedwait(&ex->cond, &ex->mtx, &ts) != 0) break;
+            }
+            done = ex->done;
+            pthread_mutex_unlock(&ex->mtx);
+        }
+        if (!done) return WAIT_TIMEOUT;
+        //  It has finished its routine; the join only collects the return.
+        h->threadConsumed = true;
+        pthread_join(h->thread, NULL);
+        return WAIT_OBJECT_0;
     }
     pthread_mutex_lock(&h->mtx);
     DWORD r = WAIT_OBJECT_0;
@@ -439,6 +501,7 @@ BOOL CloseHandle(HANDLE hh) {
         h->threadConsumed = true;
         pthread_detach(h->thread);
     }
+    if (h->kind == RanHandle::Thread) ranThreadExitRelease(h->threadExit);
     delete h;
     return TRUE;
 }
