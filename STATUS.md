@@ -12,6 +12,23 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (10) — iOS app updates: minIos 68, update message names the real channel
+
+The in-game patch replaces game data only. It cannot install the iOS app itself,
+because iOS forbids an app installing code over itself and a sideloaded build
+must be re-signed per device. So code fixes reach iPhones only through
+AltStore/SideStore (ios/source.json) or Sideloadly.
+
+- **Gate.** Store 437 is to be published with `MAKE-PATCH.bat --uploaded
+  --min-ios 68`. make-manifest carries minIos forward afterwards. Any app older
+  than 1.0.68 then refuses to patch and tells the player to update. ios/ sorts
+  before manifest.json, so the 1.0.68 .ipa lands before the gate does.
+- **Message.** The refusal text said "Update from TestFlight or the App Store",
+  but the game is not distributed there. It now says "Update the app in AltStore
+  or SideStore, or install the new .ipa with Sideloadly". It ships in the next
+  iOS build (1.0.69+). 1.0.68 and older still show the old wording. Committed
+  with [skip ci] so it does not rebuild a second, different 1.0.68.
+
 ## 2026-09-15 (9) — Phone UI too small at 720 rows: minimum is now 640
 
 Reported after 1.0.67: "now it's too small". A 720-row minimum put the iPhone 15

@@ -357,10 +357,13 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         if (minIos > myBuild) {
             //  There is no download to offer: iOS cannot install a build over
             //  itself. A stale packet layout is a hard stop either way.
+            //  The game is sideloaded, not on TestFlight or the App Store, so
+            //  the message names where an update actually comes from.
             done ( NO, [NSString stringWithFormat:
                         @"This version of RAN is out of date.\n"
                         @"The server needs build %d, this is %d.\n"
-                        @"Update from TestFlight or the App Store.", minIos, myBuild] );
+                        @"Update the app in AltStore or SideStore, or install the new .ipa with Sideloadly.",
+                        minIos, myBuild] );
             return;
         }
 
