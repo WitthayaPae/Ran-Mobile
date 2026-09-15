@@ -154,6 +154,24 @@ static int  g_imeInsetPerMille = 0;
     self.glReady = YES;
 
     self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
+
+    //  Measurement switch "pace30": run the frame loop at an even 30 Hz. Frames
+    //  on the iPhone take 17-19 ms against a 16.7 ms vsync, so at 60 Hz they
+    //  land on alternating 16.7/33.3 ms gaps; an even 30 may look smoother than
+    //  an uneven 50. Off by default - A/B it with the PACE line and by eye.
+    //  RanTouch_Frame and the client take their step from real elapsed time,
+    //  so nothing runs slower, only less often.
+    if (RanPlat_DiagExists ( "pace30" )) {
+        if (@available(iOS 15.0, *)) {
+            self.link.preferredFrameRateRange = CAFrameRateRangeMake ( 30, 30, 30 );
+        } else {
+            self.link.preferredFramesPerSecond = 30;
+        }
+        RanPlat_Log ( RANLOG_INFO, "RanPace", "frame loop paced at 30 Hz (pace30 diagnostic)" );
+    } else {
+        RanPlat_Log ( RANLOG_INFO, "RanPace", "frame loop at the display rate" );
+    }
+
     [self.link addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];
 }
 
@@ -164,6 +182,40 @@ static int  g_imeInsetPerMille = 0;
     const CFTimeInterval now = link.timestamp;
     const float dt = self.lastTick > 0 ? (float)(now - self.lastTick) : 0.0f;
     self.lastTick = now;
+
+    //  Frame pacing, once a second: the FRAME line averages frames per second,
+    //  and an average hides uneven spacing. On a 60 Hz panel a frame that runs
+    //  past 16.7 ms waits for the next vsync, so the gaps alternate 16.7/33.3 ms
+    //  - 50 "fps" that looks jerky, where an even 40 on the emulator looks
+    //  smooth. This counts the gaps between display-link ticks the frame ran on.
+    {
+        static double s_gaps[240];
+        static int    s_n = 0;
+        static double s_since = 0.0;
+        if (dt > 0.0f && s_n < 240) s_gaps[s_n++] = (double)dt;
+        if (s_since == 0.0) s_since = now;
+        if (now - s_since >= 1.0 && s_n > 0) {
+            //  Insertion sort: at most a couple of hundred values a second.
+            for (int i = 1; i < s_n; ++i) {
+                const double v = s_gaps[i];
+                int j = i - 1;
+                while (j >= 0 && s_gaps[j] > v) { s_gaps[j + 1] = s_gaps[j]; --j; }
+                s_gaps[j + 1] = v;
+            }
+            int over20 = 0, over34 = 0;
+            for (int i = 0; i < s_n; ++i) {
+                if (s_gaps[i] > 0.020) ++over20;
+                if (s_gaps[i] > 0.034) ++over34;
+            }
+            RanPlat_Log ( RANLOG_INFO, "RanPace",
+                          "PACE %d frames | gap ms median %.1f p95 %.1f max %.1f | >20ms %d  >34ms %d",
+                          s_n, s_gaps[s_n / 2] * 1000.0,
+                          s_gaps[(s_n * 95) / 100 < s_n ? (s_n * 95) / 100 : s_n - 1] * 1000.0,
+                          s_gaps[s_n - 1] * 1000.0, over20, over34 );
+            s_n = 0;
+            s_since = now;
+        }
+    }
 
     //  Once. A failed boot used to be retried on the next frame, which meant
     //  the first run on a phone made 1,461 attempts and a 31,000-line log

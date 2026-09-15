@@ -43,9 +43,85 @@ back to highp. This lets the iPhone A/B highp against mediump texture
 coordinates with a restart instead of a rebuild. It is off by default, and the
 log says "texture coordinate precision: highp|mediump".
 
-**Next:** Android build, LDPlayer shader check, iOS build; then, on the iPhone
-over USB, walk the same route with and without uvmediump (interleaved rounds),
-reading the FRAME lines, and check swipe-turn speed.
+**Built:**
+- **LDPlayer (V054, versionCode 71).** "texture coordinate precision: highp" by
+  default. With /sdcard/ran/uvmediump present it logs "mediump (uvmediump
+  diagnostic - measurement only)". Both settings build all 8 variants with
+  glErr 0x0000. The flag was removed afterwards; use MSYS_NO_PATHCONV=1 for
+  adb shell paths, because Git Bash rewrote /sdcard to C:/Program Files/Git/sdcard.
+- **iOS 1.0.71.** MOBILE e9369a0, run 34999864916 green. The binary carries
+  `in RAN_UVP vec2 vUV;` and the switch log text. source.json = 1.0.71 only.
+
+**Measured on the iPhone (2026-09-16, iPhone 15 / iOS 27.0, 1.0.71, highp).**
+The user dropped the "spin" report: walking only. Syslog was captured with
+`syslog live --process-name ran` from 00:28:49 to 00:53, one process [890], so
+no restart and everything was highp.
+
+- **Per minute.** 00:28–00:33 averaged 50–52 fps (low 43.3); 00:34–00:53 held
+  58–59 at the 60 Hz cap. Interface was 10.0–10.6 ms and world 2.9–3.1 ms every
+  minute.
+- **Buckets.** 499 slow seconds (<55 fps) against 915 fast (≥58):
+
+  | | slow (<55 fps) | fast (≥58 fps) |
+  |---|---|---|
+  | fps | 51.5 | 59.8 |
+  | engine cpu | 14.77 ms | 13.03 ms |
+  | gl calls | 7300/frame | 7308/frame |
+  | collision | 0 rays | 0 rays |
+  | buffers | 0.16 ms | 0.13 ms |
+  | swap | 0.2 ms | 0.2 ms |
+
+- **Slowest second.** 00:32:09 at 43.3 fps: cpu 17.0 ms with interface 10.0 and
+  world 3.2. At 60 fps the cpu is 12.7 ms with the same sections. Mob counts
+  were 10–12 seen in both.
+
+**Conclusion.**
+- **Not the GPU.** Swap is 0.2 ms slow or fast, so the highp fix (a GPU cost)
+  is not the cause. The uvmediump round B was not needed; the flag was removed
+  from the phone and a pull confirmed it is gone.
+- **Same work.** Draw and GL-call counts are identical, so no extra code path
+  runs while walking. The same work took longer, clustered in the first ~5 min
+  after launch: the signature of CPU throttling (thermal, charging, Low Power
+  Mode, efficiency cores), not a regression.
+- **Biggest steady cost.** The interface section at ~10 ms/frame, which
+  includes world name labels and the touch overlay.
+
+**Open:** ask the user about Low Power Mode, heat/charging and when they
+walked. If that is inconclusive, log ProcessInfo thermalState and
+lowPowerModeEnabled in the iOS FRAME line. The frame report prints only the
+top 10 of up to 48 sections (ran_app.cpp).
+
+**Tooling fixed (uncommitted).** tools/ios-device.sh used
+`syslog live --process`, but this pymobiledevice3 wants `--process-name`. It
+also used container paths `ran/...` for pull/push/rm; the diag root is
+Documents/ran (RanIOS_DiagRoot), so every flag push and ran.log pull had
+silently failed.
+
+**User follow-up: "it still problem ... android it's more smooth. even the LD
+player smoother at 40 frame".** So the complaint is smoothness, not the fps
+number.
+- **Clock ruled out.** The shim's timeGetTime, GetTickCount and QPC use
+  CLOCK_MONOTONIC on both platforms (win_impl.cpp).
+- **Sleeps ruled out.** The only Sleep calls are in desktop DXUT paths.
+- **iOS frame loop.** A CADisplayLink on the main run loop runs one full
+  RanApp_Frame per tick, with no preferredFrameRateRange set.
+  presentRenderbuffer does not block (swap 0.2 ms).
+- **Why it looks jerky.** Frames measured 17–19 ms against the 16.7 ms vsync of
+  the 60 Hz iPhone 15 panel, so ticks are missed and the gaps alternate
+  16.7/33.3 ms: "50 fps" that judders.
+- **Added: PACE line (ran_ios_main.mm tick).** Once a second: median, p95 and
+  max gap between display-link ticks, frames over 20 ms and over 34 ms.
+- **Added: pace30 diag.** Read at display-link creation; paces the loop at an
+  even 30 Hz (preferredFrameRateRange on iOS 15+, else preferredFramesPerSecond)
+  and logs "frame loop paced at 30 Hz". Off by default.
+
+**Next (needs the user):**
+- Publish with MAKE-PATCH, then install 1.0.71 via SideStore.
+- iPhone on USB, walking the same route in interleaved rounds with and without
+  Documents/ran/uvmediump (`tools/ios-device.sh flag uvmediump` /
+  `unflag uvmediump`, app restarted each round), reading the syslog FRAME lines.
+- Ask whether the "spinning" happens on swipe-turn or while walking with the
+  stick.
 
 ## 2026-09-15 (14) — iPhone GUI and skill slots pixelated: mediump is 16-bit on Apple GPUs
 

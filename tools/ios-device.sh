@@ -56,13 +56,13 @@ case "${1:-list}" in
   #  over, and this when it is happening now.
   log)
     if [ -n "$2" ]; then pmd syslog live --match "$2"
-    else pmd syslog live --process ran
+    else pmd syslog live --process-name ran
     fi
     ;;
 
   pull)
     mkdir -p "$OUT"
-    pmd apps pull "$BUNDLE" ran/ran.log "$OUT/ran.log" 2>/dev/null \
+    pmd apps pull "$BUNDLE" Documents/ran/ran.log "$OUT/ran.log" 2>/dev/null \
       && echo "ran.log -> $OUT/ran.log" \
       || echo "no ran/ran.log yet - has the app run?"
     ;;
@@ -72,14 +72,14 @@ case "${1:-list}" in
   flag)
     [ -n "$2" ] || { echo "which flag?"; exit 1; }
     T="$(mktemp)"; printf '%s' "${3:-1}" > "$T"
-    pmd apps push "$BUNDLE" "$T" "ran/$2"
+    pmd apps push "$BUNDLE" "$T" "Documents/ran/$2"
     rm -f "$T"
     echo "set $2${3:+ = $3}"
     ;;
 
   unflag)
     [ -n "$2" ] || { echo "which flag?"; exit 1; }
-    pmd apps rm "$BUNDLE" "ran/$2" && echo "cleared $2"
+    pmd apps rm "$BUNDLE" "Documents/ran/$2" && echo "cleared $2"
     ;;
 
   #  The nearest thing to a tombstone. iOS writes a full report with a symbolised
