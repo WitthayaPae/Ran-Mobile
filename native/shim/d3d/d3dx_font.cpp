@@ -57,13 +57,14 @@ const DWORD FONT_FVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 //  would move every label in the game.
 extern "C" float RanGL_UIScale(void);
 
-int fontSuperSample() {
-    //  Whole texels per logical pixel: the outline and bold passes offset in
-    //  whole texels. A fractional UI scale (phones) rounds up, so glyphs are
-    //  rasterised at or above the drawn size and only ever minified slightly.
-    int ss = (int)ceil(RanGL_UIScale() - 0.01f);
-    if (ss < 1) ss = 1;
-    if (ss > 4) ss = 4;          // the atlas is square-law in this
+//  Texels per logical pixel = the UI scale itself, fractional on phones
+//  (1.6375 on an iPhone 15). Rounding it up to 2 rasterised glyphs larger than
+//  they are drawn, and the squeeze made text soft and uneven. At whole scales
+//  every use below reduces to exactly what it was.
+float fontSuperSample() {
+    float ss = RanGL_UIScale();
+    if (ss < 1.0f) ss = 1.0f;
+    if (ss > 4.0f) ss = 4.0f;    // the atlas is square-law in this
     return ss;
 }
 
@@ -453,8 +454,7 @@ RanD3DXFont::~RanD3DXFont() {
 void RanD3DXFont::ensureAtlas() {
     if (m_atlas || !m_device) return;
     {
-        const int ss = fontSuperSample();
-        const int want = 1024 * ss;
+        const int want = 1024 * (int)ceil(fontSuperSample());
         if (want > ATLAS_W) { ATLAS_W = want; ATLAS_H = want; }
     }
     m_atlasW = ATLAS_W;
@@ -588,16 +588,16 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
     //  emPixels(), not m_pixelSize: a positive D3DXFONT_DESC.Height is a cell
     //  height and has to be converted before it can scale an outline.
     const float scale = (float)emPixels() / (float)face->UnitsPerEm();
-    const int   ss    = fontSuperSample();
-    if (!face->Rasterise(gid, scale * (float)ss, m_italic ? 0.2f : 0.0f,
-                         m_bold ? ss : 0, gb))
+    const float ss    = fontSuperSample();
+    if (!face->Rasterise(gid, scale * ss, m_italic ? 0.2f : 0.0f,
+                         m_bold ? (int)lroundf(ss) : 0, gb))
         return NULL;
 
     Glyph g;
     //  The bitmap is ss times oversized; the quad it fills is not. Kept as
     //  floats so the division does not quantise the glyph box to whole logical
     //  pixels, which would jitter letter shapes against each other.
-    const float inv = 1.0f / (float)ss;
+    const float inv = 1.0f / ss;
     g.w = (float)gb.width  * inv; g.h = (float)gb.height * inv;
     g.bearingX = (float)gb.bearingX * inv; g.bearingY = (float)gb.bearingY * inv;
     //  Straight from the face at the logical scale, not gb.advance/ss: this is
@@ -678,13 +678,15 @@ const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
     TtfGlyphBitmap gb;
     //  Exactly the rasterisation glyphFor used, so the mask lines up with it.
     const float scale = (float)emPixels() / (float)g->face->UnitsPerEm();
-    const int   ss    = fontSuperSample();
-    if (!g->face->Rasterise(g->gid, scale * (float)ss, m_italic ? 0.2f : 0.0f,
-                            m_bold ? ss : 0, gb))
+    const float ss    = fontSuperSample();
+    if (!g->face->Rasterise(g->gid, scale * ss, m_italic ? 0.2f : 0.0f,
+                            m_bold ? (int)lroundf(ss) : 0, gb))
         return NULL;
     if (gb.width <= 0 || gb.height <= 0) return NULL;
 
-    const int pad = r * ss;
+    //  Offsets are whole texels; at a fractional scale one logical pixel is
+    //  ss texels, rounded. The quad for this mask is sized with the same pad.
+    const int pad = (int)lroundf((float)r * ss);
     const int W = gb.width + 2 * pad, H = gb.height + 2 * pad;
 
     if (m_penX + W + 1 > m_atlasW) {
@@ -704,8 +706,8 @@ const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
             for (int oy = -r; oy <= r; ++oy) {
                 for (int ox = -r; ox <= r; ++ox) {
                     if (!ox && !oy) continue;
-                    const int sx = x - pad - ox * ss;
-                    const int sy = y - pad - oy * ss;
+                    const int sx = x - pad - (int)lroundf((float)ox * ss);
+                    const int sy = y - pad - (int)lroundf((float)oy * ss);
                     if (sx < 0 || sy < 0 || sx >= gb.width || sy >= gb.height) continue;
                     keep *= 1.0f - (float)gb.coverage[(size_t)sy * gb.width + sx] / 255.0f;
                 }
@@ -895,7 +897,10 @@ INT RanD3DXFont::drawRun(const WCHAR *s, INT count, LPRECT pRect, DWORD Format,
             if (outlineR > 0) {
                 //  The mask is the glyph padded by the radius on every side, in
                 //  logical pixels, so the quad grows by the same amount.
-                const float r = (float)outlineR;
+                //  The pad outlineFor used, back in logical pixels: r at a whole
+                //  scale, a hair off r at a fractional one (it rounds to texels).
+                const float ssq = fontSuperSample();
+                const float r = (float)lroundf((float)outlineR * ssq) / ssq;
                 gx -= r; gy -= r; gw += 2.0f * r; gh += 2.0f * r;
                 u0 = g->ou0; v0 = g->ov0; u1 = g->ou1; v1 = g->ov1;
             }

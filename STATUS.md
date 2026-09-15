@@ -12,6 +12,36 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (8) — Fractional UI scale looked unevenly scaled; coverage snap + fractional glyphs
+
+Reported: "the icon not look good, look like it down scale". Measured on
+LDPlayer at 2556x1179 with 3x nearest-neighbour crops. At scale 1.6375, icon
+borders and HUD letters had one-texel lines landing as 1 or 2 screen pixels
+unevenly.
+
+**Two causes.**
+- **UI shader.** The D3D9 pixel-grid snap in the fragment shader
+  (`floor(gl_FragCoord/s)`) is exact at a whole scale, but at a fractional one it
+  is nearest-neighbour onto an irregular grid.
+- **Text.** `fontSuperSample` rounded up to 2, so glyphs were rasterised at 2x
+  and squeezed to 1.6375x.
+
+**Fix (Android built, not yet pushed).**
+- **Shader.** Where a logical-pixel edge falls inside a screen pixel, it now
+  samples between the two logical pixels by coverage. A Python simulation of
+  the formula shows max |old-new| = 0 at scales 1, 2 and 3, so the tablet and
+  LDPlayer are unchanged. At 1.6375 a one-texel line covers 1.637 screen pixels
+  (even).
+- **Text.** Glyphs rasterise at the exact fractional scale. Bold is
+  round(ss); the outline pad and offsets are rounded to texels, and the outline
+  quad uses pad/ss. All of it reduces to the old values at whole scales.
+
+**Verified.** Same LDPlayer screen, before and after
+(`out/phone_scale_hud_before_after.png`, `out/phone_scale_icons_before_after.png`):
+border widths are now even, and HP/MP labels and numbers are smoother. The
+inventory still fits, at 60 fps. A fractional scale is still inherently softer
+than an exact 2x. Not yet on iOS.
+
 ## 2026-09-15 (7) — iPhone "manifest signature does not verify" on store 435: stale cached .sig
 
 Reproduced on the iPhone (1.0.65, launched over USB): `RanPatch: manifest
@@ -35,6 +65,13 @@ unless an HttpResponseCache is installed, and none is.
 no-cache` request header, for both HttpGet and HttpToFile. A refusal now logs body
 size and hash plus the sig text. A server Cache-Control header would not help an
 installed 1.0.65: it serves the cached entry without asking the server.
+
+**Version trap:** the first rebuild (run 34934554624) still came out 1.0.65 (65).
+The iOS version is read from android:versionCode, and MAKE-PATCH's bump to
+66/V049 was uncommitted. Committed (d10fb9b), then dispatched run 34934815901:
+1.0.66 (66), carries both the cache fix and the UI-scale code. source.json lists
+1.0.66/65/64. ios/ is staged in out/upload with patch 435. Not yet installed on
+the iPhone.
 
 ## 2026-09-15 (6) — Phones: inventory taller than the screen, fixed with a fractional UI scale
 

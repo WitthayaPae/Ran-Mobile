@@ -348,7 +348,16 @@ const char *kFS =
     "        if (uPanelH > 0.0 && tpp < 0.75) {\n"
     "            highp float s = uUiSharpen;\n"
     "            highp vec2 lg = vec2(gl_FragCoord.x, uPanelH - gl_FragCoord.y) / s;\n"
-    "            highp vec2 d = floor(lg) - lg;\n"
+    //  Where a logical-pixel edge falls inside this screen pixel, sample
+    //  between the two logical pixels by how much of the screen pixel each
+    //  covers. At a whole scale an edge never falls inside, so this is exactly
+    //  floor(lg) - the D3D9 grid snap above, unchanged (simulated at 1, 2, 3).
+    //  At a phone's 1.6375 plain floor turned every texel into 1 or 2 screen
+    //  pixels at random, and the interface looked unevenly scaled.
+    "            highp float hp = 0.5 / s;\n"
+    "            highp vec2 c = floor(lg + hp);\n"
+    "            highp vec2 w = clamp((lg + hp - c) * s, 0.0, 1.0);\n"
+    "            highp vec2 d = (c - 1.0 + w) - lg;\n"
     "            uvS = vUV + dUx * (d.x * s) - dUy * (d.y * s);\n"
     "        } else {\n"
     "            uvS = sharpUV(vUV);\n"
