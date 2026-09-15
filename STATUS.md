@@ -12,6 +12,74 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (13) — iOS patch slow after SideStore install: parallel downloads + parts on iOS
+
+Reported: "after the SideStore the patch is so slow". The iPhone was not on USB,
+so there is no speed measurement yet.
+
+**Cause, from the code.** ran_ios_patch.mm downloaded one file at a time
+(`for i < todo.count` → HttpToFile). It also had no `parts` support, so
+Map.rcc and Animation.rcc came whole and uncached from the origin (Cloudflare
+does not cache over 512 MB). Android has had 8 workers, keep-alive and parts
+since 2026-09-14 (5.9x faster, fresh install 2:11).
+
+**Fix (mirrors RanLauncher.java downloadAll/downloadOne/downloadParts).**
+- **Workers.** `kDlThreads = 8` on a dispatch group, taking entries from one
+  locked counter. The first failure stops new files; running ones finish.
+- **Connections.** The ephemeral session sets `HTTPMaximumConnectionsPerHost = 8`;
+  the iOS default is 4, so half the workers would queue.
+- **Parts.** DownloadParts checks each part hash is 64 hex characters and that
+  sizes sum to the file size, then downloads, hash-checks, appends and deletes
+  each part. A failed join deletes the tmp. The whole-file hash is checked
+  before the rename (DownloadOne).
+- **Progress.** Reported from the waiting thread every 250 ms, not per file.
+
+**Not verified yet:** it compiles only on the Mac runner (iOS 1.0.69), and the
+speed has to be measured on the iPhone.
+
+## 2026-09-15 (12) — iOS distribution: SideStore, with a Thai install page
+
+No App Store or Google Play. MINCOM holds the RAN Online copyright and
+trademark worldwide and has said it will not sell service rights, so a store
+listing would be taken down on complaint. iPhones install through SideStore
+with a free Apple ID: 7-day signing refreshed on the device over LocalDevVPN,
+3 sideloaded apps including SideStore.
+
+- **Source.** ios/source.json already meets the AltStore/SideStore schema,
+  checked against faq.altstore.io "Make a Source": apps and news at the top;
+  name, bundleIdentifier, developerName, localizedDescription, iconURL,
+  versions and appPermissions per app; version, buildVersion, date,
+  downloadURL and size per version. `website` now points at the guide.
+- **Guide.** out/launcher_mobile/ios/install.html
+  (https://ran-legacy-m.com/launcher_mobile/ios/install.html) follows
+  docs.sidestore.io: iloader on the PC, Trust (iOS 15-17) or Allow & Restart
+  (iOS 18+), Developer Mode (iOS 16+), LocalDevVPN, the "7 DAYS" first refresh,
+  Sources + URL, Browse/install, updates, the weekly refresh and the pitfalls
+  (don't delete the app, keep the same Apple ID, 3-app limit, pairing file
+  after iOS updates). It is self-contained Thai with a copy button for the
+  source URL, and make-manifest stages it with the rest of ios/.
+- **Not verified yet:** the full flow on an iPhone.
+- **No-PC note (iOS 27).** install.html gained a warning section, "ไม่มีคอมพิวเตอร์? (iOS 27 ขึ้นไป)".
+  - What it says: SideInstaller (FrizzleM/SideInstaller, official site sideinstaller.net; the GitHub page
+    301-redirects there) installs SideStore with on-device pairing (Settings → Privacy & Security →
+    Developer → Pair with Side Installer).
+  - Why only a link: its first step installs SideInstaller with leaked enterprise certificates of other
+    companies (49 listed on the page, e.g. Aramco, BOC, many expired), plus a DNS profile that blocks
+    revocation checks.
+  - What the page does: links only to the official site, flags sideinstaller.com as fake, states the
+    risks (revocable certs, third-party DNS, Apple ID typed into that app), and resumes at step 4 once
+    SideStore is installed. It does not host or explain the certificate step.
+  - The PC method stays the documented default.
+- **Two paths (user request: separate "have PC" / "no PC").** install.html was rewritten.
+  - **Top:** two choice buttons, มีคอมพิวเตอร์ (default) and ไม่มีคอมพิวเตอร์ (iOS 27+). Each shows only
+    its own path; shareable links `#pc` / `#nopc`, and the page opens at the top.
+  - **PC path:** requirements, prepare (LocalDevVPN, iTunes, iloader), install SideStore, allow on iPhone.
+  - **No-PC path:** risk box first, iOS 27 requirements, Developer Mode + LocalDevVPN, install SideInstaller
+    from sideinstaller.net ("follow that page", with no certificate instructions), install SideStore with
+    on-device pairing, set up SideStore, remove the DNS profile.
+  - **Shared by both:** install the game (source link + copy button), updates, 7-day refresh, cautions.
+  - Rendered at 500 px for both paths; staged in out/upload/ios.
+
 ## 2026-09-15 (11) — MAKE-PATCH is one click: no --uploaded, no --min-ios, one iOS entry
 
 The user asked for one click, not typed flags, and a patch that doesn't change

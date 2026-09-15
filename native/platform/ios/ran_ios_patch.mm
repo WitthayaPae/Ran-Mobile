@@ -152,6 +152,12 @@ static NSString *SafeDest ( NSString *root, NSString *rel, NSString **err )
 //  paired the new manifest with the previous signature and refused it:
 //  "manifest signature does not verify". An ephemeral session with no cache
 //  and a reload policy fetches both from the network every time.
+//  How many files download at once - the same number as the Android launcher
+//  (DL_THREADS in RanLauncher.java). A fresh install is 23,368 files, and for
+//  most of them the time is the round trip, not the bytes: one at a time was
+//  the whole reason the iPhone patched far slower than Android.
+static const int kDlThreads = 8;
+
 static NSURLSession *PatchSession ( void )
 {
     static NSURLSession *s;
@@ -159,6 +165,9 @@ static NSURLSession *PatchSession ( void )
     dispatch_once ( &once, ^{
         NSURLSessionConfiguration *c = NSURLSessionConfiguration.ephemeralSessionConfiguration;
         c.URLCache = nil;
+        //  iOS allows 4 connections per host by default; with 8 workers the
+        //  other 4 would queue behind them instead of downloading.
+        c.HTTPMaximumConnectionsPerHost = kDlThreads;
         c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         s = [NSURLSession sessionWithConfiguration:c];
     });
@@ -300,6 +309,122 @@ static void WriteIndexFrom ( NSArray *files, NSString *root )
           atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 }
 
+// ---------------------------------------------------------------- download
+
+//  A file the store also keeps as slices ("parts" in its manifest entry), the
+//  same as downloadParts in RanLauncher.java.
+//
+//  Cloudflare caches nothing over 512 MB, and Map.rcc is 548 MB: whole, it
+//  came from the origin at about 1 MB/s; as 64 MB parts it comes out of the
+//  cache like everything else. Each part is its own blob, checked against its
+//  own hash and appended; the caller then checks the joined file against the
+//  whole-file hash before it is renamed into place, so a wrong part list
+//  cannot install anything either. A part is deleted once appended, which
+//  keeps the peak at the file plus one part. Returns nil, or what went wrong.
+static NSString *DownloadParts ( NSString *dest, NSString *tmp, NSString *blobBase,
+                                 NSArray *parts, long long size, NSString *rel )
+{
+    NSCharacterSet *notHex = [[NSCharacterSet characterSetWithCharactersInString:
+                                 @"0123456789abcdefABCDEF"] invertedSet];
+    long long total = 0;
+    for (NSDictionary *p in parts) {
+        if (![p isKindOfClass:NSDictionary.class]) return [@"bad part list for " stringByAppendingString:rel];
+        NSString *ps = p[@"sha256"];
+        if (![ps isKindOfClass:NSString.class] || ps.length != 64 ||
+            [ps rangeOfCharacterFromSet:notHex].location != NSNotFound)
+            return [@"bad part hash for " stringByAppendingString:rel];
+        total += [p[@"size"] longLongValue];
+    }
+    if (total != size) return [@"parts do not add up for " stringByAppendingString:rel];
+
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm removeItemAtPath:tmp error:NULL];
+    if (![fm createFileAtPath:tmp contents:nil attributes:nil])
+        return [@"cannot create " stringByAppendingString:rel];
+    NSFileHandle *out = [NSFileHandle fileHandleForWritingAtPath:tmp];
+    if (!out) return [@"cannot write " stringByAppendingString:rel];
+
+    NSString *fail = nil;
+    for (NSUInteger k = 0; k < parts.count && !fail; ++k) {
+        @autoreleasepool {
+            NSString *psha = parts[k][@"sha256"];
+            const long long psize = [parts[k][@"size"] longLongValue];
+            NSString *pf = [dest stringByAppendingFormat:@".part%lu", (unsigned long)k];
+            NSString *err = nil;
+            if (!HttpToFile ( [blobBase stringByAppendingString:psha], pf, psize, &err )) {
+                fail = [NSString stringWithFormat:@"%@ part %lu: %@", rel, (unsigned long)k, err];
+                break;
+            }
+            if ([psha caseInsensitiveCompare:Sha256OfFile(pf) ?: @""] != NSOrderedSame) {
+                [fm removeItemAtPath:pf error:NULL];
+                fail = [NSString stringWithFormat:@"checksum failed for part %lu of %@", (unsigned long)k, rel];
+                break;
+            }
+            NSFileHandle *in = [NSFileHandle fileHandleForReadingAtPath:pf];
+            if (!in) { fail = [@"cannot read a part of " stringByAppendingString:rel]; break; }
+            for (;;) {
+                @autoreleasepool {
+                    NSData *chunk = [in readDataOfLength:1 << 20];
+                    if (chunk.length == 0) break;
+                    NSError *we = nil;
+                    if (![out writeData:chunk error:&we]) {
+                        fail = [NSString stringWithFormat:@"cannot write %@: %@", rel, we.localizedDescription];
+                        break;
+                    }
+                }
+            }
+            [in closeFile];
+            [fm removeItemAtPath:pf error:NULL];
+        }
+    }
+    [out closeFile];
+    //  A failed join is restarted from nothing next time, so the partial file
+    //  is only disk space - up to 548 MB of it.
+    if (fail) [fm removeItemAtPath:tmp error:NULL];
+    return fail;
+}
+
+//  One todo entry into place: the blob (or its parts) to a .tmp, the whole-file
+//  hash checked, then renamed over the destination. Replacing only once the
+//  bytes are known good means being killed mid-download can never leave a
+//  corrupt file behind. Safe to run on several threads at once: every path is
+//  per file, and directory creation tolerates a race. Returns nil, or what
+//  went wrong.
+static NSString *DownloadOne ( NSString *root, NSString *blobBase, NSArray *t )
+{
+    NSString *rel = t[0], *sha = t[1];
+    const long long size = [t[2] longLongValue];
+
+    NSString *perr = nil;
+    NSString *dest = SafeDest ( root, rel, &perr );
+    if (!dest) return perr;
+
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:[dest stringByDeletingLastPathComponent]
+  withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    NSString *tmp = [dest stringByAppendingString:@".tmp"];
+    if ([t[3] isKindOfClass:NSArray.class]) {
+        NSString *pe = DownloadParts ( dest, tmp, blobBase, t[3], size, rel );
+        if (pe) return pe;
+    } else {
+        NSString *err = nil;
+        if (!HttpToFile ( [blobBase stringByAppendingString:sha], tmp, size, &err ))
+            return [NSString stringWithFormat:@"%@: %@", rel, err];
+    }
+
+    if ([sha caseInsensitiveCompare:Sha256OfFile(tmp) ?: @""] != NSOrderedSame) {
+        [fm removeItemAtPath:tmp error:NULL];
+        return [@"checksum failed for " stringByAppendingString:rel];
+    }
+
+    [fm removeItemAtPath:dest error:NULL];
+    NSError *mv = nil;
+    if (![fm moveItemAtPath:tmp toPath:dest error:&mv])
+        return [NSString stringWithFormat:@"cannot replace %@: %@", rel, mv.localizedDescription];
+    return nil;
+}
+
 // --------------------------------------------------------------------- run
 
 extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
@@ -392,7 +517,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         if (![files isKindOfClass:NSArray.class]) { done ( NO, @"manifest has no file list" ); return; }
 
         NSDictionary *index = ReadIndex ();
-        NSMutableArray *todo = [NSMutableArray array];      //  @[rel, sha, @(size)]
+        NSMutableArray *todo = [NSMutableArray array];      //  @[rel, sha, @(size), parts or NSNull]
         long long todoBytes = 0;
 
         say ( @"Checking files", [NSString stringWithFormat:@"%lu files",
@@ -427,7 +552,12 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
                         else ok = [sha caseInsensitiveCompare:Sha256OfFile(full) ?: @""] == NSOrderedSame;
                     }
                 }
-                if (!ok) { [todo addObject:@[rel, sha, @(size)]]; todoBytes += size; }
+                if (!ok) {
+                    id parts = e[@"parts"];
+                    [todo addObject:@[rel, sha, @(size),
+                                      [parts isKindOfClass:NSArray.class] ? parts : NSNull.null]];
+                    todoBytes += size;
+                }
                 if ((i & 255) == 0)
                     say ( nil, [NSString stringWithFormat:@"checked %lu / %lu",
                                 (unsigned long)i, (unsigned long)files.count],
@@ -447,50 +577,54 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
               [NSString stringWithFormat:@"%lu files, %.1f MB",
                (unsigned long)todo.count, todoBytes / 1048576.0], 0 );
 
-        long long got = 0;
-        for (NSUInteger i = 0; i < todo.count; ++i) {
-            @autoreleasepool {
-                NSString *rel = todo[i][0], *sha = todo[i][1];
-                const long long size = [todo[i][2] longLongValue];
+        //  kDlThreads workers pull entries off one shared counter. A failure
+        //  stops new files from starting; the ones already running finish or
+        //  fail on their own, and nothing half-written is ever renamed into
+        //  place, so the next launch resumes cleanly.
+        const NSUInteger count = todo.count;
+        NSString *blobBase = [base stringByAppendingString:@"blobs/"];
+        NSLock *lock = [NSLock new];
+        __block NSUInteger next = 0, doneFiles = 0;
+        __block long long gotBytes = 0;
+        __block NSString *failMsg = nil;
 
-                NSString *perr = nil;
-                NSString *dest = SafeDest ( root, rel, &perr );
-                if (!dest) { done ( NO, perr ); return; }
-
-                [NSFileManager.defaultManager
-                    createDirectoryAtPath:[dest stringByDeletingLastPathComponent]
-                    withIntermediateDirectories:YES attributes:nil error:NULL];
-
-                NSString *tmp = [dest stringByAppendingString:@".tmp"];
-                if (!HttpToFile ( [NSString stringWithFormat:@"%@blobs/%@", base, sha],
-                                  tmp, size, &err )) {
-                    done ( NO, [NSString stringWithFormat:@"%@: %@", rel, err] );
-                    return;
+        dispatch_group_t group = dispatch_group_create ();
+        dispatch_queue_t workers = dispatch_get_global_queue ( QOS_CLASS_UTILITY, 0 );
+        for (int w = 0; w < kDlThreads; ++w) {
+            dispatch_group_async ( group, workers, ^{
+                for (;;) {
+                    NSArray *t = nil;
+                    [lock lock];
+                    if (!failMsg && next < count) t = todo[next++];
+                    [lock unlock];
+                    if (!t) break;
+                    @autoreleasepool {
+                        NSString *fe = DownloadOne ( root, blobBase, t );
+                        [lock lock];
+                        if (fe) { if (!failMsg) failMsg = fe; }
+                        else    { ++doneFiles; gotBytes += [t[2] longLongValue]; }
+                        [lock unlock];
+                    }
                 }
-
-                if ([sha caseInsensitiveCompare:Sha256OfFile(tmp) ?: @""] != NSOrderedSame) {
-                    [NSFileManager.defaultManager removeItemAtPath:tmp error:NULL];
-                    done ( NO, [@"checksum failed for " stringByAppendingString:rel] );
-                    return;
-                }
-
-                //  Replace only once the bytes are known good, so being killed
-                //  mid-download can never leave a corrupt file behind.
-                [NSFileManager.defaultManager removeItemAtPath:dest error:NULL];
-                NSError *mv = nil;
-                if (![NSFileManager.defaultManager moveItemAtPath:tmp toPath:dest error:&mv]) {
-                    done ( NO, [NSString stringWithFormat:@"cannot replace %@: %@",
-                                rel, mv.localizedDescription] );
-                    return;
-                }
-
-                got += size;
-                say ( nil, [NSString stringWithFormat:@"%lu / %lu   %.1f of %.1f MB",
-                            (unsigned long)(i + 1), (unsigned long)todo.count,
-                            got / 1048576.0, todoBytes / 1048576.0],
-                      (int)(todoBytes == 0 ? 1000 : got * 1000 / todoBytes) );
-            }
+            });
         }
+
+        //  Progress from here, four times a second, not once per file from the
+        //  workers - that was 23,000 updates on a fresh install.
+        for (;;) {
+            const long waited = dispatch_group_wait ( group,
+                                    dispatch_time ( DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC ) );
+            [lock lock];
+            const NSUInteger f = doneFiles;
+            const long long b = gotBytes;
+            [lock unlock];
+            say ( nil, [NSString stringWithFormat:@"%lu / %lu   %.1f of %.1f MB",
+                        (unsigned long)f, (unsigned long)count,
+                        b / 1048576.0, todoBytes / 1048576.0],
+                  (int)(todoBytes == 0 ? 1000 : b * 1000 / todoBytes) );
+            if (waited == 0) break;
+        }
+        if (failMsg) { done ( NO, failMsg ); return; }
 
         WriteIndexFrom ( files, root );
         WriteVersion ( version );                   //  last, always

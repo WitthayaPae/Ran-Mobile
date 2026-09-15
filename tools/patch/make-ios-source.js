@@ -126,7 +126,8 @@ const source = {
   subtitle: 'RAN Online EP9, on iOS',
   description: 'Updates for the RAN Legacy M client.',
   iconURL: BASE + 'ios/icon.png',
-  website: '',
+  //  The Thai SideStore install guide, uploaded with the rest of ios/.
+  website: BASE + 'ios/install.html',
   tintColor: 'FFCB00',
   apps: [{
     name: info.name || 'Ran Legacy M',
