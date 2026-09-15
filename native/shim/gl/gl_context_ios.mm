@@ -145,7 +145,7 @@ extern "C" int RanGL_Init ( void *nativeWindow )
     g_panelHeight = (int)( g_layer.bounds.size.height * scale + 0.5 );
 
     //  The same rule as Android - see RanGL_ChooseUIScale. On an iPhone this is
-    //  the fractional case: 2556x1179 lays out at 1561x720.
+    //  the fractional case: 2556x1179 lays out at 1388x640.
     g_renderScale = RanGL_ChooseUIScale ( g_panelWidth, g_panelHeight );
 
     //  A number in the diagnostic file "renderscale" draws smaller and lets the

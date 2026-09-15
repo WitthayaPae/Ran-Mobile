@@ -12,6 +12,25 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (9) — Phone UI too small at 720 rows: minimum is now 640
+
+Reported after 1.0.67: "now it's too small". A 720-row minimum put the iPhone 15
+at 1.6375x. The tallest in-game windows in the UI XML are ITEMSHOP_WINDOW 605,
+ITEM_REBUILD 604, PARTY_WINDOW_RENEWAL 600 and INVENTORY_WINDOW 598, so
+`kMinH` in RanGL_ChooseUIScale is now 640. The iPhone 15 lays out at 1387x640,
+scale 1.8422, 12.5% larger than 1.6375. The tablet and LDPlayer are unchanged
+(whole scale 2).
+
+**Verified on LDPlayer at 2556x1179:**
+- Log shows `laid out 1387x640 (UI scale 1.8422)`.
+- Server select, channel, login form, character select and world entry all
+  worked, with taps placed from screenshots.
+- In the world the inventory is fully on screen, title to Sort row, at 60 fps
+  (`out/phone_scale_640.png`).
+
+LDPlayer resolution reset afterwards. Built locally only (APK still V050 /
+versionCode 67); not pushed, no iOS build yet.
+
 ## 2026-09-15 (8) — Fractional UI scale looked unevenly scaled; coverage snap + fractional glyphs
 
 Reported: "the icon not look good, look like it down scale". Measured on

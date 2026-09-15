@@ -50,11 +50,15 @@ float RanGL_InputScale(void);
 //  LDPlayer 2560x1440 -> 2, 1280x720). A phone is too wide for that to also
 //  leave enough height: an iPhone 15 at 2556x1179 got 2, a 1278x589 client, and
 //  the inventory (598 tall), the item shop (605) and the party window (600)
-//  ran off the bottom. So when the whole-number scale leaves under 720 rows -
-//  the height every window is verified at on LDPlayer - the scale becomes
-//  panel height / 720, fractional, and the client gets the extra width instead.
+//  ran off the bottom. So when the whole-number scale leaves under kMinH rows
+//  the scale becomes panel height / kMinH, fractional, and the client gets the
+//  extra width instead.
 static inline float RanGL_ChooseUIScale(int panelW, int panelH) {
-    const int kMinW = 1100, kMinH = 720;
+    //  640, not 720: 720 fit everything but shrank the phone UI to 1.6375x
+    //  ("now it's too small"). The tallest in-game windows are the item shop
+    //  (605), rebuild (604), party (600) and inventory (598), so 640 still fits
+    //  them all, at 1.842x on an iPhone 15 (1388x640).
+    const int kMinW = 1100, kMinH = 640;
     int s = 1;
     while (panelW / (s + 1) >= kMinW) ++s;
     if (s > 4) s = 4;
