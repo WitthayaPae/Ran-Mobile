@@ -12,6 +12,30 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (7) — iPhone "manifest signature does not verify" on store 435: stale cached .sig
+
+Reproduced on the iPhone (1.0.65, launched over USB): `RanPatch: manifest
+signature does not verify - refusing this update`.
+
+**The server is not at fault.** Live manifest.json/.sig (fetched with a
+cache-busting query) are byte-identical to out/upload, and the signature verifies
+in node with the key pinned in ran_ios_patch.mm.
+
+**Cause, proven from the device.** The app's `Library/Caches/<bundle>/Cache.db`
+was pulled with `pymobiledevice3 apps pull` (the dev-signed build allows container
+access). Its only entry is `.../launcher_mobile/manifest.sig`, stored
+2026-09-14 17:20:51 UTC, value `MEQCIBNe...`. The live signature is `MEUCIFyJ...`.
+manifest.json is not cached (3.6 MB, over NSURLCache's per-entry limit). The server
+sends no Cache-Control, so NSURLSession.sharedSession reused the old signature
+with the fresh 435 manifest. Android is unaffected: HttpURLConnection has no cache
+unless an HttpResponseCache is installed, and none is.
+
+**Fix (MOBILE 36f6dbb, iOS 1.0.66):** the patcher uses an ephemeral session with
+`URLCache = nil`, `NSURLRequestReloadIgnoringLocalCacheData` and a `Cache-Control:
+no-cache` request header, for both HttpGet and HttpToFile. A refusal now logs body
+size and hash plus the sig text. A server Cache-Control header would not help an
+installed 1.0.65: it serves the cached entry without asking the server.
+
 ## 2026-09-15 (6) — Phones: inventory taller than the screen, fixed with a fractional UI scale
 
 Reported on an iPhone 15: the inventory ran past the bottom of the screen.
