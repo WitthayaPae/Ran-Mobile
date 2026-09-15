@@ -12,6 +12,44 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (11) — MAKE-PATCH is one click: no --uploaded, no --min-ios, one iOS entry
+
+The user asked for one click, not typed flags, and a patch that doesn't change
+so many files.
+
+- **No more --uploaded.** make-manifest.js asks the server whether the last set
+  landed. It fetches the live manifest.json with a cache-busting query; if the
+  live version is at or past PREV.version, it clears out/upload and writes the
+  live ios/source.json hash into out/.ios-uploaded. Unreachable server: keeps
+  the set, since re-sending is safe. --uploaded still forces a clear.
+  PATCH-UPLOADED.bat is no longer needed.
+- **No more --min-ios.** minIos = max(previous minIos, build in
+  launcher_mobile/ios/source.json). It never lowers on its own, and a raise
+  counts as a change, so it publishes. --min-ios still wins.
+- **One iOS entry.** make-ios-source.js lists only the current build. Every
+  history entry pointed at the same ios/RanLegacyM.ipa, so a listed 1.0.64
+  really downloaded the newest file.
+- **Instructions.** MAKE-PATCH.bat's closing text no longer mentions
+  --uploaded, and says iOS updates come from AltStore/SideStore.
+
+**Test run (plain build-and-publish.js --verify, no flags), exit 0:**
+- The server was at 436, so the old set (V050 blob) was cleared automatically
+  and the mark set to the live 1.0.67 source (6e1dec01...).
+- Store 437 was built with minIos 68 ("raised to the iOS build").
+- out/upload holds the new APK blob (331.6 MB), ios/ (1.0.68, differs from the
+  mark) and manifest.json/.sig, all listed in UPLOAD.txt.
+
+**Side effect, not a player issue:** the version-bump check compares source
+file dates, not the binary. Comment edits and ran_ios_patch.mm (iOS-only)
+after V051 made it bump again, to versionCode 69 / V052. V051 was never
+published, so players go V050 to V052, the same Android code as V051. iOS
+stays 1.0.68; the next iOS build will be 1.0.69.
+
+Why there were so many versions: V049 to V052 and iOS 1.0.65 to 1.0.68 in
+one day, each a published attempt at the phone UI (fit, sharpness, size).
+Patch 435 to 436 changed 0 of 23,368 game files; only the app did.
+Iterations should be approved on LDPlayer before a version is cut.
+
 ## 2026-09-15 (10) — iOS app updates: minIos 68, update message names the real channel
 
 The in-game patch replaces game data only. It cannot install the iOS app itself,

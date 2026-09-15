@@ -157,20 +157,14 @@ const source = {
   news: [],
 };
 
-/*  Keep older versions listed. AltStore shows a version history, and a source
- *  that forgets everything but the newest cannot offer a rollback when a build
- *  turns out to be bad.                                                      */
+/*  Only the current build is listed.
+ *
+ *  Older entries used to be kept as a "version history", but there is one
+ *  .ipa on the server (ios/RanLegacyM.ipa) and every entry pointed at it, so
+ *  a listed 1.0.64 actually downloaded whatever is current. The server also
+ *  refuses any build under minIos. A history offered nothing real and five
+ *  entries for one file only confused who read it.                           */
 const OUT = path.join(IOS_DIR, 'source.json');
-if (fs.existsSync(OUT)) {
-  try {
-    const prev = JSON.parse(fs.readFileSync(OUT, 'utf8'));
-    const old = ((prev.apps || [])[0] || {}).versions || [];
-    const keep = old.filter(v => v.buildVersion !== info.build);
-    source.apps[0].versions = source.apps[0].versions.concat(keep).slice(0, 20);
-  } catch (e) {
-    console.warn('previous source.json unreadable, starting a new history: ' + e.message);
-  }
-}
 
 fs.writeFileSync(OUT, JSON.stringify(source, null, 2));
 

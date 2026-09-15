@@ -24,6 +24,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 
 const HERE = __dirname;
 
@@ -501,6 +502,32 @@ const apk = (() => {
    Same files and same hashes as the last build: keep the number, and say that
    nothing needs uploading. Anything different: one past the last. An explicit
    --version still wins, for republishing an old manifest or forcing a number. */
+/*  minIos follows the iOS build in the store, with no flag to remember.
+ *
+ *  The in-game patch cannot update the iOS app (iOS forbids an app installing
+ *  code over itself), so an iPhone left on an old build keeps old code while
+ *  the data moves on. Whenever ios/source.json names a newer build than the
+ *  last manifest's minIos, the gate rises to it and older apps are told to
+ *  update. It never goes down on its own. --min-ios still wins when given.
+ *  ios/ sorts before manifest.json in the upload, so the .ipa lands first.  */
+const iosSrcBuild = (() => {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(OUT, 'ios', 'source.json'), 'utf8'));
+    const v = (((s.apps || [])[0] || {}).versions || [])[0] || {};
+    const b = parseInt(v.buildVersion, 10);
+    return Number.isFinite(b) ? b : null;
+  } catch (e) { return null; }
+})();
+const prevMinIos = PREV && Number.isFinite(PREV.minIos) ? PREV.minIos : null;
+let minIosOut = minIos, minIosWhy = 'given on the command line';
+if (minIosOut === null) {
+  const c = [prevMinIos, iosSrcBuild].filter(Number.isFinite);
+  minIosOut = c.length ? Math.max(...c) : null;
+  minIosWhy = (iosSrcBuild !== null && minIosOut === iosSrcBuild && iosSrcBuild !== prevMinIos)
+            ? 'raised to the iOS build in ios/source.json'
+            : 'carried from the previous manifest';
+}
+
 const changes = (() => {
   if (!PREV || !Array.isArray(PREV.files)) return null;   //  first ever build
   //  The seed flag is part of what a client is told to do with a file, so a
@@ -523,8 +550,11 @@ const changes = (() => {
   }
   for (const p of was.keys()) if (!now.has(p)) removed.push(p);
   const apkChanged = apkWas !== apkNow;
-  return { added, changed, removed, apkChanged,
-           total: added.length + changed.length + removed.length + (apkChanged ? 1 : 0) };
+  //  A raised gate has to reach clients in a new manifest, like any change.
+  const minIosChanged = prevMinIos !== minIosOut;
+  return { added, changed, removed, apkChanged, minIosChanged,
+           total: added.length + changed.length + removed.length +
+                  (apkChanged ? 1 : 0) + (minIosChanged ? 1 : 0) };
 })();
 
 let version, versionWhy;
@@ -544,12 +574,9 @@ if (Number.isFinite(versionArg)) {
 
 let signed = 0;   //  signature length, 0 when the payload is unsigned
 const manifest = { version: version, minApk: minApk, files: files };
-/*  Carried forward when not given. MAKE-PATCH.bat never passes --min-ios, so a
-    routine publish used to drop the key - and the iOS patcher refuses a
-    manifest without one ("this patch server does not support the iOS client
-    yet"). Store 434 went out that way on 2026-09-15 and every iPhone failed.  */
-const minIosOut = minIos !== null ? minIos
-                : (PREV && Number.isFinite(PREV.minIos) ? PREV.minIos : null);
+/*  Never dropped: the iOS patcher refuses a manifest without minIos ("this
+    patch server does not support the iOS client yet"). Store 434 went out
+    without one on 2026-09-15 and every iPhone failed. See minIosOut above.  */
 if (minIosOut !== null) manifest.minIos = minIosOut;
 if (apk) manifest.apk = apk;
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
@@ -647,12 +674,48 @@ const UP = path.join(path.dirname(OUT), 'upload');
   const IOS_MARK = path.join(path.dirname(OUT), '.ios-uploaded');
   const iosHash = f => require('crypto').createHash('sha256')
                                          .update(fs.readFileSync(f)).digest('hex');
-  if (argv.includes('--uploaded')) {
+  /*  Did the last set land? Asked of the server, not of the person.
+   *
+   *  The staged set was built for PREV.version. If the live manifest is at
+   *  that version or later, everything in the set is already up there (the
+   *  manifest is uploaded last), so it is cleared and the iOS source that is
+   *  live is remembered. Nothing to type and no PATCH-UPLOADED step. If the
+   *  server cannot be reached the set is kept: re-sending is safe, dropping
+   *  unsent blobs is not. --uploaded still forces the old behaviour.         */
+  const LIVE = arg('live-base', 'https://ran-legacy-m.com/launcher_mobile/');
+  const liveGet = rel => {
+    const r = spawnSync(process.execPath, ['-e',
+      'fetch(process.argv[1] + "?cb=" + Date.now(), { cache: "no-store" })' +
+      '.then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))' +
+      '.then(b => process.stdout.write(Buffer.from(b)))' +
+      '.catch(() => process.exit(2))', LIVE + rel],
+      { timeout: 60000, maxBuffer: 256 * 1024 * 1024 });
+    return r.status === 0 ? r.stdout : null;
+  };
+  let landed = argv.includes('--uploaded');
+  let liveIos = null;
+  if (!landed && PREV && fs.existsSync(UP)) {
+    const body = liveGet('manifest.json');
+    let liveVer = null;
+    try { liveVer = body ? JSON.parse(body.toString('utf8')).version : null; } catch (e) {}
+    if (Number.isFinite(liveVer) && liveVer >= PREV.version) {
+      landed = true;
+      liveIos = liveGet('ios/source.json');
+      console.log('upload   : the server already has version ' + liveVer +
+                  ' - the previous upload set is cleared automatically');
+    } else {
+      console.log('upload   : server is at ' + (liveVer === null ? '(unreachable)' : 'version ' + liveVer) +
+                  ', the last build was ' + PREV.version + ' - keeping the set, it has not all landed');
+    }
+  }
+  if (landed) {
     const stagedSrc = path.join(UP, 'ios', 'source.json');
-    if (fs.existsSync(stagedSrc)) fs.writeFileSync(IOS_MARK, iosHash(stagedSrc));
+    if (liveIos) fs.writeFileSync(IOS_MARK, crypto.createHash('sha256').update(liveIos).digest('hex'));
+    else if (fs.existsSync(stagedSrc)) fs.writeFileSync(IOS_MARK, iosHash(stagedSrc));
     fs.rmSync(UP, { recursive: true, force: true });
     fs.rmSync(path.join(path.dirname(OUT), 'UPLOAD.txt'), { force: true });
-    console.log('upload   : set cleared - the server is up to date as of version ' + version);
+    if (argv.includes('--uploaded'))
+      console.log('upload   : set cleared - the server is up to date as of version ' + version);
   }
   let since = version;
   if (fs.existsSync(sinceFile)) {
@@ -730,8 +793,7 @@ console.log('blobs    : ' + linked + ' linked, ' + copied + ' copied, ' + kept +
 console.log('manifest : ' + mb(fs.statSync(path.join(OUT, 'manifest.json')).size) +
             (signed ? '  + manifest.sig (' + signed + ' byte signature)' : '  UNSIGNED'));
 console.log('version  : ' + version + '  (' + versionWhy + ')   minApk: ' + minApk);
-if (minIosOut !== null) console.log('           minIos: ' + minIosOut +
-                                    (minIos === null ? '  (carried from the previous manifest)' : ''));
+if (minIosOut !== null) console.log('           minIos: ' + minIosOut + '  (' + minIosWhy + ')');
 else console.log('           minIos: none - the iOS patcher will REFUSE this manifest (pass --min-ios <n>)');
 console.log('upload   : ' + global.__uploadSummary);
 console.log('apk      : ' + (apk
