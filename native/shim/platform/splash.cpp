@@ -192,7 +192,9 @@ const char *kVert =
 
 const char *kFrag =
     "#version 300 es\n"
-    "precision mediump float;\n"
+    //  highp: the boot art is up to 1600 texels wide, beyond what a true 16-bit
+    //  mediump (Apple GPUs) can address to a texel.
+    "precision highp float;\n"
     "uniform sampler2D uTex;\n"
     "in vec2 vUV;\n"
     "out vec4 oColor;\n"

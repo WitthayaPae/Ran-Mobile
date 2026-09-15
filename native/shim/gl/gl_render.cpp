@@ -236,8 +236,14 @@ const char *kFS =
     "#version 300 es\n"
     "precision mediump float;\n"
     "in vec4 vColor;\n"
-    "in vec2 vUV;\n"
-    "in vec2 vUV2;\n"
+    //  Texture coordinates are highp. On Apple GPUs mediump is a true 16-bit
+    //  float, which cannot hold a fraction of a texel on a 1024-2048 texel
+    //  interface sheet; the texel maths in sharpUV and the pixel-grid snap
+    //  then collapsed and the whole iPhone GUI sampled blocky and uneven.
+    //  Adreno and the emulator run mediump at full precision, so Android never
+    //  showed it. The rest of the stage stays mediump for fill cost.
+    "in highp vec2 vUV;\n"
+    "in highp vec2 vUV2;\n"
     "in vec3 vWorldPos;\n"
     "in vec3 vNormal;\n"
     //  Gouraud: the lighting was worked out per vertex, as D3D's fixed function
@@ -275,8 +281,8 @@ const char *kFS =
     "#ifndef uPreTransformed\n"
     "uniform highp int uPreTransformed;\n"
     "#endif\n"
-    "uniform vec2  uTexSize;\n"     // texels of the bound texture, 0 if unknown
-    "uniform float uUiSharpen;\n"   // magnification the interface is drawn at
+    "uniform highp vec2  uTexSize;\n"   // texels of the bound texture, 0 if unknown
+    "uniform highp float uUiSharpen;\n" // magnification the interface is drawn at
     "uniform highp float uPanelH;\n" // framebuffer height, 0 when drawing into a render target
     "#ifndef uAlphaTest\n"
     "uniform int   uAlphaTest;\n"
@@ -313,7 +319,7 @@ const char *kFS =
     "    return v;\n"
     "}\n"
     "\n"
-    "vec2 sharpUV(vec2 uv) {\n"
+    "highp vec2 sharpUV(highp vec2 uv) {\n"
     "    //  Bilinear across a whole texel is what makes magnified interface art\n"
     "    //  look mushy: every pixel between two texel centres is a blend. The\n"
     "    //  icons and panels are authored for a 1024x768 screen and are drawn\n"
@@ -323,16 +329,16 @@ const char *kFS =
     "    //  keeps the smooth ramp where a texel boundary genuinely falls between\n"
     "    //  output pixels, and makes everything else flat. Nearest sampling would\n"
     "    //  also be crisp, but it would put the jagged stair-steps back.\n"
-    "    vec2 t = uv * uTexSize;\n"
-    "    vec2 i = floor(t) + 0.5;\n"
-    "    vec2 f = clamp((t - i) * uUiSharpen, -0.5, 0.5);\n"
+    "    highp vec2 t = uv * uTexSize;\n"
+    "    highp vec2 i = floor(t) + 0.5;\n"
+    "    highp vec2 f = clamp((t - i) * uUiSharpen, -0.5, 0.5);\n"
     "    return (i + f) / uTexSize;\n"
     "}\n"
     "\n"
     "void main() {\n"
     "    //  Interface only. World geometry is as often minified as magnified,\n"
     "    //  and this is a magnification filter.\n"
-    "    vec2 uvS = vUV;\n"
+    "    highp vec2 uvS = vUV;\n"
     "    if (uPreTransformed == 1 && uUseTexture == 1 && uTexSize.x > 1.0 && uUiSharpen > 1.0) {\n"
     "        //  Interface art the frame magnifies (texels bigger than a pixel)\n"
     "        //  samples where D3D9 samples the logical pixel it belongs to: a\n"

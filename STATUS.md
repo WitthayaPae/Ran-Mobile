@@ -12,6 +12,39 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (14) — iPhone GUI and skill slots pixelated: mediump is 16-bit on Apple GPUs
+
+Reported: the iOS GUI "look like it down scale", and "even the slot of the
+skill ... pixel of the slot not look so good", unlike Android.
+
+**First check: scale.** A side-by-side of the same HUD from the Android build
+at scale 2.0 and 1.8422 showed the fractional scale softens a little. It did
+not explain the skill slots, which are drawn by the touch overlay's own shader.
+
+**Cause, from the code.** iOS draws at full native resolution
+(`contentsScale = nativeScale`), so the difference is shader precision:
+- **Skill icon shader.** The overlay's icon shader (touch_ui.cpp `kTexFS`) was
+  `precision mediump float`, and its sharpen works in texel units
+  (`t = vUV * uTexSize`, `floor(t)`, `t - i`).
+- **Main shader.** gl_render.cpp `kFS` defaulted to mediump for `vUV`,
+  `uTexSize`, `uUiSharpen` and `sharpUV()`, and the pixel-grid snap derives
+  from `vUV`.
+- **Why only iPhone.** On Apple GPUs mediump is a true 16-bit float: above 1024
+  it cannot hold a fraction of a texel, and above 2048 it steps in 2s, so all of
+  that texel maths collapsed. Adreno and the emulator run mediump at full
+  precision, so Android never showed it.
+
+**Fix.**
+- **touch_ui.cpp.** Both overlay fragment shaders use `precision highp float`.
+- **gl_render.cpp.** `in highp vec2 vUV/vUV2`, `uniform highp vec2 uTexSize`,
+  `uniform highp float uUiSharpen`, and `highp` for `sharpUV()` and `uvS`. The
+  rest of the stage (lighting, fog) stays mediump for fill cost. Neither value
+  is declared in the vertex stage, so link precision cannot mismatch.
+- **splash.cpp.** The fragment shader is highp (boot art up to 1600 texels).
+
+**Not verified yet:** Android build and shader link on LDPlayer (should be
+visually identical), iOS 1.0.70, then an iPhone screenshot and fps.
+
 ## 2026-09-15 (13) — iOS patch slow after SideStore install: parallel downloads + parts on iOS
 
 Reported: "after the SideStore the patch is so slow". The iPhone was not on USB,
@@ -34,8 +67,16 @@ since 2026-09-14 (5.9x faster, fresh install 2:11).
   before the rename (DownloadOne).
 - **Progress.** Reported from the waiting thread every 250 ms, not per file.
 
-**Not verified yet:** it compiles only on the Mac runner (iOS 1.0.69), and the
-speed has to be measured on the iPhone.
+**Built:** MOBILE 6fcc05b, run 34991743291 green → iOS 1.0.69 (69); the binary
+carries the parts code ("parts do not add up for") plus the cache and UI-scale
+fixes. make-ios-source.js wrote launcher_mobile/ios/source.json = 1.0.69 only
+(the .ipa was downloaded to the scratchpad, not out/, which MAKE-PATCH sweeps).
+Server at that time: store 437, iOS 1.0.68, install.html live. The next
+MAKE-PATCH should clear the stale 437 set, raise minIos to 69 (store 438) and
+stage ios/. No Android bump: newestInput only watches libran.so and
+native/android/, and no shared file changed.
+
+**Not verified yet:** the speed on the iPhone (needs 1.0.69 installed, on USB).
 
 ## 2026-09-15 (12) — iOS distribution: SideStore, with a Thai install page
 

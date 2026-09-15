@@ -245,7 +245,9 @@ const char *kVS =
 
 const char *kFS =
     "#version 300 es\n"
-    "precision mediump float;\n"
+    //  highp like every overlay shader: mediump is a true 16-bit float on
+    //  Apple GPUs, and the same program must look the same on both platforms.
+    "precision highp float;\n"
     "in vec4 vCol;\n"
     "out vec4 oColor;\n"
     "void main() { oColor = vCol; }\n";
@@ -1032,7 +1034,14 @@ const char *kTexVS =
 
 const char *kTexFS =
     "#version 300 es\n"
-    "precision mediump float;\n"
+    //  highp, not mediump. The sharpen below works in texel units
+    //  (vUV * uTexSize, up to 2048 and more on an icon sheet), and on Apple
+    //  GPUs mediump is a real 16-bit float: above 1024 it cannot hold a
+    //  fraction of a texel, and above 2048 it steps in 2s. floor(t) and t - i
+    //  collapsed, and the iPhone's skill icons came out blocky and uneven.
+    //  Adreno and the emulator run mediump at full precision, which is why
+    //  Android never showed it.
+    "precision highp float;\n"
     "uniform sampler2D uTex;\n"
     "uniform float uAlpha;\n"
     "uniform vec2  uTexSize;\n"
