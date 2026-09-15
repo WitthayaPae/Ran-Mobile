@@ -12,6 +12,28 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (2) — GM load test (fake players) switched back ON for iPhone crowd testing
+
+The user said "still not fix. can you do the analysis why this happend? it not
+happend before also enable the fake player back I will test this with iphone."
+
+**Switch:** `SOURCE/Lib_Client/G-Logic/GLGMLoadTest.h` now has
+`#define RAN_GM_LOADTEST` uncommented, with a dated note to comment it out
+again before production. That restores:
+- the GM tool MOB tab's Fake +10 / +50 / Clear buttons;
+- `/fake_pc N`;
+- the client-only crowd from the `loadtest` diag file (a count spawns that many,
+  0 removes them; the file is consumed);
+- the agent and field NET_MSG_GM_FAKE_PC dispatch.
+
+**Servers:** the builds with the guard off (2026-09-14) were never deployed, so
+the running agent and field should still honour `/fake_pc`. If they do not, the
+servers need rebuilding and redeploying.
+
+**Next:** build Android and check the GM tool on LDPlayer; SOURCE and MOBILE
+commits, then an iOS build; then the iPhone crowd A/B for the smoothness
+analysis.
+
 ## 2026-09-16 (1) — iPhone 1.0.70: "fps drop a bit when walking, look so spinning" — measuring
 
 User report after installing 1.0.70; it was not there before. The iPhone was
@@ -115,8 +137,22 @@ number.
   even 30 Hz (preferredFrameRateRange on iOS 15+, else preferredFramesPerSecond)
   and logs "frame loop paced at 30 Hz". Off by default.
 
+**iOS 1.0.72 built:** MOBILE e5a466c, run 35004924417 green. The binary carries
+"PACE %d frames", "pace30 diagnostic" and `in RAN_UVP vec2 vUV;`.
+source.json = 1.0.72 only, written from a scratchpad copy of the .ipa. Android
+V055 (versionCode 72) was repackaged only so the iOS version moves; it is the
+same code as V054.
+
+**Test plan (iPhone on USB):**
+1. Default pacing: `syslog live --process-name ran` while walking, then read
+   the PACE lines (share of frames over 20 ms and over 34 ms).
+2. Push Documents/ran/pace30, restart, walk the same route, then compare PACE
+   and ask the user which felt smoother.
+3. Remove pace30.
+
 **Next (needs the user):**
-- Publish with MAKE-PATCH, then install 1.0.71 via SideStore.
+- Publish with MAKE-PATCH (it will raise minIos to 72), then install 1.0.72 via
+  SideStore.
 - iPhone on USB, walking the same route in interleaved rounds with and without
   Documents/ran/uvmediump (`tools/ios-device.sh flag uvmediump` /
   `unflag uvmediump`, app restarted each round), reading the syslog FRAME lines.
