@@ -1,5 +1,6 @@
 // EGL/GLES context owned by the platform layer, consumed by the D3D9 shim.
 #pragma once
+#include <math.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,9 +38,30 @@ int  RanGL_AcquireContext(void);
 //  from there to the real panel.
 int  RanGL_LogicalWidth(void);
 int  RanGL_LogicalHeight(void);
-int  RanGL_UIScale(void);
-//  Panel pixels per frame pixel: touch events arrive in panel pixels.
-int  RanGL_InputScale(void);
+//  Frame pixels per logical pixel. Fractional on phones - see RanGL_ChooseUIScale.
+float RanGL_UIScale(void);
+//  Panel pixels per logical pixel: touch events arrive in panel pixels.
+float RanGL_InputScale(void);
+
+//  Panel pixels per logical pixel, shared by the Android and iOS contexts.
+//
+//  Whole-number first: the largest scale that keeps the client >= 1100 across,
+//  the width a PC GUI needs to stay tappable (tablet 2560x1600 -> 2, 1280x800;
+//  LDPlayer 2560x1440 -> 2, 1280x720). A phone is too wide for that to also
+//  leave enough height: an iPhone 15 at 2556x1179 got 2, a 1278x589 client, and
+//  the inventory (598 tall), the item shop (605) and the party window (600)
+//  ran off the bottom. So when the whole-number scale leaves under 720 rows -
+//  the height every window is verified at on LDPlayer - the scale becomes
+//  panel height / 720, fractional, and the client gets the extra width instead.
+static inline float RanGL_ChooseUIScale(int panelW, int panelH) {
+    const int kMinW = 1100, kMinH = 720;
+    int s = 1;
+    while (panelW / (s + 1) >= kMinW) ++s;
+    if (s > 4) s = 4;
+    float f = (float)s;
+    if (panelH / f < (float)kMinH) f = (float)panelH / (float)kMinH;
+    return f < 1.0f ? 1.0f : f;
+}
 //  Seconds spent inside eglSwapBuffers since the last call, and reset.
 double RanGL_TakeSwapSeconds(void);
 int  RanGL_Height(void);

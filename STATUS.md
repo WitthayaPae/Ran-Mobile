@@ -12,6 +12,32 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-15 (6) — Phones: inventory taller than the screen, fixed with a fractional UI scale
+
+Reported on an iPhone 15: the inventory ran past the bottom of the screen.
+Screenshot over USB (`out/ios-device/iphone_inv.png`, 2556x1179) confirmed it.
+
+**Cause.** The UI scale was the largest whole number keeping the client >= 1100
+across. 2556/2 = 1278 passes, so the scale was 2 and the client got 1278x**589**.
+`INVENTORY_WINDOW` is 598 tall (item shop 605, party 600), so it could not fit.
+The tablet (1280x800) and LDPlayer (1280x720) were never short, which is why it
+only showed on a phone. Any 19.5:9 or 20:9 Android phone has the same problem.
+
+**Fix.** `RanGL_ChooseUIScale` (shim/gl/gl_context.h), shared by Android and iOS:
+whole-number scale as before, but if that leaves under 720 rows the scale becomes
+panel height / 720. iPhone 15: 1.6375, client 1561x720. Tablet and LDPlayer still
+get 2, so they are unchanged. `RanGL_UIScale`/`RanGL_InputScale` return float;
+viewport and scissor round edges (not sizes); touch divides in float on both
+platforms; font supersample is ceil(scale); the renderscale divisor is only
+honoured for a whole scale.
+
+**Verified** on LDPlayer with `wm size 2556x1179`. Log shows `laid out 1561x720
+(UI scale 1.6375)`. Login, server select, character select and start were all
+tapped at the converted positions and hit. In the world, the inventory (key I)
+is fully on screen, title to Sort row (`out/phone_inventory_fit.png`), at 54-61 fps.
+LDPlayer resolution was reset afterwards.
+**Not yet verified on the iPhone:** needs an iOS build (CI runs on push to main) and a reinstall.
+
 ## 2026-09-15 (5) — One branch per repo: main
 
 SOURCE: the 69 commits not yet on GitHub carried 49 Visual Studio caches under

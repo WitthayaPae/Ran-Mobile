@@ -41,7 +41,7 @@ int  g_width = 0, g_height = 0;
 bool g_ready = false;
 
 int  g_panelWidth = 0, g_panelHeight = 0;
-int  g_renderScale = 1;
+float g_renderScale = 1.0f;
 int  g_bufferDiv = 1;
 int  g_depthBits = 24;
 
@@ -144,11 +144,9 @@ extern "C" int RanGL_Init ( void *nativeWindow )
     g_panelWidth  = (int)( g_layer.bounds.size.width  * scale + 0.5 );
     g_panelHeight = (int)( g_layer.bounds.size.height * scale + 0.5 );
 
-    //  The same rule as Android: lay the GUI out at roughly PC size, so a
-    //  PC-authored interface stays tappable on a dense panel.
-    g_renderScale = 1;
-    while (g_panelWidth / (g_renderScale + 1) >= 1100) ++g_renderScale;
-    if (g_renderScale > 4) g_renderScale = 4;
+    //  The same rule as Android - see RanGL_ChooseUIScale. On an iPhone this is
+    //  the fractional case: 2556x1179 lays out at 1561x720.
+    g_renderScale = RanGL_ChooseUIScale ( g_panelWidth, g_panelHeight );
 
     //  A number in the diagnostic file "renderscale" draws smaller and lets the
     //  display stretch it. 1 is the full panel.
@@ -160,7 +158,10 @@ extern "C" int RanGL_Init ( void *nativeWindow )
             char buf[32] = { 0 };
             if (fread ( buf, 1, sizeof(buf) - 1, f ) > 0) {
                 const int v = atoi ( buf );
-                if (v >= 1 && v <= g_renderScale) g_bufferDiv = v;
+                //  Only a whole divisor of a whole scale.
+                if (v >= 1 && (float)v <= g_renderScale &&
+                    g_renderScale == (float)(int)g_renderScale &&
+                    (int)g_renderScale % v == 0) g_bufferDiv = v;
             }
             fclose ( f );
         }
@@ -173,9 +174,9 @@ extern "C" int RanGL_Init ( void *nativeWindow )
 
     if (!makeBuffers ()) return 0;
 
-    LOGI ( "panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, renderscale %d)",
+    LOGI ( "panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %.4f, renderscale %d)",
            g_panelWidth, g_panelHeight, g_width, g_height,
-           g_panelWidth / g_renderScale, g_panelHeight / g_renderScale,
+           (int)lroundf ( g_panelWidth / g_renderScale ), (int)lroundf ( g_panelHeight / g_renderScale ),
            g_renderScale / g_bufferDiv, g_bufferDiv );
 
     g_ready = true;
@@ -246,15 +247,15 @@ extern "C" int RanGL_AcquireContext ( void )
     return 1;
 }
 
-extern "C" int RanGL_UIScale ( void )
+extern "C" float RanGL_UIScale ( void )
 {
-    const int d = ( g_renderScale > 0 ? g_renderScale : 1 ) /
-                  ( g_bufferDiv   > 0 ? g_bufferDiv   : 1 );
-    return d > 0 ? d : 1;
+    const float d = ( g_renderScale > 0 ? g_renderScale : 1.0f ) /
+                    (float)( g_bufferDiv > 0 ? g_bufferDiv : 1 );
+    return d >= 1.0f ? d : 1.0f;
 }
-extern "C" int RanGL_LogicalWidth ( void )  { return g_width  / RanGL_UIScale(); }
-extern "C" int RanGL_LogicalHeight ( void ) { return g_height / RanGL_UIScale(); }
-extern "C" int RanGL_InputScale ( void )    { return g_renderScale > 0 ? g_renderScale : 1; }
+extern "C" int RanGL_LogicalWidth ( void )  { return (int)lroundf ( g_width  / RanGL_UIScale() ); }
+extern "C" int RanGL_LogicalHeight ( void ) { return (int)lroundf ( g_height / RanGL_UIScale() ); }
+extern "C" float RanGL_InputScale ( void )  { return g_renderScale > 0 ? g_renderScale : 1.0f; }
 
 extern "C" double RanGL_TakeSwapSeconds ( void )
 {

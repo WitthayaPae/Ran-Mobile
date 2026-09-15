@@ -27,7 +27,7 @@ int  RanGL_Init ( void *nativeWindow );
 int  RanGL_SurfaceChanged ( void );
 int  RanGL_LogicalWidth ( void );
 int  RanGL_LogicalHeight ( void );
-int  RanGL_InputScale ( void );
+float RanGL_InputScale ( void );
 int  RanGLR_Init ( void );
 void RanSplash_Begin ( const char *dataRoot );
 void RanSplash_End ( void );
@@ -259,6 +259,7 @@ static int  g_imeInsetPerMille = 0;
 - (CGPoint)inputPointOf:(UITouch *)t
 {
     const CGPoint p = [self pixelsOf:t];
+    //  Fractional on phones (RanGL_ChooseUIScale), so never truncate it.
     const CGFloat is = RanGL_InputScale() > 0 ? (CGFloat)RanGL_InputScale() : 1.0f;
     return CGPointMake ( p.x / is, p.y / is );
 }

@@ -44,7 +44,7 @@ bool g_ready = false;
 //  The real panel, and how much smaller the frame is drawn than the panel.
 //  Touch events arrive in panel pixels; everything else works in frame pixels.
 int  g_panelWidth = 0, g_panelHeight = 0;
-int  g_renderScale = 1;
+float g_renderScale = 1.0f;
 //  Panel pixels per drawn pixel. 1 is the full panel; 2 halves the buffer and
 //  lets the display stretch it. Separate from g_renderScale, which is only ever
 //  about how large the GUI is laid out.
@@ -180,11 +180,8 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     g_panelWidth  = ANativeWindow_getWidth(win);
     g_panelHeight = ANativeWindow_getHeight(win);
 
-    //  Panel pixels per logical pixel, chosen so the client lays out at >= 1100
-    //  across - the width a PC GUI needs to stay tappable.
-    g_renderScale = 1;
-    while (g_panelWidth / (g_renderScale + 1) >= 1100) ++g_renderScale;
-    if (g_renderScale > 4) g_renderScale = 4;
+    //  Panel pixels per logical pixel - see RanGL_ChooseUIScale.
+    g_renderScale = RanGL_ChooseUIScale(g_panelWidth, g_panelHeight);
 
     //  How large to lay the GUI out, and how many pixels to draw it with, are
     //  two questions. They used to share one answer.
@@ -221,7 +218,11 @@ extern "C" int RanGL_Init(void *nativeWindow) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
                 const int v = atoi(buf);
-                if (v >= 1 && v <= g_renderScale) g_bufferDiv = v;
+                //  Only a whole divisor of a whole scale: a fractional UI scale
+                //  divided again would lay the client out larger than the panel.
+                if (v >= 1 && (float)v <= g_renderScale &&
+                    g_renderScale == (float)(int)g_renderScale &&
+                    (int)g_renderScale % v == 0) g_bufferDiv = v;
             }
             fclose(f);
         }
@@ -230,9 +231,9 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     const int bufferW = g_panelWidth  / g_bufferDiv;
     const int bufferH = g_panelHeight / g_bufferDiv;
     ANativeWindow_setBuffersGeometry(win, bufferW, bufferH, nativeVisual);
-    LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %d, buffer divisor %d)",
+    LOGI("panel %dx%d, drawing %dx%d, laid out %dx%d (UI scale %.4f, buffer divisor %d)",
          g_panelWidth, g_panelHeight, bufferW, bufferH,
-         g_panelWidth / g_renderScale, g_panelHeight / g_renderScale,
+         (int)lroundf(g_panelWidth / g_renderScale), (int)lroundf(g_panelHeight / g_renderScale),
          g_renderScale / g_bufferDiv, g_bufferDiv);
 
     g_surface = eglCreateWindowSurface(g_display, config, win, NULL);
@@ -387,15 +388,15 @@ extern "C" int  RanGL_Height(void) { return g_height; }
 //  The frame is g_width/g_height. The client lays out at panel/g_renderScale
 //  whatever the buffer size is, so the ratio between the two - which is what
 //  the viewport and scissor paths multiply by - is what UIScale reports.
-extern "C" int RanGL_UIScale(void) {
-    const int d = (g_renderScale > 0 ? g_renderScale : 1) / (g_bufferDiv > 0 ? g_bufferDiv : 1);
-    return d > 0 ? d : 1;
+extern "C" float RanGL_UIScale(void) {
+    const float d = (g_renderScale > 0 ? g_renderScale : 1.0f) / (float)(g_bufferDiv > 0 ? g_bufferDiv : 1);
+    return d >= 1.0f ? d : 1.0f;
 }
-extern "C" int RanGL_LogicalWidth(void)  { return g_width  / RanGL_UIScale(); }
-extern "C" int RanGL_LogicalHeight(void) { return g_height / RanGL_UIScale(); }
+extern "C" int RanGL_LogicalWidth(void)  { return (int)lroundf(g_width  / RanGL_UIScale()); }
+extern "C" int RanGL_LogicalHeight(void) { return (int)lroundf(g_height / RanGL_UIScale()); }
 
-//  Panel pixels per frame pixel, for turning a touch into a client coordinate.
-extern "C" int RanGL_InputScale(void)    { return g_renderScale > 0 ? g_renderScale : 1; }
+//  Panel pixels per logical pixel, for turning a touch into a client coordinate.
+extern "C" float RanGL_InputScale(void)  { return g_renderScale > 0 ? g_renderScale : 1.0f; }
 
 //  Time inside the swap, which is where a GPU that cannot keep up shows up:
 //  the client calls Present from inside its own Render, so without this the

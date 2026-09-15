@@ -12,6 +12,7 @@
 // uses, so it inherits the GLES backend without special cases.
 
 #include "windows.h"
+#include <math.h>
 #include "../platform/ran_plat.h"
 #include <d3d9.h>
 #include <d3dx9.h>
@@ -54,10 +55,13 @@ const DWORD FONT_FVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 //  Only the bitmap changes. Every metric the interface lays out with - advance,
 //  ascent, descent, line height - stays in logical units, because moving those
 //  would move every label in the game.
-extern "C" int RanGL_UIScale(void);
+extern "C" float RanGL_UIScale(void);
 
 int fontSuperSample() {
-    int ss = RanGL_UIScale();
+    //  Whole texels per logical pixel: the outline and bold passes offset in
+    //  whole texels. A fractional UI scale (phones) rounds up, so glyphs are
+    //  rasterised at or above the drawn size and only ever minified slightly.
+    int ss = (int)ceil(RanGL_UIScale() - 0.01f);
     if (ss < 1) ss = 1;
     if (ss > 4) ss = 4;          // the atlas is square-law in this
     return ss;

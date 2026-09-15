@@ -1649,10 +1649,14 @@ extern "C" void RanGLR_ClearRect(int x, int y, int w, int h) {
     //  "the client expects last frame to still be there".
     if (!g_rtActive && !RanGL_SwapPreserved()) { glDisable(GL_SCISSOR_TEST); return; }
 
-    const int scale = g_rtActive ? 1 : RanGL_UIScale();
+    const float scale = g_rtActive ? 1.0f : RanGL_UIScale();
     const int surfaceH = g_rtActive ? g_rtH : RanGL_Height();
+    //  Edges rounded, not sizes: with a fractional scale two adjacent rects
+    //  must still meet on the same pixel column.
+    const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
+    const int y0 = (int)lroundf(y * scale), y1 = (int)lroundf((y + h) * scale);
     glEnable(GL_SCISSOR_TEST);
-    glScissor(x * scale, surfaceH - (y + h) * scale, w * scale, h * scale);
+    glScissor(x0, surfaceH - y1, x1 - x0, y1 - y0);
 }
 
 extern "C" void RanGLR_ClearRectOff(void) {
@@ -1701,10 +1705,12 @@ extern "C" void RanGLR_SetViewport(int x, int y, int w, int h) {
     //  The client works in logical pixels (see RanGL_UIScale) and the frame is
     //  stretched to the panel, so a viewport it sets scales with it — except on
     //  a render target, which is already sized in real pixels.
-    const int scale = g_rtActive ? 1 : RanGL_UIScale();
+    const float scale = g_rtActive ? 1.0f : RanGL_UIScale();
     const int surfaceH = g_rtActive ? g_rtH : RanGL_Height();
+    const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
+    const int y0 = (int)lroundf(y * scale), y1 = (int)lroundf((y + h) * scale);
     // D3D viewport Y is measured from the top, GL's from the bottom.
-    glViewport(x * scale, surfaceH - (y + h) * scale, w * scale, h * scale);
+    glViewport(x0, surfaceH - y1, x1 - x0, y1 - y0);
 }
 
 // Apply the D3D render-state block to GL immediately before a draw. Doing it
@@ -3184,7 +3190,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             }
         }
         setUniform2f(uTexSize, s_lastW, s_lastH);
-        setUniform1f(uUiSharpen, g_noUiSharp ? 1.0f : (float)RanGL_UIScale());
+        setUniform1f(uUiSharpen, g_noUiSharp ? 1.0f : RanGL_UIScale());
         //  gl_FragCoord is in framebuffer pixels from the bottom; the logical
         //  pixel a fragment belongs to needs the height. 0 inside a render
         //  target, whose draws are not magnified and must not be snapped.

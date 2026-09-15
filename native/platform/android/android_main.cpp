@@ -49,8 +49,8 @@ extern "C" int  RanGL_Width(void);
 extern "C" int  RanGL_Height(void);
 extern "C" int  RanGL_LogicalWidth(void);
 extern "C" int  RanGL_LogicalHeight(void);
-extern "C" int  RanGL_UIScale(void);
-extern "C" int  RanGL_InputScale(void);
+extern "C" float RanGL_UIScale(void);
+extern "C" float RanGL_InputScale(void);
 extern "C" int  RanGLR_Init(void);
 
 // Input, fed into the DirectInput device the engine actually reads (shim/platform).
@@ -654,17 +654,18 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
         const int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         //  Touches arrive in panel pixels; the frame is drawn smaller than the
         //  panel and the display scales it, so undo that here.
-        const int scale = RanGL_InputScale();
-        const int x = (int)AMotionEvent_getX(event, 0) / scale;
-        const int y = (int)AMotionEvent_getY(event, 0) / scale;
+        //  Fractional on phones (RanGL_ChooseUIScale), so divide in float.
+        const float scale = RanGL_InputScale();
+        const int x = (int)(AMotionEvent_getX(event, 0) / scale);
+        const int y = (int)(AMotionEvent_getY(event, 0) / scale);
         //  Pointer ids keep fingers distinct, so the stick and a button can
         //  be held at once - which is the entire point of the layout.
         const int32_t idx = (AMotionEvent_getAction(event) &
                              AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
                             AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
         const int pid = (int)AMotionEvent_getPointerId(event, idx);
-        const int px = (int)AMotionEvent_getX(event, idx) / scale;
-        const int py = (int)AMotionEvent_getY(event, idx) / scale;
+        const int px = (int)(AMotionEvent_getX(event, idx) / scale);
+        const int py = (int)(AMotionEvent_getY(event, idx) / scale);
 
         switch (action) {
             case AMOTION_EVENT_ACTION_DOWN:
@@ -680,8 +681,8 @@ int32_t onInputEvent(android_app *app, AInputEvent *event) {
                 bool claimedAny = false;
                 for (size_t i = 0; i < count; ++i) {
                     const int mid = (int)AMotionEvent_getPointerId(event, i);
-                    const int mx = (int)AMotionEvent_getX(event, i) / scale;
-                    const int my = (int)AMotionEvent_getY(event, i) / scale;
+                    const int mx = (int)(AMotionEvent_getX(event, i) / scale);
+                    const int my = (int)(AMotionEvent_getY(event, i) / scale);
                     if (RanTouch_PointerMove(mid, (float)mx, (float)my)) { claimedAny = true; continue; }
                     RanGesture_Move(mx, my);
                 }
@@ -787,7 +788,7 @@ void onAppCmd(android_app *app, int32_t cmd) {
                     //  unusable with a finger.
                     st->width  = RanGL_LogicalWidth();
                     st->height = RanGL_LogicalHeight();
-                    LOGI("logical %dx%d (scale %d of %dx%d)", st->width, st->height,
+                    LOGI("logical %dx%d (scale %.4f of %dx%d)", st->width, st->height,
                          RanGL_UIScale(), RanGL_Width(), RanGL_Height());
                 }
                 if (!RanGLR_Init()) {
