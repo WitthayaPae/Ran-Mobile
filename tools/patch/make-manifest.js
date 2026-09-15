@@ -638,7 +638,18 @@ const UP = path.join(path.dirname(OUT), 'upload');
    *  Growing the set instead is always safe: re-sending a blob the server
    *  already has is a no-op, because the name is the hash.                    */
   const sinceFile = path.join(UP, '.since');
+  /*  ios/ (source.json, the .ipa, its icon) is written by make-ios-source.js
+   *  straight into launcher_mobile/, outside the blob set, so nothing above
+   *  ever staged it and a new iOS build never reached out/upload. It is staged
+   *  whenever its source.json differs from the one last confirmed uploaded;
+   *  that hash is remembered here, outside UP, when --uploaded clears the set. */
+  const IOS_DIR  = path.join(OUT, 'ios');
+  const IOS_MARK = path.join(path.dirname(OUT), '.ios-uploaded');
+  const iosHash = f => require('crypto').createHash('sha256')
+                                         .update(fs.readFileSync(f)).digest('hex');
   if (argv.includes('--uploaded')) {
+    const stagedSrc = path.join(UP, 'ios', 'source.json');
+    if (fs.existsSync(stagedSrc)) fs.writeFileSync(IOS_MARK, iosHash(stagedSrc));
     fs.rmSync(UP, { recursive: true, force: true });
     fs.rmSync(path.join(path.dirname(OUT), 'UPLOAD.txt'), { force: true });
     console.log('upload   : set cleared - the server is up to date as of version ' + version);
@@ -671,6 +682,20 @@ const UP = path.join(path.dirname(OUT), 'upload');
       if (fs.existsSync(src)) fs.copyFileSync(src, path.join(UP, n));
     }
     fs.writeFileSync(sinceFile, String(since));
+    const iosFiles = [];
+    const iosSrcJson = path.join(IOS_DIR, 'source.json');
+    if (fs.existsSync(iosSrcJson)) {
+      const done = fs.existsSync(IOS_MARK) ? fs.readFileSync(IOS_MARK, 'utf8').trim() : '';
+      if (iosHash(iosSrcJson) !== done) {
+        fs.mkdirSync(path.join(UP, 'ios'), { recursive: true });
+        for (const n of fs.readdirSync(IOS_DIR)) {
+          const src = path.join(IOS_DIR, n);
+          if (!fs.statSync(src).isFile()) continue;
+          fs.copyFileSync(src, path.join(UP, 'ios', n));
+          iosFiles.push('ios/' + n);
+        }
+      }
+    }
     //  Count what is actually staged, which after a second publish without an
     //  upload is more than this run added.
     for (const h of fs.readdirSync(path.join(UP, 'blobs'))) {
@@ -685,10 +710,11 @@ const UP = path.join(path.dirname(OUT), 'upload');
     lines.push('# ' + staged + ' new blob(s), ' + mb(stagedBytes) + ', plus the manifest and its signature.');
     lines.push('');
     for (const h of fs.readdirSync(path.join(UP, 'blobs')).sort()) lines.push('blobs/' + h);
+    for (const n of iosFiles) lines.push(n);
     lines.push('manifest.json');
     lines.push('manifest.sig');
     global.__uploadSummary = staged + ' blob(s), ' + mb(stagedBytes) +
-                             ' + manifest  ->  out/upload' +
+                             ' + manifest' + (iosFiles.length ? ' + ios/' : '') + '  ->  out/upload' +
                              (since !== version ? '   (accumulated since v' + since + ')' : '') +
                              (staged ? '   [clear with --uploaded once it is up]' : '');
   }

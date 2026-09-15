@@ -36,7 +36,19 @@ honoured for a whole scale.
 tapped at the converted positions and hit. In the world, the inventory (key I)
 is fully on screen, title to Sort row (`out/phone_inventory_fit.png`), at 54-61 fps.
 LDPlayer resolution was reset afterwards.
-**Not yet verified on the iPhone:** needs an iOS build (CI runs on push to main) and a reinstall.
+**iOS 1.0.65 built:** MOBILE c60db66, run 34933498221 green. The log shows
+d3dx_font, gl_render, gl_context_ios and ran_ios_main recompiled, and the binary
+carries the new `UI scale %.4f` log string. make-ios-source.js wrote
+ios/source.json (1.0.65, 2 versions); ios/ copied into out/upload.
+Not yet run on the iPhone; the user is uploading it with the Android patch.
+
+**MAKE-PATCH dropped ios/ from out/upload.** make-manifest.js stages only
+blobs and the manifest, and ios/ is written into launcher_mobile/ outside the
+blob set, so the new iOS build never reached the upload folder. Fixed:
+ios/ is now staged whenever its source.json differs from the hash
+remembered in out/.ios-uploaded, which --uploaded writes before clearing
+the set. For this run ios/ was copied by hand into the patch 435 upload
+(V049, versionCode 66; both libran.so carry the new scale code).
 
 ## 2026-09-15 (5) — One branch per repo: main
 

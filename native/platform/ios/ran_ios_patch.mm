@@ -142,6 +142,38 @@ static NSString *SafeDest ( NSString *root, NSString *rel, NSString **err )
 
 // ------------------------------------------------------------------- fetch
 
+//  No HTTP cache, ever.
+//
+//  NSURLSession.sharedSession caches through NSURLCache, and the server sends
+//  Last-Modified with no Cache-Control, so a response may be reused on a
+//  heuristic freshness guess. The two files are not treated alike: the 97-byte
+//  manifest.sig fits in the cache, while the 3.6 MB manifest.json is over the
+//  per-entry limit and is always fetched fresh. After a publish the phone
+//  paired the new manifest with the previous signature and refused it:
+//  "manifest signature does not verify". An ephemeral session with no cache
+//  and a reload policy fetches both from the network every time.
+static NSURLSession *PatchSession ( void )
+{
+    static NSURLSession *s;
+    static dispatch_once_t once;
+    dispatch_once ( &once, ^{
+        NSURLSessionConfiguration *c = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+        c.URLCache = nil;
+        c.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        s = [NSURLSession sessionWithConfiguration:c];
+    });
+    return s;
+}
+
+static NSURLRequest *FreshRequest ( NSString *url )
+{
+    NSMutableURLRequest *q = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
+    q.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    //  For anything in between (a proxy, the CDN) as well as for this device.
+    [q setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
+    return q;
+}
+
 //  Synchronous by design: this whole patcher runs on its own thread, exactly as
 //  the Java one does, and a state machine would buy nothing.
 static NSData *HttpGet ( NSString *url, NSString **err )
@@ -150,8 +182,8 @@ static NSData *HttpGet ( NSString *url, NSString **err )
     __block NSString *fail = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create ( 0 );
 
-    NSURLSessionDataTask *t = [NSURLSession.sharedSession
-        dataTaskWithURL:[NSURL URLWithString:url]
+    NSURLSessionDataTask *t = [PatchSession()
+        dataTaskWithRequest:FreshRequest ( url )
         completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
             const long code = [r isKindOfClass:NSHTTPURLResponse.class]
                             ? (long)((NSHTTPURLResponse *)r).statusCode : 0;
@@ -174,8 +206,8 @@ static BOOL HttpToFile ( NSString *url, NSString *dest, long long expect, NSStri
     __block NSString *fail = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create ( 0 );
 
-    NSURLSessionDownloadTask *t = [NSURLSession.sharedSession
-        downloadTaskWithURL:[NSURL URLWithString:url]
+    NSURLSessionDownloadTask *t = [PatchSession()
+        downloadTaskWithRequest:FreshRequest ( url )
         completionHandler:^(NSURL *tmp, NSURLResponse *r, NSError *e) {
             const long code = [r isKindOfClass:NSHTTPURLResponse.class]
                             ? (long)((NSHTTPURLResponse *)r).statusCode : 0;
@@ -292,7 +324,20 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         NSData *sig = HttpGet ( [base stringByAppendingString:@"manifest.sig"], &err );
         if (!sig) { done ( NO, [@"no manifest signature on the server: " stringByAppendingString:err] ); return; }
 
-        if (!VerifyManifest ( body, sig, &err )) { done ( NO, err ); return; }
+        if (!VerifyManifest ( body, sig, &err )) {
+            //  What was actually checked, so a mismatch can be compared with the
+            //  server's copies (sha256sum manifest.json, cat manifest.sig).
+            unsigned char h[CC_SHA256_DIGEST_LENGTH];
+            CC_SHA256 ( body.bytes, (CC_LONG)body.length, h );
+            NSMutableString *hex = [NSMutableString string];
+            for (int i = 0; i < 8; ++i) [hex appendFormat:@"%02x", h[i]];
+            NSString *sigText = [[NSString alloc] initWithData:sig encoding:NSUTF8StringEncoding];
+            LOGI ( "manifest refused: body %lu bytes sha256 %s..., sig %lu bytes '%s'",
+                   (unsigned long)body.length, hex.UTF8String, (unsigned long)sig.length,
+                   sigText.UTF8String ?: "(not UTF-8)" );
+            done ( NO, err );
+            return;
+        }
 
         NSDictionary *m = [NSJSONSerialization JSONObjectWithData:body options:0 error:NULL];
         if (![m isKindOfClass:NSDictionary.class]) { done ( NO, @"manifest is not an object" ); return; }
