@@ -235,6 +235,11 @@ const char *kVS =
 const char *kFS =
     "#version 300 es\n"
     "precision mediump float;\n"
+    //  RAN_UVP is set by variantPreamble ("uvmediump" switch, for an iPhone
+    //  A/B); the base program compiled without a preamble gets highp.
+    "#ifndef RAN_UVP\n"
+    "#define RAN_UVP highp\n"
+    "#endif\n"
     "in vec4 vColor;\n"
     //  Texture coordinates are highp. On Apple GPUs mediump is a true 16-bit
     //  float, which cannot hold a fraction of a texel on a 1024-2048 texel
@@ -242,8 +247,8 @@ const char *kFS =
     //  then collapsed and the whole iPhone GUI sampled blocky and uneven.
     //  Adreno and the emulator run mediump at full precision, so Android never
     //  showed it. The rest of the stage stays mediump for fill cost.
-    "in highp vec2 vUV;\n"
-    "in highp vec2 vUV2;\n"
+    "in RAN_UVP vec2 vUV;\n"
+    "in RAN_UVP vec2 vUV2;\n"
     "in vec3 vWorldPos;\n"
     "in vec3 vNormal;\n"
     //  Gouraud: the lighting was worked out per vertex, as D3D's fixed function
@@ -1312,9 +1317,16 @@ unsigned variantKey(int preTransformed, int lighting, int specular, int fogMode,
                     | ((vertexBlend & 7) << 12));
 }
 
+//  Measurement switch: with the "uvmediump" diagnostic file present at startup,
+//  texture coordinates go back to mediump so the cost of the highp fix can be
+//  A/B'd on an iPhone without a rebuild (restart the app to flip it). Off by
+//  default: highp is what fixes the blocky interface on Apple GPUs.
+bool g_uvMediump = false;
+
 std::string variantPreamble(unsigned key) {
-    char buf[512];
+    char buf[600];
     snprintf(buf, sizeof(buf),
+             "#define RAN_UVP %s\n"
              "#define uPreTransformed %d\n"
              "#define uLighting %d\n"
              "#define uSpecularOn %d\n"
@@ -1325,6 +1337,7 @@ std::string variantPreamble(unsigned key) {
              "#define uUseTexture %d\n"
              "#define uIndexedBlend %d\n"
              "#define uVertexBlend %d\n",
+             g_uvMediump ? "mediump" : "highp",
              (key & 1) ? 1 : 0,
              (key & 2) ? 1 : 0,
              (key & 4) ? 1 : 0,
@@ -1439,6 +1452,10 @@ void useVariant(unsigned key) {
 extern "C" int RanGLR_Init(void) {
     if (g_inited) return 1;
     if (!RanGL_Ready()) return 0;
+
+    g_uvMediump = RanPlat_DiagExists("uvmediump") != 0;
+    LOGI("texture coordinate precision: %s%s", g_uvMediump ? "mediump" : "highp",
+         g_uvMediump ? "  (uvmediump diagnostic - measurement only)" : "");
 
     GLuint vs = compile(GL_VERTEX_SHADER, kVS);
     GLuint fs = compile(GL_FRAGMENT_SHADER, kFS);

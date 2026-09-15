@@ -12,6 +12,41 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (1) — iPhone 1.0.70: "fps drop a bit when walking, look so spinning" — measuring
+
+User report after installing 1.0.70; it was not there before. The iPhone was
+not on USB, so no numbers yet.
+
+**What changed for iOS since it last felt right** (git log c60db66~1..HEAD):
+- **UI scale.** 2.0 became 1.6375, then 1.8422 (c60db66, 89ec493).
+- **Font and coverage snap.** Fractional font raster and coverage snap, UI draws
+  only (2dd06aa).
+- **Patcher.** Parallel downloads and parts (6fcc05b); no gameplay effect.
+- **Precision.** highp texture coordinates for every draw (b2568fc).
+
+**Findings in code:**
+- **Swipe-to-turn.** The camera turns by the mouse delta in logical pixels
+  (dinput_mobile.cpp PointerMove adds dx to lX / DIMOFS_X, and DxViewPort reads
+  it). Logical pixels per finger pixel went from 1/2.0 to 1/1.8422, so the same
+  swipe now turns about 8.6% faster than the original build. Held until it is
+  measured, because walking uses the stick, not the swipe.
+- **Ruled out.** The camera-lock button (the overlay only draws its glyph) and
+  ui_pan.cpp (moves the focused window for the keyboard only) do not turn the
+  camera.
+- **Frame-rate logging.** iOS compiles platform/android/ran_app.cpp, whose
+  `FRAME %.1f fps | ... ms` line logs once a second, so the fps can be read over
+  syslog.
+
+**Measurement switch added.** The "uvmediump" diag file, read in RanGLR_Init,
+sets `#define RAN_UVP mediump` in every variant preamble. The base kFS falls
+back to highp. This lets the iPhone A/B highp against mediump texture
+coordinates with a restart instead of a rebuild. It is off by default, and the
+log says "texture coordinate precision: highp|mediump".
+
+**Next:** Android build, LDPlayer shader check, iOS build; then, on the iPhone
+over USB, walk the same route with and without uvmediump (interleaved rounds),
+reading the FRAME lines, and check swipe-turn speed.
+
 ## 2026-09-15 (14) — iPhone GUI and skill slots pixelated: mediump is 16-bit on Apple GPUs
 
 Reported: the iOS GUI "look like it down scale", and "even the slot of the
@@ -42,8 +77,18 @@ not explain the skill slots, which are drawn by the touch overlay's own shader.
   is declared in the vertex stage, so link precision cannot mismatch.
 - **splash.cpp.** The fragment shader is highp (boot art up to 1600 texels).
 
-**Not verified yet:** Android build and shader link on LDPlayer (should be
-visually identical), iOS 1.0.70, then an iPhone screenshot and fps.
+**Verified on LDPlayer (V053, versionCode 70):** 8 shader variants built,
+glErr 0x0000, no touch shader or link errors. In the world the HUD, potion and
+quick slots and all skill icons render at 61 fps, unchanged from before as
+expected (out/highp_world.png).
+
+**iOS 1.0.70 built:** MOBILE b2568fc, run 34994971230 green. The binary carries
+`in highp vec2 vUV;` and the parts downloader. make-ios-source.js wrote
+source.json = 1.0.70 only, from a scratchpad copy of the .ipa. Bumping
+versionCode was required for the iOS version, and it makes Android V053 a
+331 MB update with no visible change.
+
+**Not verified yet:** an iPhone screenshot of the HUD on 1.0.70, and iPhone fps.
 
 ## 2026-09-15 (13) — iOS patch slow after SideStore install: parallel downloads + parts on iOS
 
