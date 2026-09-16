@@ -54,8 +54,21 @@ CUIEditBox owns the buffer. Every edit is turned into the same RanIME_InsertUtf8
 refused, which leaves the sentinel in place for the next backspace. Smart
 quotes and dashes are off: CP874 has no room for curly punctuation.
 
-Android is untouched - it has its own RanIME_* in android_main.cpp. Not yet
-verified on device: iOS builds run in CI, so this needs 1.0.76 on the phone.
+Android is untouched - it has its own RanIME_* in android_main.cpp.
+
+Built as iOS 1.0.77: the bundle version is not hardcoded, CMakeLists.txt reads
+android:versionCode out of AndroidManifest.xml and makes it 1.0.<code>, so the
+iOS version follows the APK bump rather than being chosen. Staged to
+ios/source.json, which raised minIos to 77 on its own - make-manifest.js follows
+the iOS build in the store and never lowers it. Store 445. versionCode stayed
+77, correctly: the Android binary did not change, so store 444's APK is still
+the current one and no Android rebuild was needed.
+
+Not yet verified on device. The globe key is confirmed by construction and by
+the CI compile only - there is no iPhone here, so it is proven when 1.0.77 is
+installed. The vehicle ใช้งาน row from (5) is also still unverified; it needs a
+character that owns a vehicle, and this cycle's one live login went on checking
+the stripped APK.
 
 ## 2026-09-16 (7) — A text button's width is UI_FLAG_XSIZE, not the rect you give it
 
