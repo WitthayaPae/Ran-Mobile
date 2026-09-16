@@ -210,21 +210,48 @@ public class RanActivity extends NativeActivity {
             super(target, false);
         }
 
+        /*  What the client is currently holding from the composition in flight.
+         *
+         *  A soft keyboard does not send the letter just typed: it sends the
+         *  WHOLE composition again on every keystroke. Appending each one was
+         *  the bug - pressing x twice sent "x" and then "xx", the client
+         *  appended both and ended up holding "xxx". A composition has to
+         *  REPLACE the previous one, and the client has no notion of composing
+         *  text - it has an edit buffer and a backspace and nothing else - so
+         *  the last composition is remembered here and taken back a character
+         *  at a time before the new one goes in.                             */
+        private String mComposing = "";
+
+        /*  Code points, not String.length(): nativeBackspace removes one whole
+         *  UTF-8 character, while length() counts UTF-16 units and would leave
+         *  half of any character outside the BMP behind.                     */
+        private void dropComposing() {
+            final int n = mComposing.codePointCount(0, mComposing.length());
+            for (int i = 0; i < n; i++) nativeBackspace();
+            mComposing = "";
+        }
+
         @Override public boolean commitText(CharSequence text, int newCursorPosition) {
+            dropComposing();
             if (text != null && text.length() > 0) nativeCommitText(text.toString());
             return true;
         }
 
         /*  Most keyboards send each keystroke as composing text and only commit
-         *  on a word break. Treating a composition as committed keeps simple
-         *  Latin and digits working; proper composing - which is what Thai
-         *  needs - replaces rather than appends, and is still to do. */
+         *  on a word break, so this is the path ordinary typing runs through. */
         @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            if (text != null && text.length() > 0) nativeCommitText(text.toString());
+            dropComposing();
+            if (text != null && text.length() > 0) {
+                nativeCommitText(text.toString());
+                mComposing = text.toString();
+            }
             return true;
         }
 
+        /*  The IME is editing around the composition, so what is remembered no
+         *  longer describes what the client holds.                           */
         @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+            mComposing = "";
             for (int i = 0; i < beforeLength; i++) nativeBackspace();
             return true;
         }
@@ -232,12 +259,14 @@ public class RanActivity extends NativeActivity {
         @Override public boolean sendKeyEvent(KeyEvent event) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 final int k = event.getKeyCode();
-                if (k == KeyEvent.KEYCODE_DEL) { nativeBackspace(); return true; }
+                //  A real backspace ends the composition: what it removes is a
+                //  character the client already has, not one to take back again.
+                if (k == KeyEvent.KEYCODE_DEL) { mComposing = ""; nativeBackspace(); return true; }
                 /*  Send it, and leave the keyboard alone: CUIEditBox::EndEdit
                   *  calls RanIME_Hide itself once the client closes the line,
                   *  so hiding here as well only fought with it - and hiding
                   *  *instead* of sending is what dropped the message. */
-                if (k == KeyEvent.KEYCODE_ENTER) { nativeEnter(); return true; }
+                if (k == KeyEvent.KEYCODE_ENTER) { mComposing = ""; nativeEnter(); return true; }
                 final int u = event.getUnicodeChar();
                 if (u > 0) { nativeCommitText(String.valueOf((char) u)); return true; }
             }
@@ -248,10 +277,14 @@ public class RanActivity extends NativeActivity {
          *  than as a KeyEvent, so this is the path that actually runs for the
          *  blue Done/Send key. Without it the button did nothing at all. */
         @Override public boolean performEditorAction(int actionCode) {
+            mComposing = "";
             nativeEnter();
             return true;
         }
 
-        @Override public boolean finishComposingText() { return true; }
+        /*  The composition is settled text now as far as the IME is concerned.
+         *  The client already holds those characters, so nothing is sent - only
+         *  the memory of what could still have been taken back is dropped.    */
+        @Override public boolean finishComposingText() { mComposing = ""; return true; }
     }
 }

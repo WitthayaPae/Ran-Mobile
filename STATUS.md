@@ -12,6 +12,43 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (9) — Typing on a real Android keyboard doubled characters: a composition appends, it does not replace
+
+Reported from a phone: pressing a key twice put three characters in the field.
+
+A soft keyboard does not send the letter just typed. It sends the WHOLE
+composition again on every keystroke, and RanInputConnection.setComposingText
+handed each one straight to nativeCommitText, so the client appended them all:
+
+    press x   ->  setComposingText("x")    ->  buffer "x"
+    press x   ->  setComposingText("xx")   ->  buffer "xxx"
+
+and the commitText on the next word break appended the composition a third
+time. The code knew: its own comment said proper composing "replaces rather
+than appends, and is still to do".
+
+RanInputConnection now remembers the composition in flight (mComposing) and
+takes it back with nativeBackspace before inserting the new one. The count is
+in CODE POINTS, not String.length() - nativeBackspace removes one whole UTF-8
+character, while length() counts UTF-16 units and would leave half of anything
+outside the BMP behind. Every other path that invalidates the composition
+clears the memory: commitText, deleteSurroundingText, a real KEYCODE_DEL,
+ENTER, performEditorAction and finishComposingText.
+
+**Why every test here missed it, and how to test it next time.** LDPlayer's IME
+is shown-but-dead: showSoftInput fires, Pinyin is the default, and no keyboard
+is ever drawn - the screenshot after tapping the ID field shows the login page
+with no keys at all. Typing on the emulator goes through ImeView.onKeyDown
+instead ("adb shell input text" injects into the focused window), which is one
+character per press and never touches the composing path. So this bug is
+invisible on the emulator BY CONSTRUCTION, and the tablet was unreachable.
+Anything touching text input has to be tested on a real device with a real
+keyboard; the emulator can only prove the key-event path.
+
+Verified by the user on an Android phone. Not shipped: the APK was rebuilt
+locally (still versionCode 77), so publishing this needs a MAKE-PATCH bump to
+versionCode 78 / store 446.
+
 ## 2026-09-16 (8) — Patching was slow because every patch shipped 153 MB of DWARF; iOS keyboard had no globe key
 
 Two complaints, one session: "the patch is so slow? why", then "even the android
