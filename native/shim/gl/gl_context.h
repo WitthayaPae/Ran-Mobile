@@ -10,6 +10,16 @@ extern "C" {
 // the frame-loop thread and must stay the only one touching GL.
 int  RanGL_Init(void *nativeWindow);
 
+//  Android only: the window comes and goes while the client keeps running.
+//
+//  Anything that covers the app - the browser the shop's top-up button opens,
+//  the recents switcher, a call - destroys the native window, and the EGL
+//  surface with it. These two drop and remake the surface while keeping the
+//  context, so the textures and buffers already uploaded survive the trip.
+//  iOS has no counterpart: its CAEAGLLayer lives as long as the view does.
+void RanGL_SurfaceLost(void);
+int  RanGL_SurfaceRestore(void *nativeWindow);
+
 //  The drawable resized under us - a rotation or a split view. iOS only: the
 //  Android window is a fixed landscape surface that never moves, which is why
 //  there is no counterpart in gl_context.cpp. Rebuilds the renderbuffers when

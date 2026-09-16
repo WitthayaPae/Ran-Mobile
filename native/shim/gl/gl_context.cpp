@@ -39,6 +39,16 @@ namespace {
 EGLDisplay g_display = EGL_NO_DISPLAY;
 EGLSurface g_surface = EGL_NO_SURFACE;
 EGLContext g_context = EGL_NO_CONTEXT;
+//  Kept from the first init so the surface can be made again on its own.
+//
+//  Android destroys the window whenever something covers the app - the browser
+//  the top-up button opens, the recents switcher, a call - and the surface dies
+//  with it. The context does not have to: it holds every texture, buffer and
+//  shader the client uploaded, and throwing it away would mean loading the
+//  whole game again. So the surface is rebuilt against the new window and the
+//  context is kept, which needs the config and visual that chose the old one.
+EGLConfig  g_config = 0;
+EGLint     g_nativeVisual = 0;
 int g_width = 0, g_height = 0;
 bool g_ready = false;
 //  The real panel, and how much smaller the frame is drawn than the panel.
@@ -149,11 +159,13 @@ extern "C" int RanGL_Init(void *nativeWindow) {
         g_depthBits = 16;
         LOGI("using fallback EGL config (16-bit depth, no stencil)");
     }
+    g_config = config;
 
     // The native window buffer format must match the config or eglCreateWindowSurface
     // fails on some drivers.
     EGLint nativeVisual = 0;
     eglGetConfigAttrib(g_display, config, EGL_NATIVE_VISUAL_ID, &nativeVisual);
+    g_nativeVisual = nativeVisual;
 
     //  Render at the logical size and let the display scale it up. A PC-sized
     //  GUI on a 2560x1440 panel is unusable with a finger, so the client is run
@@ -320,6 +332,78 @@ extern "C" int RanGL_Init(void *nativeWindow) {
     return 1;
 }
 
+//  The window went away - APP_CMD_TERM_WINDOW.
+//
+//  Destroy the surface and ONLY the surface. The context survives, so every
+//  texture and vertex buffer the client uploaded is still there when the player
+//  comes back; recreating it instead would mean reloading the game.
+//
+//  Unbound first: EGL keeps a destroyed surface alive for as long as it is
+//  current, and the next eglMakeCurrent would fail with BAD_SURFACE.
+extern "C" void RanGL_SurfaceLost(void) {
+    if (g_display == EGL_NO_DISPLAY) return;
+
+    eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    g_ctxHeld = false;
+
+    if (g_surface != EGL_NO_SURFACE) {
+        eglDestroySurface(g_display, g_surface);
+        g_surface = EGL_NO_SURFACE;
+    }
+    //  A new surface starts at whatever the driver defaults to, so the cached
+    //  answer is worthless - see setSwapPreserved.
+    g_swapPreserved = false;
+    LOGI("surface released (window gone); context kept");
+}
+
+//  The window came back - APP_CMD_INIT_WINDOW on a client that is already
+//  running. A different ANativeWindow every time, so the surface is made
+//  against the new one and the context is re-bound to it.
+//
+//  Without this the game came back to a black screen: RanGL_Init returns early
+//  when it has already run, so nothing ever pointed at the new window, and
+//  every frame swapped into the surface of the old one.
+extern "C" int RanGL_SurfaceRestore(void *nativeWindow) {
+    if (g_display == EGL_NO_DISPLAY || g_context == EGL_NO_CONTEXT) return 0;
+
+    ANativeWindow *win = (ANativeWindow *)nativeWindow;
+    if (!win) { LOGE("surface restore: no window"); return 0; }
+
+    if (g_surface != EGL_NO_SURFACE) RanGL_SurfaceLost();
+
+    //  The same geometry the first surface was given. The panel has not changed
+    //  size - this is the same display - so the numbers still hold.
+    const int bufferW = g_panelWidth  / g_bufferDiv;
+    const int bufferH = g_panelHeight / g_bufferDiv;
+    ANativeWindow_setBuffersGeometry(win, bufferW, bufferH, g_nativeVisual);
+
+    g_surface = eglCreateWindowSurface(g_display, g_config, win, NULL);
+    if (g_surface == EGL_NO_SURFACE) {
+        LOGE("surface restore: eglCreateWindowSurface failed: %s", eglErrStr(eglGetError()));
+        return 0;
+    }
+
+    if (!eglMakeCurrent(g_display, g_surface, g_surface, g_context)) {
+        LOGE("surface restore: eglMakeCurrent failed: %s", eglErrStr(eglGetError()));
+        eglDestroySurface(g_display, g_surface);
+        g_surface = EGL_NO_SURFACE;
+        return 0;
+    }
+    g_ctxThread  = pthread_self();
+    g_mainThread = pthread_self();
+    g_ctxHeld    = true;
+
+    eglQuerySurface(g_display, g_surface, EGL_WIDTH,  &g_width);
+    eglQuerySurface(g_display, g_surface, EGL_HEIGHT, &g_height);
+
+    //  Both are surface state, not context state, so they went with the old one.
+    eglSwapInterval(g_display, (RanPlat_DiagExists("novsync")) ? 0 : 1);
+    setSwapPreserved(g_forcePreserved);
+
+    LOGI("surface restored %dx%d", g_width, g_height);
+    return 1;
+}
+
 extern "C" void RanGL_Shutdown(void) {
     if (g_display != EGL_NO_DISPLAY) {
         eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -449,6 +533,9 @@ extern "C" void RanGL_Present(void) {
 
     struct timespec ts0;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
+    //  No surface: the window is gone and this frame has nowhere to go. Swapping
+    //  anyway is what filled the log with BAD_SURFACE while the browser was up.
+    if (g_surface == EGL_NO_SURFACE) return;
     if (!eglSwapBuffers(g_display, g_surface)) {
         EGLint e = eglGetError();
         // A lost surface is normal on rotate/background; the app layer recreates it.

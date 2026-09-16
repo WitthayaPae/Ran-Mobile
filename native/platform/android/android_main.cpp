@@ -45,6 +45,9 @@ extern "C" int  RanGL_Init(void *nativeWindow);
 extern "C" void RanSplash_Begin(const char *dataRoot);
 extern "C" void RanSplash_End(void);
 extern "C" void RanGL_Shutdown(void);
+extern "C" int  RanGL_Ready(void);
+extern "C" void RanGL_SurfaceLost(void);
+extern "C" int  RanGL_SurfaceRestore(void *nativeWindow);
 extern "C" int  RanGL_Width(void);
 extern "C" int  RanGL_Height(void);
 extern "C" int  RanGL_LogicalWidth(void);
@@ -797,6 +800,20 @@ void onAppCmd(android_app *app, int32_t cmd) {
                 LOGI("window %dx%d", st->width, st->height);
                 // EGL first: device creation queries the real surface size, and
                 // every texture upload needs a live context.
+                //  Second time round this is a NEW window: the app was covered
+                //  (the browser, recents, a call) and Android threw the old one
+                //  away. RanGL_Init returns early once it has run, so it would
+                //  leave the dead surface in place and every frame would swap
+                //  into nothing - which is the black screen on coming back.
+                if (RanGL_Ready()) {
+                    if (!RanGL_SurfaceRestore(app->window)) {
+                        LOGE("surface restore failed - cannot render");
+                        st->quit = true;
+                        break;
+                    }
+                    st->ready = true;
+                    break;      //  everything below is first-boot setup
+                }
                 if (!RanGL_Init(app->window)) {
                     LOGE("EGL init failed - cannot render");
                     st->quit = true;
@@ -828,6 +845,10 @@ void onAppCmd(android_app *app, int32_t cmd) {
             break;
         case APP_CMD_TERM_WINDOW:
             st->ready = false;
+            //  The window is being destroyed, so the surface drawn into it has
+            //  to go now - while EGL can still unbind it cleanly. The context
+            //  stays, so nothing the client uploaded is lost.
+            RanGL_SurfaceLost();
             break;
         case APP_CMD_DESTROY:
             st->quit = true;
@@ -900,7 +921,10 @@ extern "C" void android_main(android_app *app) {
             }
         }
 
-        if (state.booted) {
+        //  ready as well as booted: with the app covered there is no surface to
+        //  draw into, and a frame that runs anyway spends a full render on
+        //  nothing and then fails its swap.
+        if (state.booted && state.ready) {
             //  The overlay ages its own state here - a pressed skill slot
             //  springs back, and anything else timed does the same.
             //

@@ -12,6 +12,71 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (6) — Black screen on coming back from the browser; เติมเงิน moved and resized
+
+The user: "when I click เติมเงิน it goes to browser but when I go back to the
+game it show blank page instead of continue the game. but for iphone work fine",
+and "the btn เติมเงิน it should be same size as the ซื้อ the big one. and the
+place ment it should be on top of the category ไอเท็มทั้งหมด".
+
+### The window comes back; the surface did not
+
+Reproduced on LDPlayer - a black screenshot after Back - and the cause is three
+lines of lifecycle, all of it Android:
+
+  * `APP_CMD_TERM_WINDOW` only set `st->ready = false`. EGL was never told, so
+    `g_ready` stayed true and `g_surface` kept pointing at a window Android had
+    already destroyed.
+  * The frame loop ran on `state.booted` alone, so frames kept drawing and
+    swapping into that dead surface the whole time the browser was up.
+  * `APP_CMD_INIT_WINDOW` calls `RanGL_Init`, which opens with
+    `if (g_ready) return 1;` - so on the way back it did nothing at all, and
+    nothing ever pointed at the NEW window. Black, permanently.
+
+iOS never had this: its CAEAGLLayer lives as long as the view, which is exactly
+why the same button was fine there.
+
+**The fix keeps the context and rebuilds only the surface.** `RanGL_SurfaceLost`
+unbinds (EGL keeps a destroyed surface alive while it is current, and the next
+`eglMakeCurrent` would fail BAD_SURFACE) and destroys the surface;
+`RanGL_SurfaceRestore` makes a new one against the new window and re-binds. The
+context survives, so every texture, buffer and shader the client uploaded is
+still there - recreating it would have meant loading the whole game again. That
+needed the `EGLConfig` and native visual kept from the first init; both were
+locals. The swap now returns early with no surface, and the frame loop wants
+`state.ready` as well as `state.booted`.
+
+**Verified:**
+
+    21:25:26.723 I RanGL: surface released (window gone); context kept
+    21:25:32.431 I RanGL: surface restored 2560x1440
+
+and the frame after Back is the game, not black - world, shop window, item
+icons, Thai text and HUD all intact. Textures surviving is the real test here:
+a wrong call on keeping the context shows up as missing art, not a black screen.
+
+This was never about the top-up button. A call, a notification tap or the
+recents switcher would have done the same; the button just made it one tap away.
+
+### เติมเงิน: ซื้อ's size, above the category list
+
+`BASIC_TEXT_BUTTON40` / `SIZE40` with ซื้อ's own skin, spanning the category
+list's width at the top of the left panel, with the list AND its scrollbar
+shifted down by the button height plus a gap and shortened to match.
+
+Positioned from `m_pListTextBox->GetLocalPos()` rather than numbers of my own:
+those rects live in Gui.rcc, which ships packed, so copying them would mean two
+places to change and no warning when they disagree. The scrollbar moves with
+the list because it is a separate control - a list that moved alone would
+scroll from a bar that did not, which looks subtly wrong rather than broken.
+
+It also settles where the button belongs: the first position, at the bottom of
+the panel, sits under the chat window in its default place, and the chat took
+the press - which is why the first two taps did nothing. The top of the panel is
+never covered.
+
+---
+
 ## 2026-09-16 (5) — Item shop: เติมเงิน opens the browser, gift buttons say ส่ง
 
 The user: "in the item shop we should add btn เติมเงิน that when click it will
