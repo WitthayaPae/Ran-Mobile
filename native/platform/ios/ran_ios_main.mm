@@ -11,6 +11,8 @@
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <mach/mach.h>
+#include <os/proc.h>
 #import <QuartzCore/CAEAGLLayer.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
@@ -212,6 +214,28 @@ static int  g_imeInsetPerMille = 0;
                           s_n, s_gaps[s_n / 2] * 1000.0,
                           s_gaps[(s_n * 95) / 100 < s_n ? (s_n * 95) / 100 : s_n - 1] * 1000.0,
                           s_gaps[s_n - 1] * 1000.0, over20, over34 );
+
+            //  What iOS thinks this process is using, and how much it will
+            //  still hand out. Android has no per-app ceiling worth speaking
+            //  of, so a build that entered the world fine there could die here
+            //  with nothing in the log and no crash report: a memory kill
+            //  leaves neither. phys_footprint is the number the limit is
+            //  applied to; os_proc_available_memory is what is left of it.
+            {
+                task_vm_info_data_t vm;
+                mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+                if ( task_info ( mach_task_self(), TASK_VM_INFO,
+                                 (task_info_t)&vm, &cnt ) == KERN_SUCCESS )
+                {
+                    double left = 0.0;
+                    if ( @available(iOS 13.0, *) )
+                        left = (double)os_proc_available_memory() / 1048576.0;
+                    RanPlat_Log ( RANLOG_INFO, "RanMem",
+                                  "MEM footprint %.0f MB | headroom %.0f MB",
+                                  (double)vm.phys_footprint / 1048576.0, left );
+                }
+            }
+
             s_n = 0;
             s_since = now;
         }

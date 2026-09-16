@@ -12,6 +12,66 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (3) — iPhone crashed entering the world: decoded textures were kept forever
+
+The user: "the problem now look at the log on iPhone because I entry the game
+it crash. but LDplayer is working ok."
+
+**What the device said.** No `ran-*.ips` and no JetsamEvent for the day: on
+iOS a memory kill leaves neither a crash report nor a log line, which is why
+"it crashed" had no crash to read. The three `ran-*.ips` files that *were* on
+the phone are from the night before, builds 68/69, and all three are
+`EXC_CRASH / SIGABRT` inside `-[UIApplication _applicationOpenURLAction:]` —
+SideStore's URL-scheme launch failing an NSAssertion, nothing to do with the
+game. `ran.log` ends mid-sentence in the middle of character-texture loading,
+2,412 lines after the last rendered frame, and the last pacing line before it
+stops reads `PACE … max 1207.8ms` — a 1.2-second stall, which is what memory
+thrashing looks like from inside the frame loop.
+
+**Cause.** `d3d9_impl.cpp` released a texture's decoded CPU copy after the
+upload reached GL — but only when the format was compressed. The reason was
+real: an uncompressed surface may be one the client keeps writing to, and the
+font atlas is locked again for every new glyph, so dropping its pixels made
+each glyph re-upload an otherwise empty atlas and blanked most of the text in
+the game.
+
+Format was the wrong question. **Provenance** is the right one. A texture that
+came from a file is decoded once and only ever drawn; the atlas and the
+client's scratch surfaces are created empty, with no path. Freeing by format
+kept every uncompressed *file* texture's decode alive for the life of the
+process — and a crowd of players in costume is mostly uncompressed `.png`
+skins. Measured from the phone's own log for the entry that died: 53
+uncompressed file textures, **94 MB** of decoded pixels held while the GPU
+already had its own copy of every one of them. Android absorbs it (the same
+scene on LDPlayer sits at 1.46 GB RSS and keeps going); an iPhone's per-app
+limit does not.
+
+**Fix.** Free the CPU copy when the texture is compressed **or** came from a
+file (`!m_srcPath.empty()`). `m_srcPath` is set in exactly one place —
+`imageToTexture`, and only when `g_loadingPath` is set, which happens only in
+the two *FromFile* loaders — so the font atlas (created through
+`CreateTexture`, no path) keeps its mirror and the blank-text regression cannot
+come back. Freeing stays safe even if something does lock one later:
+`ensureBits()` re-creates the storage and `LockRect` marks the whole surface
+dirty when it had to, so the next upload is a full one. What would be lost is
+the *old* pixels, so that case now logs a warning rather than passing silently.
+
+**Verified on LDPlayer** (both ABIs, 0 errors): logged in, entered the world,
+4,100+ textures streamed. Thai chat tabs, HP/MP/SP/EXP/CP labels, level text
+and character names all render; every HUD and skill icon draws. **Zero**
+`partial lock of a texture whose decoded copy was freed` warnings across the
+whole run — nothing in the client partially rewrites a file-loaded texture.
+
+**Not yet verified on the iPhone.** That needs a new signed build, which is
+what the version bump to 74 is for.
+
+**Also added:** a `MEM` line next to `PACE` on iOS, once a second —
+`phys_footprint` (the number the per-app limit is applied to) and
+`os_proc_available_memory` (what is left of it). Without it a memory kill is
+invisible from the log, which is exactly how this one hid.
+
+---
+
 ## 2026-09-16 (2) — GM load test (fake players) switched back ON for iPhone crowd testing
 
 The user said "still not fix. can you do the analysis why this happend? it not
@@ -30,9 +90,132 @@ again before production. That restores:
 the running agent and field should still honour `/fake_pc`. If they do not, the
 servers need rebuilding and redeploying.
 
-**Next:** build Android and check the GM tool on LDPlayer; SOURCE and MOBILE
-commits, then an iOS build; then the iPhone crowd A/B for the smoothness
-analysis.
+**Done:**
+- **Android.** Both ABIs built with 0 errors; the V056 APK (versionCode 73) is
+  installed on LDPlayer.
+- **Commits.** SOURCE 23f0e1a (define on); MOBILE e2b0128 (V056); iOS build
+  1.0.73 dispatched as run 35008278096.
+
+**LDPlayer loadtest check failed, but not in the code.** A file created with
+`adb shell echo 10 > /sdcard/ran/loadtest` is seen by DiagExists, yet fopen
+fails: RanOpen `FAILED (errno 2)`, then `retry same string: FAILED (errno 13)`,
+with MediaProvider "Permission to access file ... denied" every second.
+Shell-created files on /sdcard/ran are not readable by the app, so
+existence-only switches (uvmediump, pace30) work and content switches
+(loadtest) do not. The file was removed. On iOS, `apps push` writes into the
+app container as the app, so `ios-device.sh flag loadtest 10` should work.
+Server fakes use `/fake_pc N` instead.
+
+**Server build verified (2026-09-16 01:37).**
+- **Path conversion.** The first attempt failed with MSB1008: Git Bash turned
+  `/t:Servers\...` into a path, so it needs MSYS_NO_PATHCONV=1.
+- **Toolset.** The second failed with MSB8020: v143 build tools not found. The
+  projects need VS2022 MSBuild, not VS2019.
+- **Working command** (from SOURCE, Git Bash):
+  `CL=/I"<SOURCE>\Tik\Lua\include" MSYS_NO_PATHCONV=1 "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe" RanOnline.sln "/t:Servers\ServerAgent;Servers\ServerField" /p:Configuration=Release /p:Platform=Win32 /m`
+- **Result.** Exit 0 with 0 errors; the only warnings are LNK4099 (missing
+  PDBs for libvorbis/libogg). The rebuilt exes exist only in `_Bin\Tool`:
+  ServerAgent.exe and ServerField.exe, both 09-16 01:37. The link log names
+  `_Bin\Data\ServerField.exe`, but no exe is present in `_Bin\Data` (checked).
+  They are built with RAN_GM_LOADTEST on and are not deployed. Deploy only if
+  `/fake_pc` does not respond on the running servers.
+
+**iOS 1.0.73 built:** run 35008278096 (workflow_dispatch) green. The binary
+carries "fake_pc : 0 to 50", "spawned %d, now %d on the map" and
+"PACE %d frames". source.json = 1.0.73 only.
+
+**Crowd test plan (iPhone on USB, in town):**
+1. Record with `syslog live --process-name ran`: 60 s without fakes.
+2. Spawn about 30 fakes, client-side with `tools/ios-device.sh flag loadtest 30`
+   or server-side with `/fake_pc 30`, then record 60 s.
+3. Compare FRAME fps and engine cpu, PACE gaps, sections (interface, world)
+   and counts (pc-seen, mob-seen).
+4. Clear with `flag loadtest 0` or `/fake_pc 0`.
+
+**ServerField crashed after spawning fakes (user, 2026-09-16).** "after I fake
+some player it crash the server field ... some equipment that crash the game."
+No crash artefact yet: the field server writes to
+`<ServerField>\Logs\ErrorLog\log.<date>.txt` (CDebugSet, SUBPATH::DEBUGINFO_ROOT
+= `\Logs\ErrorLog\`, name `log.%Y%M%D%H%M.txt`). Asked the user for the newest
+one plus the console text. Everything below is code reading, not evidence.
+
+**Checked and cleared:**
+- **Null item ids.** `NATIVEID_NULL()` and `SNATIVEID(false)` are both
+  (0xFFFF,0xFFFF), so no mismatch between the resolve test and the validity test.
+- **Missing items at spawn.** `GMCtrolFakePC` picks ids from the field server's
+  own `GLItemMan` table, and `CreatePC` → `GLChar::CreateChar` →
+  `GLCHARLOGIC::INIT_DATA` resolves every worn id and calls `RELEASE_SLOT_ITEM`
+  when `GetItem` returns NULL, so slots cannot hold an unresolvable id at spawn.
+- **`CHECK_ANISUB`** guards both hand pointers (GLogicEx.cpp 206-207).
+- **Attack range in INIT_DATA** (GLogixExPC.cpp 1255): the `else` only runs when
+  `emRHAtt != ITEMATT_NOTHING`, which implies the pointer is non-NULL.
+- **Weapon link skill** (`GLChar::WeaponSkillProc`): `SITEMCUSTOM(SNATIVEID)`
+  sets `sSkillLinkID` to NATIVEID_NULL and the function returns on an invalid id.
+
+**Cause found, and it is not the equipment.** The user corrected the symptom:
+no crash log is written, the server just stops answering and the client sits on
+an endless loading screen - the same shape as the 2026-09-13 episode.
+
+- **The work.** `GLLandMan::FrameMove` calls `pChar->UpdateViewAround()` for
+  every PC in `m_GlobPCList`, unthrottled (GLLandMan.cpp 2470-2483). Fakes are
+  in that list (DropPC adds them) and pass the `EM_GETVA_AFTER` early-out
+  because `GetViewAround()` sets that state at spawn (GLCharEx.cpp 1067).
+- **What each call does.** Walks the quad nodes in a MAX_VIEWRANGE (250) box and
+  iterates the summon, pet, PC, mob and material lists in each, taking a
+  `NEW_FIELDCROW` pool node per newly seen entity.
+- **Why it never crashes.** `SENDTOCLIENT` returns immediately for any id past
+  twice the client slots (GLGaeaServerMsg.cpp 41), so a fake's messages cost
+  nothing - but the scanning and bookkeeping are paid in full. `CMemPool::New`
+  never fails: it allocates when the free list is empty. So the field server
+  slows and grows instead of faulting, and no log is written.
+- **The shape.** N fakes standing together = N view rebuilds a tick, each
+  scanning N characters, plus a pool node per pair.
+
+**Fix (SOURCE, GLCharEx.cpp, fakes only):**
+- `UpdateViewAround` returns S_FALSE at once for a fake PC.
+- `GetViewAround` does only what makes a fake visible to real players - state
+  flag, `m_fMoveDelay`, `RegistChar`, `INIT_DATA` - and returns, skipping the
+  entity discovery and the page of client messages after it.
+- `SendMsgViewAround` needed a fallback: recipients normally come from the
+  sender's own view list, which a fake no longer has, so its once-a-second walk
+  would have reached nobody and every fake would stand still on real clients.
+  For a fake it now walks `m_pLandMan->m_GlobPCList`, skips other fakes and
+  anyone past MAX_VIEWRANGE, and sends. That is one pass per message costing the
+  number of real players, not the crowd squared.
+- Real players are untouched: every branch is behind `IsFakePC`.
+- **Built (2026-09-16 12:44):** MSBuild 2022 Release|Win32 ServerAgent +
+  ServerField, exit 0 with 0 errors; Android arm64 and x86_64 both 0 errors
+  (GLCharEx.cpp compiles into the mobile client too). Not committed, not
+  deployed - the exes sit in `SOURCE\_Bin\Tool`.
+- Real players still discover fakes through their own UpdateViewAround, because
+  the fake is registered in the land cells by `RegistChar`.
+
+**Was also checked and cleared** (the equipment theory): fakes are dressed from
+the field server's own item table; `INIT_DATA` resolves every worn id and
+releases the slot when `GetItem` returns NULL; both "empty id" constants are
+identical; `CHECK_ANISUB`, the attack-range branch and `WeaponSkillProc` all
+guard their pointers.
+
+**Still worth hardening later:** `VALID_SLOT_ITEM` (GLogixExPC.cpp 4553)
+tests only `m_PutOnItems[slot].sNativeID` and the arm-swap slots - never
+`m_pITEMS[slot]`. `SUM_ITEM` (GLogixExPC.cpp 438) then does
+`SITEM &sItem = *m_pITEMS[emSLOT];`. Any path that writes a worn id without
+resolving the pointer and then re-sums stats is a null dereference on the field
+server. The fake generator writes `pData->m_PutOnItems[...]` directly (bypassing
+`SLOT_ITEM()`), which is safe only because INIT_DATA resolves afterwards.
+
+**Also unchecked in the fake path:** the generator never calls `ISEMPTY_SLOT`,
+so a fake can be handed a weapon its class cannot hold, a left-hand-only item in
+the right hand, or a two-handed weapon with the off-hand filled - none of the
+rules a real player's equip goes through.
+
+**Precedent (2026-09-13):** the fuller fake-gear version (15 slots,
+school/level-matched) made live joins hang; cause never found, and the spawn was
+reverted to the 6-slot version now in use.
+
+**Disconnect seen on LDPlayer.** After login ("ขาดการเชื่อมต่อ! ต้องการออกจากเกม
+หรือไม่?"), the game log up to 01:32:13 shows only rendering lines. Cause not
+yet found. No more logins this cycle.
 
 ## 2026-09-16 (1) — iPhone 1.0.70: "fps drop a bit when walking, look so spinning" — measuring
 

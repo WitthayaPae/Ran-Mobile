@@ -101,6 +101,9 @@ public:
     UINT m_width, m_height;
     D3DFORMAT m_format;
     std::vector<BYTE> m_bits;
+    //  Set when the decoded pixels were released after reaching GL, so a later
+    //  lock can tell "never had any" from "had some, gave them away".
+    bool m_freedAfterUpload = false;
     IDirect3DDevice9 *m_device;
 
     RanSurface(IDirect3DDevice9 *dev, UINT w, UINT h, D3DFORMAT fmt)
@@ -159,6 +162,15 @@ public:
     HRESULT LockRect(D3DLOCKED_RECT *pLocked, const RECT *pRect, DWORD) override {
         if (!pLocked) return D3DERR_INVALIDCALL;
         const bool hadBits = !m_bits.empty();
+        //  Storage that was dropped after the upload is coming back zeroed, so
+        //  a caller that rewrites only part of it loses the rest. Nothing in
+        //  the client should be doing this to a file-loaded texture; say so if
+        //  it ever does, because the symptom (black patches in one texture) is
+        //  otherwise indistinguishable from a bad decode.
+        if (!hadBits && m_freedAfterUpload && pRect && !isCompressed(m_format))
+            LOGW("partial lock of a texture whose decoded copy was freed: "
+                 "%ux%u fmt %d - the untouched pixels are gone",
+                 m_width, m_height, (int)m_format);
         ensureBits();
         //  Storage that had to be re-created holds nothing the GPU has seen,
         //  so the whole surface counts as rewritten however small the lock is.
@@ -335,16 +347,35 @@ public:
             for (size_t i = 0; i < m_surfaces.size(); ++i) m_surfaces[i]->clearDirty();
 
             //  The GPU has them now, and holding the decoded copy as well is
-            //  what ran the device out of memory on the first world map — but
-            //  only for compressed textures. An uncompressed one may be a
-            //  surface the client keeps writing to: the font atlas is locked
-            //  again for every new glyph, and dropping its pixels meant each
-            //  glyph re-uploaded an otherwise empty atlas, which blanked most
-            //  of the text in the game.
-            if (isCompressed(m_format)) {
+            //  what ran the device out of memory on the first world map.
+            //
+            //  This used to free compressed textures only, because an
+            //  uncompressed one may be a surface the client keeps writing to:
+            //  the font atlas is locked again for every new glyph, and dropping
+            //  its pixels meant each glyph re-uploaded an otherwise empty atlas,
+            //  which blanked most of the text in the game.
+            //
+            //  But format is the wrong question - provenance is. A texture that
+            //  came from a file is decoded once and only ever drawn; the atlas
+            //  and the client's scratch surfaces are created empty, with no
+            //  path. Freeing by format kept every uncompressed FILE texture's
+            //  decode alive for the life of the process, and a crowd of players
+            //  in costume is mostly uncompressed .png skins: 43 of them, mostly
+            //  1024x1024, is ~180 MB of decoded pixels the GPU already has a
+            //  copy of. Android absorbed it; an iPhone's per-app limit did not,
+            //  and entering the world in a crowd died mid-costume-load.
+            //
+            //  Freeing is safe even if something does lock one again later:
+            //  ensureBits() re-creates the storage and LockRect marks the whole
+            //  surface dirty when it had to, so the next upload is a full one.
+            //  What is lost is the OLD pixels - a partial rewrite would leave
+            //  the untouched part black - so that case warns rather than passes
+            //  silently.
+            if (isCompressed(m_format) || !m_srcPath.empty()) {
                 for (size_t i = 0; i < m_surfaces.size(); ++i) {
                     std::vector<BYTE> empty;
                     m_surfaces[i]->m_bits.swap(empty);
+                    m_surfaces[i]->m_freedAfterUpload = true;
                 }
                 ++g_stats.texturesFreedCPU;
             }
