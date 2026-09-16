@@ -12,6 +12,63 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (7) — A text button's width is UI_FLAG_XSIZE, not the rect you give it
+
+Five attempts at one button, and the first four were each wrong for a different
+reason. Worth writing down, because nothing about it is guessable from the call
+site and the next UI change will hit it again.
+
+**What a CBasicTextButton actually is:** a group of three art pieces - a left
+cap, a centre carrying UI_FLAG_XSIZE, a right cap carrying UI_FLAG_RIGHT.
+`CreateBaseButton` builds them, then makes a throwaway CUIControl from the skin
+keyword and calls `AlignSubControl ( own rect, skin rect )`. CUIGroup's override
+resizes the button and walks its children with the button's old and new rects,
+which is what stretches the centre piece.
+
+**The trap:** `CUIControl::AlignSubControl` only changes sizeX when the control
+itself carries UI_FLAG_XSIZE. ซื้อ has it, so it grows to the skin's 202. With
+UI_FLAG_DEFAULT the button keeps BASIC_TEXT_BUTTON40's own 73 and **no rect set
+afterwards changes anything** - SetLocalPos resizes the control, not the art
+inside it. A button can therefore have a 202-wide rect and draw 73 wide, which
+is exactly what the screenshots showed.
+
+The four wrong turns, in order:
+
+  1. UI_FLAG_XSIZE plus a hand-set rect - the rect was ignored and the button
+     ran off both edges of the panel.
+  2. UI_FLAG_DEFAULT sized from the category list - that rect (l13 w202) is the
+     text column, and the button drew at 73 regardless.
+  3. Sized from ซื้อ's own rect - same 73, for the same reason.
+  4. AlignSubControl with a width derived from the scrollbar's left - the bar
+     carries UI_FLAG_RIGHT, so its local left is not a panel-relative x; the
+     width came out ~75 and the art faithfully drew that.
+
+**The answer:** build it exactly like ซื้อ - same parent keyword, same skin,
+same UI_FLAG_XSIZE - and then only MOVE it (`SetLocalPos ( D3DXVECTOR2 )`).
+Never resize it. The skin gives l8 w202 h40; the top goes to where the list
+starts, and the list shifts down by the height plus a gap. Its right edge lands
+where the scrollbar begins, so the button fills the box and the bar sits below
+it, untouched.
+
+**Also disproved along the way**, so it does not get re-argued: `CheckProtectSize`
+only ever grows a rect, never shrinks one, so it narrows nothing; and
+`AlignSubControlEX`'s size branches are commented out, so that function no
+longer resizes anything at all.
+
+**And the scrollbar:** it carries UI_FLAG_RIGHT | UI_FLAG_YSIZE. A rect set on
+it survives one frame and is then overwritten - top 0, sizeY the window's
+height - so it re-stretched over the whole panel and through the points row.
+Nothing may reposition it; the thumb is already sized from the list's own
+visible-line count on every refresh.
+
+**Measured from the client, which is what finally separated "wrong number" from
+"the art does not follow the number":**
+
+    SHOPRECT buy  local l8  t453 w202 h40 | global l0 t0 w73 h40
+    SHOPRECT list local l13 t29  w202 h370 | window w615 h547
+
+---
+
 ## 2026-09-16 (6) — Black screen on coming back from the browser; เติมเงิน moved and resized
 
 The user: "when I click เติมเงิน it goes to browser but when I go back to the
