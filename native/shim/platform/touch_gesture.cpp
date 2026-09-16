@@ -3,6 +3,7 @@
 //  when each rule was worked out on a device, and they are kept because each
 //  one records a bug that is easy to reintroduce.
 #include "touch_gesture.h"
+#include "ran_plat.h"
 
 #include <time.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@ namespace {
 struct TouchGesture {
     bool    active  = false;
     bool    pressed = false;    // a button is down for this touch
+    bool    moved   = false;    // travelled far enough that this is not a hold
     int     button  = 0;        // which one
     int     x = 0, y = 0;       // where it started
     int64_t downMs  = 0;
@@ -46,6 +48,21 @@ const int64_t kLongPressMs = 450;
 //  instead of closing it.
 const int kDragSlop = 30;
 
+//  Movement that rules out a hold, well before it counts as a drag.
+//
+//  The hold used to fire on time alone: hold still for 450 ms and the right
+//  button goes down wherever the finger is. Turning the camera slowly does not
+//  cover 30 px in 450 ms, so the hold fired first - and with a crowd on screen
+//  the finger is almost always over another player, so dragging to look around
+//  opened that player's menu instead. The two gestures start identically and
+//  only movement tells them apart, so any real movement now cancels the hold
+//  and leaves the touch to become a drag when it crosses kDragSlop.
+//
+//  Below the resting wander a fingertip shows anyway (the contact patch shifts
+//  several pixels without the finger moving), or a genuine long press would
+//  stop working.
+const int kHoldSlop = 10;
+
 int64_t nowMs() {
     struct timespec ts;
     clock_gettime ( CLOCK_MONOTONIC, &ts );
@@ -61,6 +78,19 @@ int64_t nowMs() {
 void gesturePress ( int button ) {
     g_gesture.pressed = true;
     g_gesture.button  = button;
+
+    //  One line per touch, and the only place that says which of the three
+    //  gestures a touch turned into. Reading it off the screen does not work:
+    //  a tap on a player and a long press on a player open menus that look the
+    //  same in a screenshot, and a crowd of moving characters swamps any
+    //  attempt to see the camera turn by comparing frames.
+    RanPlat_Log ( RANLOG_INFO, "RanTouch",
+                  "GESTURE %s at (%d,%d) after %dms, moved=%d",
+                  button == 0 ? "left(tap/drag)" :
+                  button == 1 ? "right(hold)"    : "middle(camera)",
+                  g_gesture.x, g_gesture.y,
+                  (int)( nowMs () - g_gesture.downMs ), g_gesture.moved ? 1 : 0 );
+
     RanInput_PointerMove ( g_gesture.x, g_gesture.y );
     RanInput_PointerButton ( button, 1 );
 }
@@ -71,6 +101,7 @@ extern "C" void RanGesture_SetImeActive ( int active ) { g_imeActive = ( active 
 
 extern "C" void RanGesture_Tick ( void ) {
     if (!g_gesture.active || g_gesture.pressed) return;
+    if (g_gesture.moved) return;        // a drag in progress, not a hold
     if (nowMs() - g_gesture.downMs < kLongPressMs) return;
     gesturePress ( 1 );                 // right
 }
@@ -94,6 +125,7 @@ extern "C" void RanGesture_Down ( int x, int y ) {
     //  and tooltips.
     g_gesture.active  = true;
     g_gesture.pressed = false;
+    g_gesture.moved   = false;
     g_gesture.x       = x;
     g_gesture.y       = y;
     g_gesture.downMs  = nowMs();
@@ -119,6 +151,11 @@ extern "C" void RanGesture_Move ( int x, int y ) {
 
     if (g_gesture.active && !g_gesture.pressed) {
         const int dx = x - g_gesture.x, dy = y - g_gesture.y;
+        //  Past the resting wander: whatever this turns out to be, it is not a
+        //  long press. Noted before the drag test, because the gap between the
+        //  two thresholds is exactly where a slow camera drag used to be
+        //  mistaken for a hold.
+        if (dx * dx + dy * dy > kHoldSlop * kHoldSlop) g_gesture.moved = true;
         if (dx * dx + dy * dy > kDragSlop * kDragSlop) {
             //  Moved far enough to be a drag. What that means depends on what
             //  is under the finger:

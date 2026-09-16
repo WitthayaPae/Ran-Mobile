@@ -56,9 +56,10 @@ done
 wait_log "=== boot complete ===" 240 || exit 1
 sleep 18
 
-t 1229 708 4                 # server row
-t 1681 708 3                 # channel
-t 1792 919 8                 # connect
+#  No server row, no channel, no connect: the mobile build picks the emptiest
+#  server and a channel that is not full by itself and goes straight to the
+#  login page (CSelectServerPage::MobileAutoEnter). Tapping here now lands on
+#  the login page instead, which typed the id into nothing.
 
 t 1340 595 1                 # ID field
 "$A" -s "$D" shell input text "$USER"; sleep 1

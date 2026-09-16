@@ -12,6 +12,96 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (4) — Three touch/login complaints: close buttons, camera drag, server select
+
+The user, in one sitting: "the close btn of every window it's so hard to click
+on mobile"; "when I pres on the screen and drag to rotate the camera but too
+many char on the screen and I try to press and move the camera it's overlaping
+with the long press on other player"; "in the login page we do not need the
+select server just straight to login page that insert user and password".
+
+### Close buttons: the pad existed, nothing used it
+
+`CUIControl::MouseUpdate` already has a `RAN_MOBILE` branch that inflates a
+control's hit rect by `m_fTouchPad`. Two controls used it - the chat bars, at
+18. A close button had none, so its tap target was exactly its art: measured
+off the inventory window on LDPlayer, the glyph is **x 2458..2474, y 138..147**,
+which at scale 2 is about **8 x 5 logical pixels**. That is smaller than a
+fingertip, and it is the control every player reaches for.
+
+`SetTouchPad ( 12.0f )` in `CUIWindow::CreateCloseButton` (every standard
+window) and in the item and skill tooltips, which build their own close
+buttons rather than going through it. 12 and not 18: the button sits in the
+top-right corner, and a pad reaching further starts eating the title bar, which
+is what the window is dragged by. The art does not move - only the test.
+
+**Verified:** tapped (2466,163), eight logical pixels BELOW the art, outside
+anything drawn. The window's top frame line went from 54/54 bright pixels to
+0/54 - it closed.
+
+### Camera drag opened a player's menu
+
+`RanGesture_Tick` fired the long press on elapsed time alone: 450 ms after
+touch-down the right button went down wherever the finger was, with no
+reference to whether it had moved. Turning the camera slowly does not cover the
+30 px drag slop in 450 ms, so the hold always won that race - and with a crowd
+on screen the finger is nearly always over another player, so dragging to look
+around opened that player's menu instead.
+
+The two gestures start identically and only movement separates them, so any
+real movement (`kHoldSlop`, 10 px - below the wander a resting fingertip shows
+anyway) now cancels the hold and leaves the touch to become a drag when it
+crosses `kDragSlop`.
+
+**Verified, and only after three bad tests.** Screenshots cannot answer this:
+a 20-logical-px swipe is indistinguishable from a tap (both open a menu), an
+ESC I sent myself put the system menu over a run, and a pixel diff of the world
+is useless with 200 fake players walking - no-input drift measured 45.9%
+against 46.9% for a drag. So `gesturePress` now logs which gesture a touch
+became. The two runs that settle it:
+
+    slow drag    GESTURE middle(camera) at (450,300) after 965ms, moved=1
+    still press  GESTURE right(hold)    at (450,300) after 451ms, moved=0
+
+The drag rotates the camera (the old code would have said `right(hold)` at
+450 ms), and a still finger still long-presses on the deadline. The log line
+stays: it is one line per press, and it is the only thing that can tell these
+three gestures apart after the fact.
+
+### Server select is driven, not skipped
+
+Thailand (and `EMSERVICE_DEFAULT`) set `m_bCHANNEL`, so the flow is server list
+-> channel list -> connect. That page is not decoration: selecting a channel is
+what calls `DxGlobalStage::SetChannel`, stores the group and channel through
+`SetConnectServerInfo` for every later login message, and opens the game-server
+connection. Jumping to the login page without it would reach the password box
+and fail at the first packet.
+
+`CSelectServerPage::MobileAutoEnter`, called from `Update` once the login
+server has answered `SndReqServerInfo`: take row 0 (the list is sorted by
+population, so that is the emptiest), `LoadChannel`, take the first channel
+whose `m_nServerState` is not `SERVER_NOVACANCY`, `Login()`. The same
+functions in the same order as the two taps. One shot - if the connection
+fails, its modal stands rather than reconnecting every frame.
+
+The row index and the channel number are not the same thing: `LoadChannel`
+adds a row only for channels that exist, `m_nServerState` is indexed by channel
+number, and `GetSelected` returns a row. The loop counts rows exactly as
+`LoadChannel` does.
+
+**Verified:** the client boots to the login box - ID, Pass, and the Thai
+buttons - with no server or channel page.
+
+`ld-login.sh` had three hardcoded taps for the server row, channel and connect.
+They now land on the login page, so they are gone (`ld-login.sh.bak` keeps the
+old one). The first patch attempt matched zero times and its assertion stopped
+it - the file is CRLF.
+
+**Builds:** x86_64 and arm64-v8a 0 errors, MSVC `ServerField` 0 errors - the
+`SOURCE` edits are all `RAN_MOBILE`-guarded and the server build still stands.
+
+---
+
 ## 2026-09-16 (3) — iPhone crashed entering the world: decoded textures were kept forever
 
 The user: "the problem now look at the log on iPhone because I entry the game
