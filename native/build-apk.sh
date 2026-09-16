@@ -37,6 +37,28 @@ for A in $ABIS; do
   cp "$SO" "$OUT/lib/$A/"
   cp "$STL" "$OUT/lib/$A/"
 
+  #  Ship the library without its debug info.
+  #
+  #  The build is RelWithDebInfo and the APK stores .so uncompressed, so the
+  #  debug sections ARE the download: 168 MB of libran.so on arm64 is 153 MB of
+  #  DWARF, and the APK came to 331 MB. Every code change republishes that whole
+  #  APK as one blob, so every player downloaded 331 MB for a one-line fix -
+  #  which is why patching felt slow on both platforms.
+  #
+  #  Stripped here, in the staging copy only. out/$A/libran.so keeps everything,
+  #  and the DWARF is also split into out/$A/libran.debug so a crash address
+  #  from a shipped build can still be symbolised - llvm-symbolizer and addr2line
+  #  take the .debug file, and the .ips reports name the same build.
+  NDKBIN="$U/NDK/toolchains/llvm/prebuilt/windows-x86_64/bin"
+  if [ -x "$NDKBIN/llvm-strip.exe" ]; then
+    "$NDKBIN/llvm-objcopy.exe" --only-keep-debug "$SO" "$HERE/out/$A/libran.debug" 2>/dev/null
+    "$NDKBIN/llvm-strip.exe" --strip-debug "$OUT/lib/$A/libran.so"
+    RAW=$(stat -c%s "$SO"); CUT=$(stat -c%s "$OUT/lib/$A/libran.so")
+    echo "  + $A    $(awk -v r=$RAW -v c=$CUT 'BEGIN{printf "%.1f -> %.1f MB stripped", r/1048576, c/1048576}')"
+  else
+    echo "  (no llvm-strip - shipping $A with debug info)"
+  fi
+
   #  An ASan build needs its runtime beside the library, and a wrap.sh, which
   #  Android runs in place of the app for a debuggable APK. That is the only
   #  way in without root.
