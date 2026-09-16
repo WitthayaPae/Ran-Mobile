@@ -12,6 +12,68 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (5) — Item shop: เติมเงิน opens the browser, gift buttons say ส่ง
+
+The user: "in the item shop we should add btn เติมเงิน that when click it will
+open the link https://ran-legacy-m.com/topup/ in user phone default browser",
+and "the btn ของขวัญ and ส่งของขวัญ change both to ส่ง".
+
+### There was no way to open a link at all
+
+`CInnerInterface::OpenWebLink` already exists, but its two paths are both dead
+on a phone: the embedded window is a Win32 web control the port does not have,
+and the fallback is `ShellExecute`, which `shim/win/windows.h` stubs to return
+NULL. So this needed a real primitive, not a caller.
+
+`RanPlat_OpenURL` in `ran_plat.h`, implemented per platform:
+
+  * Android - JNI into a new `RanActivity.ranOpenUrl`, which does ACTION_VIEW
+    with FLAG_ACTIVITY_NEW_TASK inside `runOnUiThread`. The hop is required:
+    `startActivity` from the game thread is refused, and the flag is required
+    because the link leaves this task for another app's.
+  * iOS - `openURL:options:completionHandler:` on the main queue. The plain
+    `openURL:` is gone from the SDKs this builds against.
+
+The button is `ITEM_SHOP_TOPUP_BUTTON` in `CItemShopWindow` - which is the
+*reworked* shop, registered under `ITEMSHOP_WINDOW_RN`. `ITEMSHOP_WINDOW` is a
+different class (`CItemShopWindowWeb`), and testing that one would have proved
+nothing.
+
+### The labels are CP874 bytes in the source, not new gameword entries
+
+`ID2GAMEWORD` has no "เติมเงิน" and no bare "ส่ง", and the word table ships
+packed inside Gui.rcc - a new index means repacking that file and shipping it
+in a patch for three words. The literals are CP874, the encoding the UI font
+and every other client string use: `byte = codepoint - 0x0E00 + 0xA0`, so
+ส่ง = `\xCA\xE8\xA7` and เติมเงิน = `\xE0\xB5\xD4\xC1\xE0\xA7\xD4\xB9`. A UTF-8
+literal compiles just as cleanly and draws as Latin rubbish.
+
+The ส่ง change is `RAN_MOBILE`-only, with `#else` branches keeping the PC's
+full words. Written unguarded first, which would have changed the PC client
+too - the MSVC build would not have caught it, because it compiles either way.
+
+**Verified on LDPlayer**, and only after the first two taps did nothing:
+
+    GESTURE left(tap/drag) at (660,707)
+    ActivityTaskManager: START u0 {act=android.intent.action.VIEW
+        dat=https://ran-legacy-m.com/... cmp=com.android.chrome/...IntentDispatcher}
+    ActivityManager: Start proc 5559:com.android.chrome
+
+Chrome opens on the link. Both gift buttons read ส่ง.
+
+**Why the first taps were silent: the chat window overlaps the shop's
+bottom-left panel** and was taking the clicks. The button only fired once the
+shop had focus and drew on top. This is not new - the cart's own ซื้อ and ส่ง
+sit in the same covered strip - but it means a player whose chat is in the
+default place has to raise the shop first. Worth moving those three buttons out
+of that strip; not done here.
+
+**Builds:** x86_64, arm64-v8a and MSVC ServerField all 0 errors. Both libs carry
+the URL, `ranOpenUrl`, its JNI signature and both CP874 labels; the packaged
+APK's classes.dex carries `ranOpenUrl`.
+
+---
+
 ## 2026-09-16 (4) — Three touch/login complaints: close buttons, camera drag, server select
 
 The user, in one sitting: "the close btn of every window it's so hard to click

@@ -50,6 +50,14 @@ const char *RanPlat_FontFallback ( void );      //  full path, ready to open
 //  Is the flag set? (the file exists)
 int         RanPlat_DiagExists ( const char *name );
 
+//  Open a link in the phone's own browser.
+//
+//  The client's own path is an embedded web control with ShellExecute as the
+//  fallback, and the port has neither - the control is Win32 and ShellExecute is
+//  a stub that returns NULL. Each platform layer implements this instead:
+//  ACTION_VIEW on Android, openURL: on iOS.
+void        RanPlat_OpenURL ( const char *url );
+
 //  Watch the resident size and, if it runs away, abort the thread that armed
 //  this - so the runaway loop shows up as a backtrace instead of a SIGKILL.
 void        RanPlat_WatchdogArm ( int limitMB );

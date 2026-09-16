@@ -2,6 +2,8 @@ package com.ran.launcher;
 
 import android.app.NativeActivity;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.Log;
@@ -109,6 +111,31 @@ public class RanActivity extends NativeActivity {
             if (imm != null) {
                 imm.restartInput(mIme);
                 imm.showSoftInput(mIme, InputMethodManager.SHOW_IMPLICIT);
+            }
+        }});
+    }
+
+    /*  Hand a link to whatever browser the phone uses.
+     *
+     *  ACTION_VIEW rather than an in-game browser: the client's embedded web
+     *  window is a Windows control the port does not have, and its fallback is
+     *  ShellExecute, which the shim stubs out. A top-up page also wants the
+     *  real browser anyway - it is where the player is already signed in to
+     *  their bank or wallet app.
+     *
+     *  NEW_TASK because the link opens from an Activity context into another
+     *  app's task; without it Android refuses the start.
+     */
+    public void ranOpenUrl(final String url) {
+        runOnUiThread(new Runnable() { public void run() {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+            } catch (Exception e) {
+                //  No browser, or a malformed link: say so rather than die. The
+                //  button is not worth a crash.
+                Log.e("RanActivity", "ranOpenUrl failed: " + e);
             }
         }});
     }

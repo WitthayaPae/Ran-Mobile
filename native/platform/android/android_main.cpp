@@ -310,6 +310,33 @@ Java_com_ran_launcher_RanActivity_nativeCommitText(JNIEnv *env, jclass, jstring 
     }
 }
 
+//  Hand a link to the browser, through the activity.
+//
+//  Same shape as the keyboard calls above: attach to the VM, find the method on
+//  the activity object, call it. The Java side does the runOnUiThread hop, which
+//  is required - startActivity from the game thread is not allowed.
+extern "C" void RanPlat_OpenURL(const char *url) {
+    if (!url || !*url || !g_app || !g_app->activity) return;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+
+    jobject act  = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+    if (cAct) {
+        jmethodID m = env->GetMethodID(cAct, "ranOpenUrl", "(Ljava/lang/String;)V");
+        if (m) {
+            jstring js = env->NewStringUTF(url);
+            if (js) {
+                env->CallVoidMethod(act, m, js);
+                env->DeleteLocalRef(js);
+            }
+        }
+        env->DeleteLocalRef(cAct);
+    }
+    g_app->activity->vm->DetachCurrentThread();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_ran_launcher_RanActivity_nativeEnter(JNIEnv *, jclass) {
     //  0x1C is DIK_RETURN. The client wants the same thing a hardware Return

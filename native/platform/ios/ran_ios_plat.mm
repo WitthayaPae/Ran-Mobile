@@ -10,6 +10,26 @@
 #ifdef __APPLE__
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+//  Open a link in Safari (or whatever the phone's default browser is).
+//
+//  openURL:options:completionHandler: rather than the deprecated openURL: - the
+//  old one is gone in the SDKs this builds against. Dispatched to the main queue
+//  because UIApplication is main-thread only and this is called from the game
+//  thread.
+extern "C" void RanPlat_OpenURL ( const char *url )
+{
+    if ( !url || !*url )	return;
+
+    NSString *s = [NSString stringWithUTF8String:url];
+    NSURL *u = s ? [NSURL URLWithString:s] : nil;
+    if ( !u )	return;
+
+    dispatch_async ( dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+    } );
+}
 #include "../../shim/platform/ran_plat.h"
 
 static NSString *EnsureDir(NSSearchPathDirectory what, NSString *leaf)
