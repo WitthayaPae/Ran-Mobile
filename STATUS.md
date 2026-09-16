@@ -45,9 +45,13 @@ invisible on the emulator BY CONSTRUCTION, and the tablet was unreachable.
 Anything touching text input has to be tested on a real device with a real
 keyboard; the emulator can only prove the key-event path.
 
-Verified by the user on an Android phone. Not shipped: the APK was rebuilt
-locally (still versionCode 77), so publishing this needs a MAKE-PATCH bump to
-versionCode 78 / store 446.
+Verified by the user on an Android phone - the only place it can be verified.
+
+Published as store 446, versionCode 78 "V059": the staged classes.dex contains
+mComposing and dropComposing, so the blob carries the fix rather than a re-wrap
+of the old one. minIos stays 77 (no iOS change; iOS types through a UITextField
+and has never had this bug - UIKit owns the composition there). Upload set is
+one 44.0 MB blob plus the manifest and ios/.
 
 ## 2026-09-16 (8) — Patching was slow because every patch shipped 153 MB of DWARF; iOS keyboard had no globe key
 
