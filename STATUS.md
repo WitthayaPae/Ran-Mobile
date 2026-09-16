@@ -12,6 +12,51 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-16 (8) — Patching was slow because every patch shipped 153 MB of DWARF; iOS keyboard had no globe key
+
+Two complaints, one session: "the patch is so slow? why", then "even the android
+is slow patching" - so not an iOS-only problem, and not the 11 MB .ipa either.
+
+**The APK was 331.6 MB and 92% of it was debug info.** The build is
+RelWithDebInfo and the APK stores .so uncompressed (Android maps the library
+straight out of the zip), so the DWARF *is* the download: libran.so was 168.5 MB
+on arm64 and 155.2 MB on x86_64, of which ~153 MB and ~139 MB were debug
+sections. The APK is one content-addressed blob, so **every** code change - a
+one-line fix included - republished all 331.6 MB to every player on both
+platforms. That is the whole of "slow patching"; the CDN was never the problem.
+
+build-apk.sh now splits the debug info to out/<abi>/libran.debug and runs
+llvm-strip --strip-debug on the *staged* copy only. out/<abi>/libran.so keeps
+everything, so a crash address from a shipped build still symbolises -
+llvm-symbolizer and addr2line take the .debug file.
+
+    APK        331.6 -> 44.0 MB
+    arm64 lib  168.5 -> 18.2 MB      x86_64 lib  155.2 -> 17.8 MB
+
+Verified on the emulator, not just weighed: installed the stripped APK, logged
+in, world renders at 60 fps with textures, Thai text, HUD and minimap intact.
+Patch store 444 / versionCode 77 "V058" built on it; the old 331.6 MB blob was
+pruned.
+
+**The iOS keyboard could not switch to English** because RanViewController
+conformed to UIKeyInput and nothing else. UIKeyInput is the *minimal* text
+surface: it is not UITextInput, so the system has no text input to attach an
+input mode to and the keyboard opens with no globe key - whatever language it
+came up in is the only one reachable. Nothing regressed; the limitation shipped
+with the original iOS port, which is why searching recent changes found nothing.
+
+The fix is a zero-sized RanIMEField (a real UITextField, so a real UITextInput)
+added to the view hierarchy and made first responder instead of the controller.
+It holds one zero-width sentinel character, because iOS delivers no deletion to
+an already-empty field and this field is always empty of meaning - the client's
+CUIEditBox owns the buffer. Every edit is turned into the same RanIME_InsertUtf8
+/ RanIME_Backspace / RanInput_KeyTap(0x1C) call the old path made and then
+refused, which leaves the sentinel in place for the next backspace. Smart
+quotes and dashes are off: CP874 has no room for curly punctuation.
+
+Android is untouched - it has its own RanIME_* in android_main.cpp. Not yet
+verified on device: iOS builds run in CI, so this needs 1.0.76 on the phone.
+
 ## 2026-09-16 (7) — A text button's width is UI_FLAG_XSIZE, not the rect you give it
 
 Five attempts at one button, and the first four were each wrong for a different

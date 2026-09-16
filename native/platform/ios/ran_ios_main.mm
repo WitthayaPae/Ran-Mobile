@@ -80,12 +80,19 @@ static int  g_imeInsetPerMille = 0;
 + (Class)layerClass { return [CAEAGLLayer class]; }
 @end
 
-@interface RanViewController : UIViewController <UIKeyInput>
+//  The keyboard responder - see the keyboard section further down for why the
+//  client types into a UITextField and not into the view controller itself.
+@interface RanIMEField : UITextField <UITextFieldDelegate>
+@end
+
+@interface RanViewController : UIViewController
+@property (nonatomic, strong) RanIMEField   *imeField;
 @property (nonatomic, strong) CADisplayLink *link;
 @property (nonatomic, assign) BOOL           glReady;
 @property (nonatomic, assign) BOOL           booted;
 @property (nonatomic, assign) BOOL           bootFailed;
 @property (nonatomic, assign) CFTimeInterval lastTick;
+- (void)ensureImeField;
 @end
 
 @implementation RanViewController
@@ -383,33 +390,83 @@ static int  g_imeInsetPerMille = 0;
 
 //  --------------------------------------------------------------- keyboard
 //
-//  What RanActivity's ImeView is, in UIKit. UIKeyInput on the first responder
-//  is what raises a keyboard, and the text goes back through the same C entry
+//  What RanActivity's ImeView is, in UIKit: an off-screen UITextField that is
+//  the real first responder. The typed text goes back through the same C entry
 //  points the hardware-key path uses.
+//
+//  This was UIKeyInput on the view controller itself, which raises a keyboard
+//  in three lines and is why it was written that way. But UIKeyInput is the
+//  MINIMAL text surface - it is not UITextInput, so the system has no text
+//  input to attach an input mode to, and the keyboard comes up with no globe
+//  key: whatever language it opened in is the only one reachable, which is why
+//  Thai players could not get to English. A UITextField is a full UITextInput
+//  and gets language switching for free.
+//
+//  The field holds no meaning - the client's CUIEditBox owns the real buffer.
+//  It exists to be typed into and to report what was typed.
 
-- (BOOL)canBecomeFirstResponder { return YES; }
-- (BOOL)hasText { return YES; }
-
-- (void)insertText:(NSString *)text
+- (void)ensureImeField
 {
-    if (text.length == 0) return;
-    //  Return sends the line: the client wants the key down on a poll plus the
-    //  latch RanInput_TakeEnter reports, and BasicChatRightBody needs both
-    //  before it will send. Same reason nativeEnter exists on Android.
-    if ([text isEqualToString:@"\n"]) { RanInput_KeyTap ( 0x1C ); return; }
-    RanIME_InsertUtf8 ( text.UTF8String );
+    if (self.imeField) return;
+    RanIMEField *f = [[RanIMEField alloc] initWithFrame:CGRectZero];
+    //  In the hierarchy, because a field outside a window cannot become first
+    //  responder - but zero-sized, so no touch can ever land on it.
+    [self.view addSubview:f];
+    self.imeField = f;
 }
 
-//  The same call the Android IME's deleteSurroundingText makes, not a DIK_BACK
-//  key: the client's edit buffer holds UTF-8 and a backspace has to remove one
-//  whole character, which only RanIME_Backspace knows how to do.
-- (void)deleteBackward { RanIME_Backspace (); }
+@end
 
-//  RanIME_SetNumeric: the client asks for a digits-only pad on the port field.
-- (UIKeyboardType)keyboardType { return g_imeNumeric ? UIKeyboardTypeNumberPad
-                                                     : UIKeyboardTypeDefault; }
-- (UIReturnKeyType)returnKeyType { return UIReturnKeySend; }
-- (UITextAutocorrectionType)autocorrectionType { return UITextAutocorrectionTypeNo; }
+//  One character always sits in the field. iOS delivers no deletion to an
+//  already-empty field, and this field is always empty of meaning, so without
+//  the sentinel a backspace would never arrive at all.
+static NSString * const kRanImeSentinel = @"​";
+
+@implementation RanIMEField
+
+- (instancetype)initWithFrame:(CGRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (!self) return nil;
+    self.delegate               = self;
+    self.text                   = kRanImeSentinel;
+    self.autocorrectionType     = UITextAutocorrectionTypeNo;
+    self.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.spellCheckingType      = UITextSpellCheckingTypeNo;
+    //  Smart punctuation would hand the client curly quotes and en dashes,
+    //  which CP874 has no room for.
+    self.smartQuotesType        = UITextSmartQuotesTypeNo;
+    self.smartDashesType        = UITextSmartDashesTypeNo;
+    self.smartInsertDeleteType  = UITextSmartInsertDeleteTypeNo;
+    self.returnKeyType          = UIReturnKeySend;
+    self.keyboardType           = g_imeNumeric ? UIKeyboardTypeNumberPad
+                                               : UIKeyboardTypeDefault;
+    return self;
+}
+
+//  Nothing is ever committed to the field: every edit becomes a client call and
+//  is then refused, which leaves the sentinel in place for the next backspace.
+- (BOOL)              textField:(UITextField *)field
+  shouldChangeCharactersInRange:(NSRange)range
+              replacementString:(NSString *)string
+{
+    //  The same call the Android IME's deleteSurroundingText makes, not a
+    //  DIK_BACK key: the client's edit buffer holds UTF-8 and a backspace has
+    //  to remove one whole character, which only RanIME_Backspace knows how.
+    if (string.length == 0) { RanIME_Backspace (); return NO; }
+    if ([string isEqualToString:@"\n"]) { RanInput_KeyTap ( 0x1C ); return NO; }
+    RanIME_InsertUtf8 ( string.UTF8String );
+    return NO;
+}
+
+//  Return sends the line: the client wants the key down on a poll plus the
+//  latch RanInput_TakeEnter reports, and BasicChatRightBody needs both before
+//  it will send. Same reason nativeEnter exists on Android.
+- (BOOL)textFieldShouldReturn:(UITextField *)field
+{
+    RanInput_KeyTap ( 0x1C );
+    return NO;
+}
 
 @end
 
@@ -420,13 +477,16 @@ static __weak RanViewController *g_vc = nil;
 extern "C" void RanIME_Show ( void )
 {
     RanGesture_SetImeActive ( 1 );
-    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc becomeFirstResponder]; } );
+    dispatch_async ( dispatch_get_main_queue(), ^{
+        [g_vc ensureImeField];
+        [g_vc.imeField becomeFirstResponder];
+    } );
 }
 
 extern "C" void RanIME_Hide ( void )
 {
     RanGesture_SetImeActive ( 0 );
-    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc resignFirstResponder]; } );
+    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc.imeField resignFirstResponder]; } );
 }
 
 extern "C" void RanIME_SetNumeric ( int numeric )
@@ -435,7 +495,11 @@ extern "C" void RanIME_SetNumeric ( int numeric )
     g_imeNumeric = (numeric != 0);
     //  The type is read when the keyboard is built, so an already-raised one
     //  has to be told to rebuild.
-    dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc reloadInputViews]; } );
+    dispatch_async ( dispatch_get_main_queue(), ^{
+        g_vc.imeField.keyboardType = g_imeNumeric ? UIKeyboardTypeNumberPad
+                                                  : UIKeyboardTypeDefault;
+        [g_vc.imeField reloadInputViews];
+    } );
 }
 
 //  How much of the bottom of the window the keyboard covers, in thousandths -
