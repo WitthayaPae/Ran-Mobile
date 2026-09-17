@@ -68,12 +68,23 @@ static inline float RanGL_ChooseUIScale(int panelW, int panelH) {
     //  ("now it's too small"). The tallest in-game windows are the item shop
     //  (605), rebuild (604), party (600) and inventory (598), so 640 still fits
     //  them all, at 1.842x on an iPhone 15 (1388x640).
-    const int kMinW = 1100, kMinH = 640;
+    //
+    //  A whole scale is kept whenever it leaves at least kMinHWhole rows, and
+    //  only then does the fractional fit to kMinH apply. At 1.8422 an iPhone 15
+    //  drew every one-texel frame in the interface art as 1 or 2 pixels
+    //  depending on where it fell - an icon's frame measured 3 px on its left
+    //  and 1 px on its right, with atlas neighbours bleeding in - while Android
+    //  at a whole 2x is 2 px on every side. No filter can make a 1.84-pixel
+    //  line even; only a whole scale does. 2x there leaves 589 rows, and the
+    //  handful of windows taller than that are trimmed for mobile instead
+    //  (item shop 605, rebuild 604, party 600, inventory 598). A 1080-row phone
+    //  would get 540 at 2x, too short, and keeps the fractional fit.
+    const int kMinW = 1100, kMinH = 640, kMinHWhole = 580;
     int s = 1;
     while (panelW / (s + 1) >= kMinW) ++s;
     if (s > 4) s = 4;
     float f = (float)s;
-    if (panelH / f < (float)kMinH) f = (float)panelH / (float)kMinH;
+    if (panelH / f < (float)kMinHWhole) f = (float)panelH / (float)kMinH;
     return f < 1.0f ? 1.0f : f;
 }
 //  Seconds spent inside eglSwapBuffers since the last call, and reset.
