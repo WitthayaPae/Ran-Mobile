@@ -999,6 +999,21 @@ bool g_skipPaletteUni = false;
 //  "streamsub": stream through a second ring that never maps persistently and
 //  writes with glBufferSubData, to A/B the two write paths in one session.
 bool g_streamSub   = false;
+//  "vaocache": a VAO per client vertex buffer and layout. See drawInternal.
+bool g_vaoCacheOn  = false;
+//  On the ES 3.0 path, a layout that differs only in where it reads from
+//  re-issues just the enabled attributes' pointers (see drawInternal). On by
+//  default; "nobaseonly" turns it off to A/B it.
+bool g_noBaseOnly  = false;
+//  The vertex array and context generation the last full ES 3.0 layout was
+//  written into - what makes its enables and constants still true.
+GLuint   g_layoutVao = 0xFFFFFFFFu;
+unsigned g_layoutGen = 0xFFFFFFFFu;
+unsigned long g_baseOnlyHits = 0;
+//  Why the ES 3.0 layout was re-specified, per frame: [stream|vb] x
+//  [fvf, stride, base, buffer] - several can be true at once - and the total.
+unsigned long g_respecWhy[2][4] = { { 0 } };
+unsigned long g_respecCount[2] = { 0, 0 };
 //  Vertices streamed by the draw path itself (client arrays), per report.
 unsigned long g_upCalls = 0, g_upBytes = 0;
 bool g_skipBlend   = false;   // /sdcard/ran/noblend
@@ -1078,6 +1093,8 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "cpuskin",   &g_cpuSkin,     "GPU skinning (the blend is done on the CPU instead)" },
         { "noattribformat", &g_noAttribFmt, "ES 3.1 separate attribute format" },
         { "nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
+        { "vaocache",  &g_vaoCacheOn, "NOT using a VAO per client buffer layout (on while present)" },
+        { "nobaseonly", &g_noBaseOnly, "re-issuing only pointers when just the vertex source moved" },
         { "plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
         { "reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
         { "nocull",    &g_noCull,      "face culling entirely" },
@@ -2813,7 +2830,12 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  ten attribute calls it saves, and the frame got slower with it. The
     //  cache is left in place but off, because on a real driver the trade goes
     //  the other way and this is where to turn it back on.
-    const bool kUseVaoCache = false;
+    //
+    //  An iPhone is that real driver: ES 3.0, so no separate attribute format
+    //  either, and in a crowd 11,000 of its 16,000 GL calls a frame were
+    //  attribute setup - each costume part has its own buffer, so each draw
+    //  re-specified all seven attributes. Switchable to measure it there.
+    const bool kUseVaoCache = g_vaoCacheOn;
     if (glVB && kUseVaoCache) {
         VaoKey key;
         key.vb = glVB; key.ib = glIB; key.fvf = fvf; key.stride = stride;
@@ -3044,8 +3066,66 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
             ++g_vbBinds;
         }
     } else if (layoutChanged) {
+    {
+        const int k = glVB ? 1 : 0;
+        ++g_respecCount[k];
+        if (g_gl.fvf != fvf)                  ++g_respecWhy[k][0];
+        if (g_gl.stride != stride)            ++g_respecWhy[k][1];
+        if (g_gl.vertexBase != vbBase)        ++g_respecWhy[k][2];
+        if (g_gl.vertexBuffer != layoutBuffer) ++g_respecWhy[k][3];
+    }
+    //  Only where the vertices are read from moved - the offset into a shared
+    //  buffer, or a different buffer - and the format is the one the last full
+    //  layout wrote into this same vertex array. Then which attributes are
+    //  enabled, and the constants the disabled ones read, are exactly what that
+    //  layout left: it is the only code that sets them on this array, the touch
+    //  HUD and splash write their own arrays, and nothing else sets a constant.
+    //  Only the pointers of the enabled attributes still point somewhere wrong.
+    //  Measured on the ES 3.0 path in a crowd: 84% of draws re-specified all
+    //  seven attributes (~13 calls) though only the offset or buffer changed.
+    const bool baseOnly = !g_noBaseOnly && g_gl.fvf == fvf && g_gl.stride == stride &&
+                          g_layoutVao == g_gl.vao && g_layoutGen == g_vaoGeneration;
     g_gl.fvf = fvf; g_gl.stride = stride;
     g_gl.vertexBase = vbBase; g_gl.vertexBuffer = layoutBuffer;
+
+    if (baseOnly) {
+        ++g_baseOnlyHits;
+        glVertexAttribPointer(0, preTransformed ? 4 : 3, GL_FLOAT, GL_FALSE, stride,
+                              (const void *)(intptr_t)(posOff + vbBase));
+        ++g_callsAttrib;
+        if (blendOff >= 0) {
+            glVertexAttribPointer(4, blendCount, GL_FLOAT, GL_FALSE, stride,
+                                  (const void *)(intptr_t)(blendOff + vbBase));
+            ++g_callsAttrib;
+        }
+        if (boneIdxOff >= 0) {
+            glVertexAttribPointer(6, 4, GL_UNSIGNED_BYTE, GL_FALSE, stride,
+                                  (const void *)(intptr_t)(boneIdxOff + vbBase));
+            ++g_callsAttrib;
+        }
+        if (colorOff >= 0) {
+            glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, stride,
+                                  (const void *)(intptr_t)(colorOff + vbBase));
+            ++g_callsAttrib;
+        }
+        if (normalOff >= 0) {
+            glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride,
+                                  (const void *)(intptr_t)(normalOff + vbBase));
+            ++g_callsAttrib;
+        }
+        if (uvOff >= 0) {
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride,
+                                  (const void *)(intptr_t)(uvOff + vbBase));
+            ++g_callsAttrib;
+        }
+        if (uv2Off >= 0) {
+            glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, stride,
+                                  (const void *)(intptr_t)(uv2Off + vbBase));
+            ++g_callsAttrib;
+        }
+    } else {
+    g_layoutVao = g_gl.vao;
+    g_layoutGen = g_vaoGeneration;
 
     g_callsAttrib += 10;
     glEnableVertexAttribArray(0);
@@ -3106,6 +3186,7 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     } else {
         glDisableVertexAttribArray(5);
         glVertexAttrib2f(5, 0.0f, 0.0f);
+    }
     }
 
     // Both paths end up with the same apparent winding: the UI flip and the
@@ -4216,6 +4297,12 @@ extern "C" void RanGLR_LogStats(void) {
          g_drawCalls, g_uiDraws, g_texturedDraws, g_vertsDrawn,
          g_texFullUploads, g_texUpdates, g_texUpdateBytes / 1024,
          g_vaoCreated, g_vaoHits, (unsigned)g_vaoCache.size(), glGetError());
+    LOGI("ES3.0 layout respecs per 300 frames: stream %lu (fvf %lu stride %lu base %lu buf %lu) | vb %lu (fvf %lu stride %lu base %lu buf %lu)",
+         g_respecCount[0], g_respecWhy[0][0], g_respecWhy[0][1], g_respecWhy[0][2], g_respecWhy[0][3],
+         g_respecCount[1], g_respecWhy[1][0], g_respecWhy[1][1], g_respecWhy[1][2], g_respecWhy[1][3]);
+    LOGI("ES3.0 base-only layouts per 300 frames: %lu", g_baseOnlyHits);
+    g_baseOnlyHits = 0;
+    memset(g_respecWhy, 0, sizeof(g_respecWhy)); g_respecCount[0] = g_respecCount[1] = 0;
     LOGI("into render targets: %lu draws, %lu switches, largest %dx%d (frame is %dx%d)",
          g_rtDraws, g_rtSwitches, g_rtBiggestW, g_rtBiggestH, RanGL_Width(), RanGL_Height());
     g_rtDraws = 0; g_rtSwitches = 0; g_rtBiggestW = g_rtBiggestH = 0;
