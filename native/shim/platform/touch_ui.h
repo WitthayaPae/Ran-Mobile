@@ -122,3 +122,15 @@ extern "C" int RanTouch_IsPinching(void);
 //  over the server list would only eat taps.
 extern "C" void RanTouch_SetActive(int active);
 extern "C" int  RanTouch_IsActive(void);
+
+//  The player's HUD arrangement: move, size and opacity per control group,
+//  edited on screen. Layout is kGrpCount * 4 floats (dx, dy, size, opacity).
+extern "C" void RanTouch_SetEditMode(int on);
+extern "C" int  RanTouch_IsEditMode(void);
+extern "C" int  RanTouch_GetHudLayout(float *out, int max);
+extern "C" void RanTouch_SetHudLayout(const float *in, int n);
+extern "C" int  RanTouch_HudSavedGeneration(void);
+//  Per-slot nudge for the client's skill slots, as a fraction of the surface.
+extern "C" void RanTouch_GetSkillSlotOffset(int slot, float *fx, float *fy);
+//  The editor's layer, drawn after the client's interface so it is on top.
+extern "C" void RanTouch_RenderEditTop(void);

@@ -51,6 +51,36 @@ int   g_width = 0, g_height = 0;
 //  whatever the panel is.
 float g_unit = 100.0f;
 
+//  --- player HUD layout ----------------------------------------------------
+//
+//  Every control the player can rearrange, as an adjustment on top of the
+//  layout below: an offset in layout modules (so it keeps its meaning on any
+//  panel), a size and an opacity. Zero offset, size 1 and opacity 1 is the
+//  layout as designed, which is what reset puts back. The skill arc is its own
+//  group: it hangs off the attack button, so moving the attack button moves it,
+//  and its own offset moves it relative to the button.
+enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
+       kGrpPickup, kGrpCamera, kGrpCount };
+struct HudAdj { float dx, dy, scale, alpha; };
+HudAdj g_adj[kGrpCount] = {
+    { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
+    { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
+};
+//  Multiplies the alpha of every vertex written, so a control drawn under it
+//  comes out at the player's chosen opacity without each shape knowing.
+float g_drawAlpha = 1.0f;
+//  The attack button's radius before the player's size is applied: the skill
+//  arc is sized from this and the arc's own size, not from the button's.
+float g_attackBaseR = 0.0f;
+//  Where the attack button sits before the player moved it: the skill arc hangs
+//  off this, not off the button, so moving the button leaves the slots alone.
+float g_attackBaseX = 0.0f, g_attackBaseY = 0.0f;
+//  Each skill slot's own offset, in layout modules. The slots are the client's
+//  controls - it places them on the arc and then applies these, so a player can
+//  put one skill where their thumb wants it without moving the rest.
+struct SlotAdj { float dx, dy; };
+SlotAdj g_slotAdj[RANTOUCH_MAX_SKILL_CIRCLES] = { { 0, 0 } };
+
 //  --- movement stick -----------------------------------------------------
 struct Stick {
     Vec2  centre    = { 0, 0 };     // where the ring sits
@@ -357,7 +387,7 @@ int g_n = 0;                                   //  floats written this shape
 inline void vtx(float x, float y, Col c) {
     if (g_n + kFloatsPerVert > (int)(sizeof(g_verts) / sizeof(g_verts[0]))) return;
     g_verts[g_n++] = x; g_verts[g_n++] = y;
-    g_verts[g_n++] = c.r; g_verts[g_n++] = c.g; g_verts[g_n++] = c.b; g_verts[g_n++] = c.a;
+    g_verts[g_n++] = c.r; g_verts[g_n++] = c.g; g_verts[g_n++] = c.b; g_verts[g_n++] = c.a * g_drawAlpha;
 }
 inline void begin() { g_n = 0; }
 
@@ -776,10 +806,158 @@ void layout() {
     g_buttons[7].slot   = kSlotVehicle;
     g_buttons[7].centre.x = g_vehFracX * (float) g_width;
     g_buttons[7].centre.y = g_vehFracY * (float) g_height;
+
+    //  The player's arrangement, on top of the designed positions.
+    const float W = (float)g_width, H = (float)g_height;
+    struct Clamp { static void to(Vec2 &c, float r, float W, float H) {
+        if (c.x < r) c.x = r; if (c.x > W - r) c.x = W - r;
+        if (c.y < r) c.y = r; if (c.y > H - r) c.y = H - r;
+    } };
+
+    g_stick.radius   *= g_adj[kGrpStick].scale;
+    g_stick.centre.x += g_adj[kGrpStick].dx * g_unit;
+    g_stick.centre.y += g_adj[kGrpStick].dy * g_unit;
+    Clamp::to(g_stick.centre, g_stick.radius, W, H);
+    g_stick.origin = g_stick.centre;
+    g_stick.knob   = g_stick.centre;
+
+    g_attackBaseR = g_buttons[0].radius;
+    g_attackBaseX = g_buttons[0].centre.x;
+    g_attackBaseY = g_buttons[0].centre.y;
+    const int single[5][2] = { { 0, kGrpAttack }, { 3, kGrpAuto }, { 4, kGrpPK },
+                               { 5, kGrpPickup }, { 6, kGrpCamera } };
+    for (int k = 0; k < 5; ++k) {
+        Button &b = g_buttons[single[k][0]];
+        const HudAdj &a = g_adj[single[k][1]];
+        b.radius   *= a.scale;
+        b.centre.x += a.dx * g_unit;
+        b.centre.y += a.dy * g_unit;
+        Clamp::to(b.centre, b.radius, W, H);
+    }
+
+    //  The page arrows move and scale as one pair about their midpoint.
+    {
+        const HudAdj &a = g_adj[kGrpPage];
+        Vec2 mid = { (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f,
+                     (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f };
+        const float half = (g_buttons[2].centre.y - g_buttons[1].centre.y) * 0.5f * a.scale;
+        mid.x += a.dx * g_unit;
+        mid.y += a.dy * g_unit;
+        Clamp::to(mid, half + g_buttons[1].radius * a.scale, W, H);
+        g_buttons[1].radius *= a.scale;
+        g_buttons[2].radius *= a.scale;
+        g_buttons[1].centre.x = g_buttons[2].centre.x = mid.x;
+        g_buttons[1].centre.y = mid.y - half;
+        g_buttons[2].centre.y = mid.y + half;
+    }
+}
+
+//  Which group a button belongs to, for its opacity (-1: not player-arranged).
+int groupOfButton(int i) {
+    switch (i) {
+        case 0: return kGrpAttack;
+        case 1: case 2: return kGrpPage;
+        case 3: return kGrpAuto;
+        case 4: return kGrpPK;
+        case 5: return kGrpPickup;
+        case 6: return kGrpCamera;
+        default: return -1;
+    }
 }
 
 bool hit(const Vec2 &c, float r, float x, float y) {
     return len(x - c.x, y - c.y) <= r;
+}
+
+//  --- HUD editor -----------------------------------------------------------
+bool   g_edit = false;
+int    g_editSel = -1;              //  selected group, -1 none
+int    g_editSlot = -1;             //  which skill slot, when the group is the arc
+int    g_editPtr = -1;              //  the finger dragging it
+float  g_editLastX = 0, g_editLastY = 0;
+HudAdj g_editBefore[kGrpCount];     //  for cancel
+int    g_hudSavedGen = 0;           //  bumped on save; the client polls it
+SlotAdj g_slotBefore[RANTOUCH_MAX_SKILL_CIRCLES];
+
+//  The toolbar across the top: cancel, reset all, size -, size +, opacity -,
+//  opacity +, save. Positions in surface pixels, recomputed from the unit.
+enum { kToolCancel, kToolReset, kToolSizeDn, kToolSizeUp, kToolAlphaDn, kToolAlphaUp,
+       kToolSave, kToolCount };
+void toolCircle(int t, Vec2 &c, float &r) {
+    r = g_unit * 0.26f;
+    const float step = g_unit * 0.66f;
+    //  cancel, reset | size - [value] + | opacity - [value] + | save
+    static const float slot[kToolCount] = { 0.0f, 1.0f, 2.6f, 4.4f, 5.6f, 7.4f, 9.0f };
+    const float total = 9.0f * step;
+    c.x = (float)g_width * 0.5f - total * 0.5f + slot[t] * step;
+    c.y = g_unit * 0.50f;
+}
+
+//  Where a group is, for selecting and outlining it.
+bool groupCircle(int g, Vec2 &c, float &r) {
+    switch (g) {
+        case kGrpStick:  c = g_stick.centre; r = g_stick.radius * 1.25f; return true;
+        case kGrpAttack: c = g_buttons[0].centre; r = g_buttons[0].radius * 1.15f; return true;
+        case kGrpAuto:   c = g_buttons[3].centre; r = g_buttons[3].radius * 1.35f; return true;
+        case kGrpPK:     c = g_buttons[4].centre; r = g_buttons[4].radius * 1.35f; return true;
+        case kGrpPickup: c = g_buttons[5].centre; r = g_buttons[5].radius * 1.35f; return true;
+        case kGrpCamera: c = g_buttons[6].centre; r = g_buttons[6].radius * 1.35f; return true;
+        case kGrpPage: {
+            c.x = (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f;
+            c.y = (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f;
+            r = (g_buttons[2].centre.y - g_buttons[1].centre.y) * 0.5f + g_buttons[1].radius * 1.3f;
+            return true;
+        }
+        case kGrpSkill: {
+            //  Outlined per slot in the editor; this is only its extent.
+            if (g_skillCircleCount <= 0) return false;
+            float sx = 0, sy = 0;
+            for (int i = 0; i < g_skillCircleCount; ++i) { sx += g_skillCircles[i].x; sy += g_skillCircles[i].y; }
+            c.x = sx / (float)g_skillCircleCount; c.y = sy / (float)g_skillCircleCount;
+            r = 0.0f;
+            for (int i = 0; i < g_skillCircleCount; ++i) {
+                const float d = len(g_skillCircles[i].x - c.x, g_skillCircles[i].y - c.y) + g_skillCircles[i].r * 1.3f;
+                if (d > r) r = d;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+//  The group under a finger. Small buttons first, so one sitting on top of a
+//  bigger group can still be picked; the skill slots before the stick.
+int groupAt(float x, float y) {
+    static const int order[] = { -2, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera,
+                                 kGrpAttack, kGrpStick };
+    g_editSlot = -1;
+    for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
+        const int g = order[k];
+        if (g == -2) {
+            //  A slot, not the arc: each one moves on its own.
+            for (int i = 0; i < g_skillCircleCount && i < RANTOUCH_MAX_SKILL_CIRCLES; ++i)
+                if (len(x - g_skillCircles[i].x, y - g_skillCircles[i].y) <= g_skillCircles[i].r * 1.3f) {
+                    g_editSlot = i;
+                    return kGrpSkill;
+                }
+            continue;
+        }
+        Vec2 c; float r;
+        if (groupCircle(g, c, r) && hit(c, r, x, y)) return g;
+    }
+    return -1;
+}
+
+void editDefaultsAll() {
+    for (int i = 0; i < kGrpCount; ++i) { g_adj[i].dx = g_adj[i].dy = 0; g_adj[i].scale = 1; g_adj[i].alpha = 1; }
+    for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) g_slotAdj[i].dx = g_slotAdj[i].dy = 0.0f;
+}
+
+void editEnd() {
+    g_edit = false;
+    g_editSel = -1;
+    g_editSlot = -1;
+    g_editPtr = -1;
 }
 
 }   // namespace
@@ -826,6 +1004,39 @@ int RanTouch_IsActive(void) { return g_active ? 1 : 0; }
 
 int RanTouch_PointerDown(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
+
+    //  Editing the HUD: every touch is the editor's. Nothing reaches the game,
+    //  so dragging a skill slot moves it instead of casting it.
+    if (g_edit) {
+        for (int t = 0; t < kToolCount; ++t) {
+            Vec2 c; float r;
+            toolCircle(t, c, r);
+            if (!hit(c, r * 1.2f, x, y)) continue;
+            HudAdj *a = (g_editSel >= 0) ? &g_adj[g_editSel] : NULL;
+            switch (t) {
+                case kToolCancel:
+                    memcpy(g_adj, g_editBefore, sizeof(g_adj));
+                    memcpy(g_slotAdj, g_slotBefore, sizeof(g_slotAdj));
+                    editEnd();
+                    break;
+                case kToolReset:  editDefaultsAll(); break;
+                case kToolSizeDn: if (a) { a->scale -= 0.1f; if (a->scale < 0.6f) a->scale = 0.6f; } break;
+                case kToolSizeUp: if (a) { a->scale += 0.1f; if (a->scale > 1.6f) a->scale = 1.6f; } break;
+                case kToolAlphaDn: if (a) { a->alpha -= 0.1f; if (a->alpha < 0.2f) a->alpha = 0.2f; } break;
+                case kToolAlphaUp: if (a) { a->alpha += 0.1f; if (a->alpha > 1.0f) a->alpha = 1.0f; } break;
+                case kToolSave:
+                    editEnd();
+                    ++g_hudSavedGen;
+                    break;
+            }
+            layout();
+            return 1;
+        }
+        const int g = groupAt(x, y);
+        g_editSel = g;
+        if (g >= 0) { g_editPtr = id; g_editLastX = x; g_editLastY = y; }
+        return 1;
+    }
 
     //  A window on top gets the press, not the pad.
     //
@@ -899,6 +1110,22 @@ int RanTouch_PointerDown(int id, float x, float y) {
 
 int RanTouch_PointerMove(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
+    if (g_edit) {
+        if (id == g_editPtr && g_editSel >= 0) {
+            const float mdx = (x - g_editLastX) / g_unit;
+            const float mdy = (y - g_editLastY) / g_unit;
+            if (g_editSel == kGrpSkill && g_editSlot >= 0) {
+                g_slotAdj[g_editSlot].dx += mdx;
+                g_slotAdj[g_editSlot].dy += mdy;
+            } else {
+                g_adj[g_editSel].dx += mdx;
+                g_adj[g_editSel].dy += mdy;
+            }
+            g_editLastX = x; g_editLastY = y;
+            layout();
+        }
+        return 1;
+    }
     Touch *t = findTouch(id);
     if (t) { t->x = x; t->y = y; }
 
@@ -955,6 +1182,11 @@ int RanTouch_PointerMove(int id, float x, float y) {
 
 int RanTouch_PointerUp(int id, float x, float y) {
     if (!g_inited) { removeTouch(id); return 0; }
+    if (g_edit) {
+        if (id == g_editPtr) g_editPtr = -1;
+        removeTouch(id);
+        return 1;
+    }
     int claimed = 0;
 
     if (g_stick.pointer == id) {
@@ -1172,7 +1404,7 @@ void drawIcons(float w, float h) {
     if (!g_texProg) return;
     glUseProgram(g_texProg);
     glUniform2f(uTexViewport, w, h);
-    glUniform1f(uTexAlpha, 1.0f);
+    glUniform1f(uTexAlpha, g_adj[kGrpSkill].alpha);
     glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
     for (int i = 0; i < g_iconCount; ++i) {
         SkillIcon ic = g_icons[i];
@@ -1658,6 +1890,7 @@ static unsigned long long stickSignature(const Vec2 &base) {
     MIX(g_width); MIX(g_height); MIX(g_unit);
     MIX(base.x); MIX(base.y);
     MIX(g_stick.radius); MIX(g_stick.knob.x); MIX(g_stick.knob.y);
+    MIX(g_adj[kGrpStick].alpha);
     #undef MIX
     return h;
 }
@@ -1677,9 +1910,105 @@ static unsigned long long staticSignature() {
         MIX(b.centre.x); MIX(b.centre.y); MIX(b.radius);
         MIX(b.down); MIX(b.toggled); MIX(b.slot);
     }
+    for (int i = 0; i < kGrpCount; ++i) { MIX(g_adj[i].alpha); MIX(g_adj[i].scale); }
     #undef MIX
     (void)p; (void)n;
     return h;
+}
+
+//  The editor's overlay: an outline on every group the player can arrange, a
+//  brighter one on the selected group, and the toolbar across the top.
+void drawEditor();
+void drawEditor() {
+    const float u = g_unit;
+    //  Outlines.
+    for (int i = 0; i < g_skillCircleCount && i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+        const SkillCircle &sc = g_skillCircles[i];
+        const float rr = sc.r * 1.32f;
+        if (g_editSel == kGrpSkill && g_editSlot == i) {
+            //  A thin ring, no halo: the glow read as a heavy shadow over the
+            //  control it was meant to point at.
+            drawRing(sc.x, sc.y, rr - u * 0.016f, rr, kAmber.r, kAmber.g, kAmber.b, 0.95f);
+        } else {
+            drawRing(sc.x, sc.y, rr - u * 0.018f, rr, kInk.r, kInk.g, kInk.b, 0.5f);
+        }
+    }
+    for (int g = 0; g < kGrpCount; ++g) {
+        if (g == kGrpSkill) continue;          //  outlined slot by slot above
+        Vec2 c; float r;
+        if (!groupCircle(g, c, r)) continue;
+        if (g == g_editSel) {
+            drawRing(c.x, c.y, r - u * 0.016f, r, kAmber.r, kAmber.g, kAmber.b, 0.95f);
+        } else {
+            drawRing(c.x, c.y, r - u * 0.02f, r, kInk.r, kInk.g, kInk.b, 0.55f);
+        }
+    }
+    emit();
+
+    //  Toolbar plate.
+    {
+        Vec2 c0, c1; float r;
+        toolCircle(kToolCancel, c0, r);
+        toolCircle(kToolSave, c1, r);
+        drawRect(c0.x - r * 1.5f, c0.y - r * 1.45f, (c1.x - c0.x) + r * 3.0f, r * 2.9f,
+                 0.0f, 0.0f, 0.0f, 0.55f);
+    }
+    const bool haveSel = g_editSel >= 0;
+    for (int t = 0; t < kToolCount; ++t) {
+        Vec2 c; float r;
+        toolCircle(t, c, r);
+        const bool needsSel = (t >= kToolSizeDn && t <= kToolAlphaUp);
+        const float dim = (needsSel && !haveSel) ? 0.35f : 1.0f;
+        chromeDisc(c.x, c.y, r, dim, kFace, kFaceE);
+        const Col ink = alpha(t == kToolSave ? kCyan : (t == kToolCancel ? kCrim : kInk), dim);
+        const float s = r * 0.46f, w = r * 0.09f;
+        switch (t) {
+            case kToolCancel:
+                drawCapsule(c.x - s, c.y - s, c.x + s, c.y + s, w, ink);
+                drawCapsule(c.x - s, c.y + s, c.x + s, c.y - s, w, ink);
+                break;
+            case kToolSave:
+                drawCapsule(c.x - s, c.y, c.x - s * 0.25f, c.y + s * 0.7f, w, ink);
+                drawCapsule(c.x - s * 0.25f, c.y + s * 0.7f, c.x + s, c.y - s * 0.7f, w, ink);
+                break;
+            case kToolReset:
+                drawArc(c.x, c.y, s * 0.78f, s, 0.9f, 5.6f, ink.r, ink.g, ink.b, ink.a);
+                drawTri(c.x + s * 0.55f, c.y - s * 0.72f, s * 0.42f, 1.0f, ink.r, ink.g, ink.b, ink.a);
+                break;
+            case kToolSizeDn: case kToolAlphaDn:
+                drawCapsule(c.x - s, c.y, c.x + s, c.y, w, ink);
+                break;
+            case kToolSizeUp: case kToolAlphaUp:
+                drawCapsule(c.x - s, c.y, c.x + s, c.y, w, ink);
+                drawCapsule(c.x, c.y - s, c.x, c.y + s, w, ink);
+                break;
+        }
+    }
+    //  What the - and + change, and its current value, between each pair.
+    for (int pair = 0; pair < 2; ++pair) {
+        Vec2 a, b; float r;
+        toolCircle(pair == 0 ? kToolSizeDn : kToolAlphaDn, a, r);
+        toolCircle(pair == 0 ? kToolSizeUp : kToolAlphaUp, b, r);
+        const float mx = (a.x + b.x) * 0.5f;
+        const float ly = a.y - r * 0.75f;
+        //  A square for size, a half-filled disc for opacity.
+        if (pair == 0) drawRing(mx, ly, r * 0.16f, r * 0.26f, kSteel.r, kSteel.g, kSteel.b, 0.9f);
+        else           drawDiscBottom(mx, ly, r * 0.26f, 0.5f, kSteel.r, kSteel.g, kSteel.b, 0.9f);
+        if (!haveSel) continue;
+        const float v = (pair == 0) ? g_adj[g_editSel].scale : g_adj[g_editSel].alpha;
+        int pct = (int)(v * 100.0f + 0.5f);
+        const float dh = r * 0.62f, dw = dh * 0.55f, gap = dw * 0.25f;
+        char digits[4]; int nd = 0;
+        if (pct >= 100) digits[nd++] = (char)(pct / 100);
+        digits[nd++] = (char)((pct / 10) % 10);
+        digits[nd++] = (char)(pct % 10);
+        float x = mx - (nd * dw + (nd - 1) * gap) * 0.5f;
+        for (int i = 0; i < nd; ++i) {
+            drawDigit(x, a.y - dh * 0.25f, dw, dh, digits[i], kInk.r, kInk.g, kInk.b, 1.0f);
+            x += dw + gap;
+        }
+    }
+    emit();
 }
 
 void RanTouch_Render(void) {
@@ -1735,6 +2064,7 @@ void RanTouch_Render(void) {
         emit();
         const unsigned long long ssig = stickSignature(base);
         if (ssig != g_stickSig || g_stickVerts == 0) {
+            g_drawAlpha = g_adj[kGrpStick].alpha;
             Seg saved[32];
             const int savedCount = g_segCount;
             memcpy(saved, g_segs, sizeof(saved));
@@ -1745,6 +2075,7 @@ void RanTouch_Render(void) {
             emit();                             //  closes the last segment
             g_capturing = false;
 
+            g_drawAlpha = 1.0f;
             g_stickVerts = g_bn / kFloatsPerVert;
             g_stickSegCount = g_segCount;
             memcpy(g_stickSegs, g_segs, sizeof(Seg) * (size_t)g_segCount);
@@ -1772,7 +2103,10 @@ void RanTouch_Render(void) {
             glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
         }
     } else {
+        g_drawAlpha = g_adj[kGrpStick].alpha;
         drawStickShapes(base);
+        emit();
+        g_drawAlpha = 1.0f;
     }
 
     //  The stick moves with the thumb, so it is built live - and it has to be
@@ -1792,6 +2126,7 @@ void RanTouch_Render(void) {
     //  a 33-wide icon has a half-width of 16.5 but a half-diagonal of 23.3, so a
     //  rim running from the half-width out past the diagonal hides the corners
     //  and leaves a round window. That is what turns a square slot round.
+    g_drawAlpha = g_adj[kGrpSkill].alpha;
     for (int i = 0; i < g_skillCircleCount; ++i) {
         const SkillCircle &c = g_skillCircles[i];
         //  A ring around the slot, not a mask over it.
@@ -1844,6 +2179,11 @@ void RanTouch_Render(void) {
         const Button &b = g_buttons[i];
         //  Not placed by the client yet - outside the world, or no chat.
         if (b.slot == kSlotVehicle && !g_vehShow) continue;
+        {
+            const int grp = groupOfButton(i);
+            emit();
+            g_drawAlpha = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
+        }
         //  A press shrinks the button and brightens its rim. It used to change
         //  alpha only, which is invisible against a moving scene.
         const float press = b.down ? 0.94f : 1.0f;
@@ -1898,6 +2238,7 @@ void RanTouch_Render(void) {
     }
 
         emit();                             //  closes the last segment
+        g_drawAlpha = 1.0f;
         g_capturing = false;
         g_cacheVerts = g_bn / kFloatsPerVert;
         glBindBuffer(GL_ARRAY_BUFFER, g_vboCache);
@@ -1932,6 +2273,7 @@ void RanTouch_Render(void) {
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glUniform2f(uViewport, (float)g_width, (float)g_height);
+    g_drawAlpha = g_adj[kGrpSkill].alpha;
     for (int i = 0; i < g_skillCircleCount; ++i) {
         const SkillCircle &c = g_skillCircles[i];
         if (!c.filled || c.cool <= 0.0f) continue;
@@ -1949,13 +2291,16 @@ void RanTouch_Render(void) {
     {
         const Button &bUp = g_buttons[1], &bDn = g_buttons[2];
         const float gap = (bDn.centre.y - bUp.centre.y) - (bUp.radius + bDn.radius);
+        emit();
+        g_drawAlpha = g_adj[kGrpPage].alpha;
         if (gap > 8.0f)
             drawPageLabel((bUp.centre.x + bDn.centre.x) * 0.5f,
                           (bUp.centre.y + bDn.centre.y) * 0.5f,
-                          g_unit * 0.46f, gap - 6.0f);
+                          g_unit * 0.46f * g_adj[kGrpPage].scale, gap - 6.0f);
     }
 
     emit();
+    g_drawAlpha = 1.0f;
 
     //  What the batching actually bought, once a second.
     {
@@ -2047,9 +2392,17 @@ extern "C" void RanTouch_GetAttackCircle(float *cx, float *cy, float *r) {
     //  a caller that early would otherwise divide by it.
     const float w = (g_width  > 0) ? (float)g_width  : 1.0f;
     const float h = (g_height > 0) ? (float)g_height : 1.0f;
-    if (cx) *cx = g_buttons[0].centre.x / w;
-    if (cy) *cy = g_buttons[0].centre.y / h;
-    if (r)  *r  = g_buttons[0].radius   / h;
+    //  The skill arc's own offset and size ride on top of the attack button:
+    //  moving the button carries the arc, and the arc can be moved against it.
+    //  Sized from the button's designed radius, so resizing the button alone
+    //  does not resize the arc.
+    const HudAdj &a = g_adj[kGrpSkill];
+    const float baseR = g_attackBaseR > 0.0f ? g_attackBaseR : g_buttons[0].radius;
+    const float baseX = g_attackBaseR > 0.0f ? g_attackBaseX : g_buttons[0].centre.x;
+    const float baseY = g_attackBaseR > 0.0f ? g_attackBaseY : g_buttons[0].centre.y;
+    if (cx) *cx = (baseX + a.dx * g_unit) / w;
+    if (cy) *cy = (baseY + a.dy * g_unit) / h;
+    if (r)  *r  = baseR * a.scale / h;
 }
 
 //  The tray owns the tab index; the overlay only draws it.
@@ -2082,3 +2435,102 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot) {
     }
     return 0;
 }
+
+//  --- HUD arrangement API -------------------------------------------------
+
+//  Enter or leave the editor. Entering snapshots the arrangement for cancel and
+//  releases anything held, so no stick or button stays down under the editor.
+extern "C" void RanTouch_SetEditMode(int on) {
+    if (on && !g_edit) {
+        memcpy(g_editBefore, g_adj, sizeof(g_adj));
+        memcpy(g_slotBefore, g_slotAdj, sizeof(g_slotAdj));
+        g_stick.pointer = -1; g_stick.held = false; g_stick.magnitude = 0.0f;
+        g_stick.knob = g_stick.origin = g_stick.centre;
+        for (int i = 0; i < kButtonCount; ++i) { g_buttons[i].pointer = -1; g_buttons[i].down = false; g_buttons[i].pressedEdge = false; }
+        for (int i = 0; i < kMaxPointers; ++i) g_touch[i].id = -1;
+        g_pinch.a = g_pinch.b = -1;
+        g_edit = true;
+        g_editSel = -1;
+    } else if (!on && g_edit) {
+        editEnd();
+    }
+}
+
+extern "C" int RanTouch_IsEditMode(void) { return g_edit ? 1 : 0; }
+
+//  The arrangement as kGrpCount * 4 floats: dx, dy, size, opacity per group.
+extern "C" int RanTouch_GetHudLayout(float *out, int max) {
+    const int n = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
+    if (!out || max < n) return n;
+    for (int i = 0; i < kGrpCount; ++i) {
+        out[i * 4]     = g_adj[i].dx;    out[i * 4 + 1] = g_adj[i].dy;
+        out[i * 4 + 2] = g_adj[i].scale; out[i * 4 + 3] = g_adj[i].alpha;
+    }
+    for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+        out[kGrpCount * 4 + i * 2]     = g_slotAdj[i].dx;
+        out[kGrpCount * 4 + i * 2 + 1] = g_slotAdj[i].dy;
+    }
+    return n;
+}
+
+//  Applies a saved arrangement. Values out of range are the ones a damaged or
+//  hand-edited file would carry, so each is clamped rather than trusted.
+extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
+    if (!in || n < kGrpCount * 4) return;
+    for (int i = 0; i < kGrpCount; ++i) {
+        float dx = in[i * 4], dy = in[i * 4 + 1], sc = in[i * 4 + 2], al = in[i * 4 + 3];
+        if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
+        if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
+        if (!(sc >= 0.6f && sc <= 1.6f)) sc = 1.0f;
+        if (!(al >= 0.2f && al <= 1.0f)) al = 1.0f;
+        g_adj[i].dx = dx; g_adj[i].dy = dy; g_adj[i].scale = sc; g_adj[i].alpha = al;
+    }
+    if (n >= kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2) {
+        for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+            float dx = in[kGrpCount * 4 + i * 2], dy = in[kGrpCount * 4 + i * 2 + 1];
+            if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
+            if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
+            g_slotAdj[i].dx = dx; g_slotAdj[i].dy = dy;
+        }
+    }
+    if (g_inited) layout();
+}
+
+//  Where the client should put skill slot i, as a fraction of the surface on
+//  top of the arc it computed. The slots are its controls, not the overlay's.
+extern "C" void RanTouch_GetSkillSlotOffset(int i, float *fx, float *fy) {
+    if (fx) *fx = 0.0f;
+    if (fy) *fy = 0.0f;
+    if (i < 0 || i >= RANTOUCH_MAX_SKILL_CIRCLES || g_width <= 0 || g_height <= 0) return;
+    if (fx) *fx = g_slotAdj[i].dx * g_unit / (float)g_width;
+    if (fy) *fy = g_slotAdj[i].dy * g_unit / (float)g_height;
+}
+
+//  The editor's own layer, drawn AFTER the client's interface.
+//
+//  The overlay itself is drawn under the interface - that is what keeps the
+//  pad behind the game's windows - so the editor's toolbar came out behind
+//  them too. The client calls this once more at the end of its own render.
+extern "C" void RanTouch_RenderEditTop(void) {
+    if (!g_inited || !g_edit || !g_prog) return;
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform2f(uViewport, (float)g_width, (float)g_height);
+    g_drawAlpha = 1.0f;
+    drawEditor();
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    RanGLR_InvalidateStateCache();
+}
+
+//  Changes each time the player saves in the editor, so the client knows to
+//  write the arrangement to its options.
+extern "C" int RanTouch_HudSavedGeneration(void) { return g_hudSavedGen; }
+
