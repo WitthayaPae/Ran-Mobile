@@ -12,6 +12,40 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-17 (1) — Phone hot after 5 minutes: the Android frame loop had no cap
+
+Reported: "after I play for some times even 5 mins the phone is in the heat a
+lot", with the condition "not losing any performance".
+
+The Android loop is paced only by eglSwapInterval(1), so it runs at whatever the
+PANEL refreshes at - 90 or 120 Hz on a recent phone - while the shim tells the
+client the display is 60 Hz. Nothing called setFrameRate or read the refresh
+rate. Every frame above 60 is heat the player cannot see; the client and
+RanTouch_Frame step from real elapsed time, so drawing less often slows nothing.
+(iOS has the same mechanism behind the pace30 diagnostic, off by default.)
+
+android_main.cpp now paces the loop to 60 Hz with a nanosleep (not a spin),
+rebasing when behind so a slow stretch is not repaid by running flat out.
+/sdcard/ran/pacehz overrides it (0 = uncapped).
+
+Measured on LDPlayer (a 60 Hz panel, so the default cap is a no-op there):
+    default:    "frame loop paced at 60 Hz", 60.0 fps, no regression vs 59.9-60.0
+    pacehz 30:  "frame loop paced at 30 Hz", 30.3-30.4 fps, swap wait 10 ms -> 0.8 ms
+The second line is the proof the sleep does the pacing, not vsync.
+
+NOT measured: the thermal drop itself. It depends on the phone being above 60
+Hz, and no phone or tablet was reachable. On a 60 Hz phone this changes nothing
+and the heat is the per-frame work instead - 284 draws / 1,832 GL calls per
+frame on the idle login screen is the next thing to look at.
+
+Two instrument traps hit on the way, both worth knowing:
+* build-apk.sh piped through tail hid a run that packaged a STALE arm64 lib.
+  Check the APK itself (the string in lib/<abi>/libran.so), not the console.
+* Diagnostic files in /sdcard/ran are unreadable to the app unless
+  READ_EXTERNAL_STORAGE is granted: it is declared but was granted=false on
+  LDPlayer, so every diag switch silently read as absent. `pm grant
+  com.ran.native android.permission.READ_EXTERNAL_STORAGE` fixed it.
+
 ## 2026-09-16 (9) — Typing on a real Android keyboard doubled characters: a composition appends, it does not replace
 
 Reported from a phone: pressing a key twice put three characters in the field.

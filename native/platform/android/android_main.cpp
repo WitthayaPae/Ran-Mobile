@@ -925,6 +925,56 @@ extern "C" void android_main(android_app *app) {
         //  draw into, and a frame that runs anyway spends a full render on
         //  nothing and then fails its swap.
         if (state.booted && state.ready) {
+            //  Pace the loop, because nothing else does.
+            //
+            //  eglSwapInterval(1) means the loop runs at whatever the PANEL
+            //  refreshes at, and a recent phone is 90 or 120 Hz - so the same
+            //  scene costs two to four times the power it costs at 60, and the
+            //  extra frames are heat rather than anything the player can see.
+            //  That is the phone getting hot after a few minutes.
+            //
+            //  Nothing runs slower for being drawn less often: the client and
+            //  RanTouch_Frame take their step from real elapsed time, which is
+            //  the same reason the iOS pace30 switch does not slow the game.
+            //
+            //  The wait is a sleep, not a spin - a spin would burn exactly the
+            //  CPU this is meant to save. Put a number in /sdcard/ran/pacehz to
+            //  override (0 uncaps it, for an A/B against the FRAME line).
+            {
+                static int  s_hz = -1;
+                static int64_t s_next = 0;
+                if (s_hz < 0) {
+                    s_hz = 60;
+                    FILE *f = RanPlat_DiagExists("pacehz") ? RanPlat_DiagOpen("pacehz") : NULL;
+                    if (f) {
+                        char buf[16] = { 0 };
+                        if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
+                            const int v = atoi(buf);
+                            if (v >= 0 && v <= 240) s_hz = v;
+                        }
+                        fclose(f);
+                    }
+                    LOGI("frame loop paced at %d Hz%s", s_hz,
+                         s_hz ? "" : " (uncapped - pacehz 0)");
+                }
+                if (s_hz > 0) {
+                    const int64_t period = 1000 / s_hz;
+                    const int64_t now = nowMs();
+                    if (s_next && now < s_next) {
+                        struct timespec ts;
+                        const int64_t ms = s_next - now;
+                        ts.tv_sec  = (time_t)(ms / 1000);
+                        ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+                        nanosleep(&ts, NULL);
+                    }
+                    //  Rebase when we have fallen behind, so a slow patch of
+                    //  frames does not leave a debt the loop then tries to
+                    //  repay by running flat out.
+                    const int64_t after = nowMs();
+                    s_next = (s_next && after < s_next + period) ? s_next + period
+                                                                 : after + period;
+                }
+            }
             //  The overlay ages its own state here - a pressed skill slot
             //  springs back, and anything else timed does the same.
             //
