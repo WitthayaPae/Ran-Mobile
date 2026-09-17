@@ -67,6 +67,9 @@ void RanAudioSink_Pause ( int paused );
 
 const char *RanIOS_DataRoot ( void );
 void        RanIOS_InstallPlatformPaths ( void );
+
+//  Live texture and buffer memory by owner, for the MEM line.
+void RanD3D_LiveMemLine ( char *out, int cap );
 }
 
 //  Set by RanIME_SetNumeric, read when UIKit builds the keyboard.
@@ -240,6 +243,12 @@ static int  g_imeInsetPerMille = 0;
                     RanPlat_Log ( RANLOG_INFO, "RanMem",
                                   "MEM footprint %.0f MB | headroom %.0f MB",
                                   (double)vm.phys_footprint / 1048576.0, left );
+                    //  Who owns it. A crowd test died at 3,050 MB and the
+                    //  footprint alone could not say whether that was textures,
+                    //  buffers or the engine's own models and animation data.
+                    char own[200];
+                    RanD3D_LiveMemLine ( own, sizeof(own) );
+                    RanPlat_Log ( RANLOG_INFO, "RanMem", "MEM owners: %s", own );
                 }
             }
 

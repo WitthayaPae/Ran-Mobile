@@ -22,6 +22,7 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3dx9.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
 #include <vector>
+#include <atomic>
 #include <map>
 #include <algorithm>
 #include <string.h>
@@ -43,6 +44,18 @@ struct Stats {
     unsigned long texturesFreedCPU = 0;      // textures whose decoded copy was released
     unsigned long long textureBytes = 0, vbBytes = 0, ibBytes = 0;
 } g_stats;
+
+//  What is ALIVE right now, not what was ever made. g_stats only ever adds, so it
+//  cannot say where a 3 GB footprint went - an iPhone crowd test was killed at
+//  3,050 MB with ~170 players in view and nothing here could name the owner.
+//  Atomic because the loading thread creates and releases too.
+struct Live {
+    std::atomic<long long> texBytes{0};     // every mip level, as allocated for GL
+    std::atomic<long long> texCpuBytes{0};  // decoded pixels still held in RAM
+    std::atomic<long long> vbBytes{0};      // vertex buffer RAM copies
+    std::atomic<long long> ibBytes{0};      // index buffer RAM copies
+    std::atomic<long>      textures{0}, vbs{0}, ibs{0};
+} g_live;
 
 //  What the frame's draws actually are, so optimisation aims at the big bucket.
 struct DrawBuckets {
@@ -109,7 +122,9 @@ public:
     RanSurface(IDirect3DDevice9 *dev, UINT w, UINT h, D3DFORMAT fmt)
         : m_width(w), m_height(h), m_format(fmt), m_device(dev) {
         m_bits.resize(surfaceBytes(w, h, fmt));
+        g_live.texCpuBytes += (long long)m_bits.size();
     }
+    ~RanSurface() { g_live.texCpuBytes -= (long long)m_bits.size(); }
 
     HRESULT QueryInterface(REFIID, void **ppv) override { *ppv = this; AddRef(); return S_OK; }
     ULONG AddRef() override { return (ULONG)++m_ref; }
@@ -128,7 +143,10 @@ public:
     //  Storage is dropped once the pixels reach GL; a lock means the caller is
     //  about to write new ones, so it comes back empty rather than stale.
     void ensureBits() {
-        if (m_bits.empty()) m_bits.assign(surfaceBytes(m_width, m_height, m_format), 0);
+        if (m_bits.empty()) {
+            m_bits.assign(surfaceBytes(m_width, m_height, m_format), 0);
+            g_live.texCpuBytes += (long long)m_bits.size();
+        }
     }
 
     //  The region a lock said it was going to write, unioned across locks and
@@ -209,6 +227,7 @@ public:
     //  Where this texture came from. A GL texture id on its own cannot be
     //  matched to a file, which is what every texture question eventually asks.
     std::string m_srcPath;
+    long long   m_bytesAll = 0;             // all levels, counted into g_live
 
     RanTexture(IDirect3DDevice9 *dev, UINT w, UINT h, UINT levels, D3DFORMAT fmt)
         : m_format(fmt), m_device(dev) {
@@ -223,11 +242,14 @@ public:
             m_surfaces.push_back(new RanSurface(dev, mw ? mw : 1, mh ? mh : 1, fmt));
             m_surfaces.back()->m_owner = this;
             g_stats.textureBytes += surfaceBytes(mw ? mw : 1, mh ? mh : 1, fmt);
+            m_bytesAll += (long long)surfaceBytes(mw ? mw : 1, mh ? mh : 1, fmt);
             mw = mw > 1 ? mw / 2 : 1;
             mh = mh > 1 ? mh / 2 : 1;
         }
+        g_live.texBytes += m_bytesAll; ++g_live.textures;
     }
     ~RanTexture() {
+        g_live.texBytes -= m_bytesAll; --g_live.textures;
         if (m_glTex) { RanGLR_ForgetRenderTarget(m_glTex); RanGLR_DeleteTexture(m_glTex); }
         for (auto *s : m_surfaces) s->Release();
     }
@@ -374,6 +396,7 @@ public:
             if (isCompressed(m_format) || !m_srcPath.empty()) {
                 for (size_t i = 0; i < m_surfaces.size(); ++i) {
                     std::vector<BYTE> empty;
+                    g_live.texCpuBytes -= (long long)m_surfaces[i]->m_bits.size();
                     m_surfaces[i]->m_bits.swap(empty);
                     m_surfaces[i]->m_freedAfterUpload = true;
                 }
@@ -546,8 +569,13 @@ public:
     bool     m_glDirty = true;
 
     RanVertexBuffer(UINT len, DWORD usage, DWORD fvf)
-        : m_length(len), m_fvf(fvf), m_usage(usage) { m_data.resize(len); }
-    ~RanVertexBuffer() { if (m_glBuffer) RanGLR_DeleteBuffer(m_glBuffer); }
+        : m_length(len), m_fvf(fvf), m_usage(usage) {
+        m_data.resize(len); g_live.vbBytes += len; ++g_live.vbs;
+    }
+    ~RanVertexBuffer() {
+        g_live.vbBytes -= m_length; --g_live.vbs;
+        if (m_glBuffer) RanGLR_DeleteBuffer(m_glBuffer);
+    }
 
     //  The byte range the client said it was writing, unioned across locks.
     UINT m_dirtyBegin = 0, m_dirtyEnd = 0;
@@ -719,8 +747,13 @@ public:
     bool     m_glDirty = true;
 
     RanIndexBuffer(UINT len, DWORD usage, D3DFORMAT fmt)
-        : m_length(len), m_format(fmt), m_usage(usage) { m_data.resize(len); }
-    ~RanIndexBuffer() { if (m_glBuffer) RanGLR_DeleteBuffer(m_glBuffer); }
+        : m_length(len), m_format(fmt), m_usage(usage) {
+        m_data.resize(len); g_live.ibBytes += len; ++g_live.ibs;
+    }
+    ~RanIndexBuffer() {
+        g_live.ibBytes -= m_length; --g_live.ibs;
+        if (m_glBuffer) RanGLR_DeleteBuffer(m_glBuffer);
+    }
 
     UINT m_dirtyBegin = 0, m_dirtyEnd = 0;
     bool m_glCreated = false;
@@ -2334,6 +2367,17 @@ public:
 extern "C" IDirect3D9 *WINAPI Direct3DCreate9(UINT SDKVersion) {
     LOGI("Direct3DCreate9(0x%X) — shim (phase 2: headless)", SDKVersion);
     return new RanD3D9();
+}
+
+//  Live memory by owner, one line, for the platform's once-a-second MEM report.
+//  Buffers exist twice - the RAM copy counted here and the GL buffer - and on
+//  Apple's unified memory both land in the process footprint.
+extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
+    const double MB = 1048576.0;
+    snprintf(out, cap,
+             "tex %ld = %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB",
+             (long)g_live.textures, g_live.texBytes / MB, g_live.texCpuBytes / MB,
+             (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB);
 }
 
 // Lets the platform layer print a one-line summary instead of tailing a log.
