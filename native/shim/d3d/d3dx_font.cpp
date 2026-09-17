@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 
+extern "C" void RanD3D_MarkGlyphAtlas(IDirect3DTexture9 *pTex);
+
 #define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanD3DXFont", __VA_ARGS__)
 #define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanD3DXFont", __VA_ARGS__)
 
@@ -459,15 +461,22 @@ void RanD3DXFont::ensureAtlas() {
     }
     m_atlasW = ATLAS_W;
     m_atlasH = ATLAS_H;
-    // A8R8G8B8 rather than A8: the GLES backend already uploads ARGB, and the
-    // atlas is written once per new glyph, so the extra bytes cost nothing.
-    if (FAILED(m_device->CreateTexture(m_atlasW, m_atlasH, 1, 0, D3DFMT_A8R8G8B8,
+    //  A8: coverage only. Every glyph is white with its coverage as alpha and
+    //  the vertex colour tints it, so the RGB bytes were always 0xFFFFFF and
+    //  carried nothing. They were not free, though: every font has its own
+    //  atlas, 2048x2048 at a 2x UI scale, which in A8R8G8B8 is 16 MB of RAM and
+    //  16 MB more on the GPU (21 with mips) - and an in-world session holds
+    //  about thirty fonts. That was ~500 MB of an iPhone crowd test killed at
+    //  its memory limit. The GL side samples it as (1,1,1,coverage) through a
+    //  texture swizzle, so text looks exactly as it did at a quarter the size.
+    if (FAILED(m_device->CreateTexture(m_atlasW, m_atlasH, 1, 0, D3DFMT_A8,
                                        D3DPOOL_MANAGED, &m_atlas, NULL)))
         m_atlas = NULL;
     if (!m_atlas) return;
+    RanD3D_MarkGlyphAtlas(m_atlas);
     D3DLOCKED_RECT lr;
     if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
-        memset(lr.pBits, 0, (size_t)m_atlasW * m_atlasH * 4);
+        memset(lr.pBits, 0, (size_t)m_atlasW * m_atlasH);
         m_atlas->UnlockRect(0);
     }
 }
@@ -625,14 +634,12 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
 
         D3DLOCKED_RECT lr;
         if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
-            DWORD *base = (DWORD *)lr.pBits;
+            BYTE *base = (BYTE *)lr.pBits;
             for (int y = 0; y < gb.height; ++y) {
-                DWORD *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
+                BYTE *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
                 const unsigned char *src = &gb.coverage[(size_t)y * gb.width];
-                for (int x = 0; x < gb.width; ++x) {
-                    // White with the coverage as alpha; the vertex colour tints it.
-                    row[x] = ((DWORD)src[x] << 24) | 0x00FFFFFFu;
-                }
+                //  Coverage only; sampled as white with this alpha.
+                memcpy(row, src, (size_t)gb.width);
             }
             m_atlas->UnlockRect(0);
         }
@@ -698,9 +705,9 @@ const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
 
     D3DLOCKED_RECT lr;
     if (FAILED(m_atlas->LockRect(0, &lr, NULL, 0)) || !lr.pBits) return NULL;
-    DWORD *base = (DWORD *)lr.pBits;
+    BYTE *base = (BYTE *)lr.pBits;
     for (int y = 0; y < H; ++y) {
-        DWORD *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
+        BYTE *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
         for (int x = 0; x < W; ++x) {
             float keep = 1.0f;                     // prod(1 - a_i)
             for (int oy = -r; oy <= r; ++oy) {
@@ -713,7 +720,7 @@ const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
                 }
             }
             const int a = (int)((1.0f - keep) * 255.0f + 0.5f);
-            row[x] = ((DWORD)(a > 255 ? 255 : a) << 24) | 0x00FFFFFFu;
+            row[x] = (BYTE)(a > 255 ? 255 : a);
         }
     }
     m_atlas->UnlockRect(0);

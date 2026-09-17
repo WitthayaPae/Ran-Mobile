@@ -8,6 +8,11 @@
 # Every ABI that has been built is included: arm64-v8a for real devices, x86_64
 # for the LDPlayer emulator (which reports x86_64, not ARM).
 set -e
+#  This script hands POSIX paths to Windows tools (aapt2, objcopy, zipalign) and
+#  relies on Git Bash converting them. A caller that turned conversion off for
+#  adb - MSYS_NO_PATHCONV=1 - broke every one of those calls, so switch it back
+#  on for this script whatever the caller had.
+unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
 HERE="$(cd "$(dirname "$0")" && pwd)"
 U="/c/Program Files/Unity/Hub/Editor/6000.5.8f1/Editor/Data/PlaybackEngines/AndroidPlayer"
 BT="$U/SDK/build-tools/36.0.0"
@@ -51,8 +56,18 @@ for A in $ABIS; do
   #  take the .debug file, and the .ips reports name the same build.
   NDKBIN="$U/NDK/toolchains/llvm/prebuilt/windows-x86_64/bin"
   if [ -x "$NDKBIN/llvm-strip.exe" ]; then
-    "$NDKBIN/llvm-objcopy.exe" --only-keep-debug "$SO" "$HERE/out/$A/libran.debug" 2>/dev/null
-    "$NDKBIN/llvm-strip.exe" --strip-debug "$OUT/lib/$A/libran.so"
+    #  Windows paths, converted here, and loud on failure. These are Windows
+    #  binaries handed POSIX paths, which only worked while Git Bash rewrote
+    #  them - and anything run with MSYS_NO_PATHCONV=1 set (every adb helper
+    #  sets it) turned that off. objcopy then said "No such file", its stderr
+    #  was thrown away, and set -e ended the script after "== native libs =="
+    #  with exit 0, leaving the PREVIOUS APK to be installed and measured as if
+    #  it were the new one. That happened three times before it was noticed.
+    if ! "$NDKBIN/llvm-objcopy.exe" --only-keep-debug "$(cygpath -w "$SO")" \
+           "$(cygpath -w "$HERE/out/$A/libran.debug")" ||
+       ! "$NDKBIN/llvm-strip.exe" --strip-debug "$(cygpath -w "$OUT/lib/$A/libran.so")"; then
+      echo "[!] could not split debug info from $A - APK NOT built"; exit 1
+    fi
     RAW=$(stat -c%s "$SO"); CUT=$(stat -c%s "$OUT/lib/$A/libran.so")
     echo "  + $A    $(awk -v r=$RAW -v c=$CUT 'BEGIN{printf "%.1f -> %.1f MB stripped", r/1048576, c/1048576}')"
   else

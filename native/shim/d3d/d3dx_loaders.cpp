@@ -18,6 +18,7 @@
 
 //  Records which file a texture was decoded from, so the renderer can name it.
 extern "C" void RanD3D_NoteTexturePath(LPDIRECT3DTEXTURE9 pTex, const char *szPath);
+extern "C" void RanD3D_NoteLoaderTexture(LPDIRECT3DTEXTURE9 pTex);
 
 //  Cube textures live in the device layer; the decode belongs here.
 extern "C" IDirect3DCubeTexture9 *RanD3D_CreateCubeTexture(IDirect3DDevice9 *dev, UINT edge,
@@ -121,6 +122,7 @@ HRESULT imageToTexture(LPDIRECT3DDEVICE9 pDevice, const RanImage &img, UINT MipL
 
     *ppTexture = pTex;
     if (g_loadingPath) RanD3D_NoteTexturePath(pTex, g_loadingPath);
+    RanD3D_NoteLoaderTexture(pTex);
     return D3D_OK;
 }
 

@@ -178,6 +178,7 @@ void RanGLR_ApplySampler(unsigned tex);
 unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int width, int height,
                                    int d3dFormat, const void *bits, unsigned dataSize);
 void RanGLR_FinishTexture(unsigned tex, int levels, int d3dFormat);
+void RanGLR_SampleAsWhiteAlpha(unsigned tex);
 
 // Uploads one face of a cube map. face is 0..5 in D3D order (+X, -X, +Y, -Y,
 // +Z, -Z); pass the same texture name back for each face and level.

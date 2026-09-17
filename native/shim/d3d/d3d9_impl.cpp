@@ -237,6 +237,12 @@ public:
     //  matched to a file, which is what every texture question eventually asks.
     std::string m_srcPath;
     long long   m_bytesAll = 0;             // all levels, counted into g_live
+    //  Made by an image loader (D3DXCreateTextureFrom*), with or without a file
+    //  path. Such a texture is filled once and then only drawn.
+    bool        m_fromLoader = false;
+    //  A text glyph atlas: A8 coverage that must sample as white with that
+    //  alpha, which GL gets from a swizzle set after each full upload.
+    bool        m_glyphAtlas = false;
 
     RanTexture(IDirect3DDevice9 *dev, UINT w, UINT h, UINT levels, D3DFORMAT fmt)
         : m_format(fmt), m_device(dev) {
@@ -371,6 +377,7 @@ public:
                                                     (unsigned)s->m_bits.size());
             }
             RanGLR_FinishTexture(m_glTex, (int)m_surfaces.size(), (int)m_format);
+            if (m_glyphAtlas) RanGLR_SampleAsWhiteAlpha(m_glTex);
             if (!m_srcPath.empty()) {
                 LOGI("texture %u = %s (%ux%u, %u levels)", m_glTex, m_srcPath.c_str(),
                      m_surfaces[0]->m_width, m_surfaces[0]->m_height,
@@ -408,7 +415,15 @@ public:
             //  What is lost is the OLD pixels - a partial rewrite would leave
             //  the untouched part black - so that case warns rather than passes
             //  silently.
-            if (isCompressed(m_format) || !m_srcPath.empty()) {
+            //  And provenance includes the loaders that have no path. Encrypted
+            //  textures are decrypted into memory and handed to
+            //  D3DXCreateTextureFromFileInMemoryEx, so they never had a path,
+            //  and the largest of them - 2048x2048 A8R8G8B8, 16 MB each - kept
+            //  their decoded copy for life: 343 MB of an in-world LDPlayer
+            //  session sat in about thirty of them. Anything a loader made is
+            //  filled once; the atlas and scratch surfaces the client writes to
+            //  come from CreateTexture and never set m_fromLoader.
+            if (isCompressed(m_format) || !m_srcPath.empty() || m_fromLoader) {
                 for (size_t i = 0; i < m_surfaces.size(); ++i) {
                     std::vector<BYTE> empty;
                     g_live.texCpuBytes -= (long long)m_surfaces[i]->m_bits.size();
@@ -2387,11 +2402,13 @@ extern "C" IDirect3D9 *WINAPI Direct3DCreate9(UINT SDKVersion) {
 //  Live memory by owner, one line, for the platform's once-a-second MEM report.
 //  Buffers exist twice - the RAM copy counted here and the GL buffer - and on
 //  Apple's unified memory both land in the process footprint.
+extern "C" long long RanGLR_TexGpuBytes(void);
 extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
     const double MB = 1048576.0;
     snprintf(out, cap,
-             "tex %ld = %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB",
-             (long)g_live.textures, g_live.texBytes / MB, g_live.texCpuBytes / MB,
+             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB",
+             (long)g_live.textures, g_live.texBytes / MB, RanGLR_TexGpuBytes() / MB,
+             g_live.texCpuBytes / MB,
              (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB);
 }
 
@@ -2404,37 +2421,51 @@ extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
 //  name, so a crowd test says what to free instead of only how much.
 extern "C" void RanD3D_HeldMemLine(char *out, int cap) {
     const double MB = 1048576.0;
-    long long pending = 0, kept = 0; long nPending = 0, nKept = 0;
-    struct Top { long long b; const RanTexture *t; } top[5] = {};
+    long long undrawnFile = 0, undrawnMem = 0, kept = 0;
+    long nUF = 0, nUM = 0, nKept = 0;
+    //  Largest undrawn holders, since that is the group to act on; drawn and
+    //  kept ones are few and already visible as the 2048 UI sheets.
+    struct Top { long long b; const RanTexture *t; } top[6] = {};
     {
         std::lock_guard<std::mutex> lk(g_texSetLock);
         for (const RanTexture *t : g_texSet) {
             long long b = 0;
             for (const RanSurface *sf : t->m_surfaces) b += (long long)sf->m_bits.size();
             if (!b) continue;
-            if (!t->m_glTex) { pending += b; ++nPending; }
-            else             { kept += b;    ++nKept; }
-            for (int i = 0; i < 5; ++i) if (b > top[i].b) {
-                for (int j = 4; j > i; --j) top[j] = top[j - 1];
+            if (t->m_glTex) { kept += b; ++nKept; continue; }
+            if (t->m_srcPath.empty()) { undrawnMem += b; ++nUM; }
+            else                      { undrawnFile += b; ++nUF; }
+            for (int i = 0; i < 6; ++i) if (b > top[i].b) {
+                for (int j = 5; j > i; --j) top[j] = top[j - 1];
                 top[i].b = b; top[i].t = t; break;
             }
         }
         int n = snprintf(out, cap,
-                         "not drawn yet %.0f MB (%ld) | drawn, kept %.0f MB (%ld) | largest:",
-                         pending / MB, nPending, kept / MB, nKept);
-        for (int i = 0; i < 5 && top[i].t && n > 0 && n < cap; ++i) {
+                         "not drawn yet: from file %.0f MB (%ld), made in memory %.0f MB (%ld) | "
+                         "drawn, kept %.0f MB (%ld) | largest undrawn:",
+                         undrawnFile / MB, nUF, undrawnMem / MB, nUM, kept / MB, nKept);
+        for (int i = 0; i < 6 && top[i].t && n > 0 && n < cap; ++i) {
             const RanTexture *t = top[i].t;
             const char *path = t->m_srcPath.empty() ? "(no file)" : t->m_srcPath.c_str();
             const char *slash = strrchr(path, '/');
             const char *bs = strrchr(path, '\\');
             if (bs > slash) slash = bs;
-            n += snprintf(out + n, cap - n, " %s %ux%u %.1fMB%s",
+            n += snprintf(out + n, cap - n, " %s %ux%u fmt%d %.1fMB",
                           slash ? slash + 1 : path,
                           t->m_surfaces.empty() ? 0 : t->m_surfaces[0]->m_width,
                           t->m_surfaces.empty() ? 0 : t->m_surfaces[0]->m_height,
-                          top[i].b / MB, t->m_glTex ? "" : "(undrawn)");
+                          (int)t->m_format, top[i].b / MB);
         }
     }
+}
+
+extern "C" void RanD3D_MarkGlyphAtlas(IDirect3DTexture9 *pTex) {
+    if (pTex) ((RanTexture *)pTex)->m_glyphAtlas = true;
+}
+
+//  Called by the image loaders on every texture they create.
+extern "C" void RanD3D_NoteLoaderTexture(IDirect3DTexture9 *pTex) {
+    if (pTex) ((RanTexture *)pTex)->m_fromLoader = true;
 }
 
 // Lets the platform layer print a one-line summary instead of tailing a log.

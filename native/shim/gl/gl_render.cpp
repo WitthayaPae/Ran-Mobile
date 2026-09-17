@@ -20,6 +20,7 @@
 // Textures are uploaded lazily: the engine locks a texture, writes pixels and
 // unlocks, so upload happens on first use after a change rather than per-frame.
 
+#include <atomic>
 #include "windows.h"
 #include "../platform/ran_plat.h"
 #include <d3d9.h>
@@ -3831,6 +3832,35 @@ extern "C" void RanGLR_ApplySampler(unsigned tex) {
     }
 }
 
+//  What the GPU really holds for 2D textures, per level, as uploaded.
+//
+//  The D3D side counts a texture at its D3D format size, which for DXT is the
+//  compressed size. Where the driver has no S3TC - every iPhone - the blocks are
+//  expanded to RGBA8 before upload, 4x a DXT5 and 8x a DXT1, so the D3D count
+//  under-reported the GPU by that factor and the difference hid in "other".
+std::map<GLuint, std::map<int, size_t> > g_texGpuLevels;
+std::atomic<long long> g_texGpuBytes{0};
+
+void noteTexGpu(GLuint tex, int level, size_t bytes) {
+    size_t &slot = g_texGpuLevels[tex][level];
+    g_texGpuBytes += (long long)bytes - (long long)slot;
+    slot = bytes;
+}
+
+extern "C" long long RanGLR_TexGpuBytes(void) { return g_texGpuBytes; }
+
+//  A one-channel coverage texture sampled as (1, 1, 1, coverage): what the
+//  glyph atlas stored as white-plus-alpha in four bytes. Swizzle is texture
+//  object state, so it holds for every later draw.
+extern "C" void RanGLR_SampleAsWhiteAlpha(unsigned tex) {
+    if (!g_inited || !tex) return;
+    bindTex2D(tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_ONE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_ONE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_ONE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_RED);
+}
+
 extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int width, int height,
                                               int d3dFormat, const void *bits, unsigned dataSize) {
     if (!g_inited || !bits || width <= 0 || height <= 0) return existing;
@@ -3847,6 +3877,19 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
     }
 
     if (level == 0) g_texDims[tex] = std::make_pair(width, height);
+
+    {
+        const size_t px = (size_t)width * (size_t)height;
+        size_t b = px * 4;
+        if (isDXT(d3dFormat)) b = haveS3TC() ? (size_t)dataSize : px * 4;
+        else switch (d3dFormat) {
+            case D3DFMT_R5G6B5: case D3DFMT_A4R4G4B4:
+            case D3DFMT_A1R5G5B5: case D3DFMT_X1R5G5B5: b = px * 2; break;
+            case D3DFMT_A8: b = px; break;
+            default: break;
+        }
+        noteTexGpu(tex, level, b);
+    }
 
     // DXT first: it is what nearly every shipped texture is.
     if (isDXT(d3dFormat)) {
@@ -4190,6 +4233,13 @@ extern "C" void RanGLR_LogTextureStats(void) {
 }
 
 extern "C" void RanGLR_DeleteTexture(unsigned tex) {
+    {
+        auto it = g_texGpuLevels.find((GLuint)tex);
+        if (it != g_texGpuLevels.end()) {
+            for (const auto &lv : it->second) g_texGpuBytes -= (long long)lv.second;
+            g_texGpuLevels.erase(it);
+        }
+    }
     g_texSampler.erase((GLuint)tex);
     g_texLevels.erase((GLuint)tex);
     g_texDims.erase((GLuint)tex);
