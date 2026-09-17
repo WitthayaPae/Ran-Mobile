@@ -1806,6 +1806,19 @@ extern "C" void RanGLR_SceneEnd(void) {
     const GLuint dst = RanGL_DefaultFramebuffer();
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    //  Nothing reads the world's depth or stencil once the world is drawn.
+    //
+    //  A tile-based GPU - which is every phone - would otherwise write both all
+    //  the way out to memory at the end of the pass, purely so they could be
+    //  thrown away. Saying so costs one call and saves a full-screen write of
+    //  each, which is bandwidth, and bandwidth on a phone is heat.
+    {
+        const GLenum discard[2] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+        glBindFramebuffer(GL_FRAMEBUFFER, g_sceneFbo);
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, discard);
+    }
+
     glBindFramebuffer(GL_READ_FRAMEBUFFER, g_sceneFbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
     glBlitFramebuffer(0, 0, g_sceneW, g_sceneH,
