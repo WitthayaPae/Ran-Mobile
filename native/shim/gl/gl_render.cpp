@@ -1081,6 +1081,8 @@ GLenum cmpFunc(DWORD d3d) {
 //  can be taken without restarting and logging in again - which matters when
 //  the server drops a session on every reconnect.
 extern "C" void RanD3D_ProbeTextures(void);
+extern "C" void  RanGLR_SetSceneScale(float s);
+extern "C" float RanGLR_SceneScale(void);
 
 extern "C" void RanGLR_RefreshDiagnostics(void) {
     struct { const char *name; bool *flag; const char *what; } diag[] = {
@@ -1200,6 +1202,24 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
                 g_diagUI = 600;
                 LOGI("diagnostic: dumping the next 600 world draws and 600 interface draws");
             }
+        }
+    }
+    //  A percentage of the panel to draw the world at, so the setting can be
+    //  A/B'd on a device without a rebuild: 70 means 70%, absent means full.
+    {
+        float want = 1.0f;
+        FILE *f = (RanPlat_DiagExists("worldscale")) ? RanPlat_DiagOpen("worldscale") : NULL;
+        if (f) {
+            char buf[16] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
+                const int pct = atoi(buf);
+                if (pct >= 50 && pct <= 100) want = (float)pct / 100.0f;
+            }
+            fclose(f);
+        }
+        if (want != RanGLR_SceneScale()) {
+            RanGLR_SetSceneScale(want);
+            LOGI("diagnostic: world drawn at %.0f%% of the panel", RanGLR_SceneScale() * 100.0f);
         }
     }
     for (size_t i = 0; i < sizeof(diag) / sizeof(diag[0]); ++i) {
@@ -1551,6 +1571,42 @@ extern "C" int RanGLR_Init(void) {
     return 1;
 }
 
+//  The 3D world drawn smaller than the panel, then stretched once.
+//
+//  Almost all of a phone's GPU energy goes on fragments, and fragments scale
+//  with the square of the resolution: a modern phone panel is around four times
+//  the pixels the art was ever authored for, and every one of them is shaded,
+//  blended and written for the world, the effects and the overdraw on top. That
+//  is the heat. Nothing about the scene's detail depends on those pixels being
+//  1:1 with the panel - the geometry, the lights and the textures are the same
+//  either way - so the world is rendered into a target a fraction of the panel
+//  and stretched over it with a linear filter when it is done.
+//
+//  The interface is not in the target. Text and the HUD are geometry that does
+//  resolve as finely as the buffer allows, and they cost almost nothing to
+//  shade, so they keep the full panel and stay sharp. This is the setting that
+//  the phone games this one is measured against ship as "graphics quality", and
+//  it is the only lever that cuts GPU work without removing anything from the
+//  picture.
+//
+//  g_sceneScale of 1 means off, and then none of this code runs at all.
+static GLuint g_sceneFbo = 0, g_sceneTex = 0, g_sceneDepth = 0;
+static int    g_sceneW = 0, g_sceneH = 0;
+static bool   g_sceneActive = false;
+static float  g_sceneScale = 1.0f;
+static bool   g_sceneFailed = false;
+
+extern "C" void RanGLR_InvalidateStateCache(void);
+
+//  "The screen" means the scene target while the world is being drawn, so the
+//  engine's own off-screen passes come back to the right place when they
+//  restore render target 0.
+static unsigned baseFramebuffer(void) {
+    return g_sceneActive ? g_sceneFbo : RanGL_DefaultFramebuffer();
+}
+static int baseWidth(void)  { return g_sceneActive ? g_sceneW : RanGL_Width(); }
+static int baseHeight(void) { return g_sceneActive ? g_sceneH : RanGL_Height(); }
+
 //  glTex == 0 selects the back buffer. Everything else renders into that
 //  texture through a cached FBO sized to the surface.
 //  Copy one render-target texture into another, which is what D3D StretchRect
@@ -1564,7 +1620,7 @@ extern "C" int RanGLR_BlitTexture(unsigned srcTex, int sx0, int sy0, int sx1, in
     std::map<GLuint, RanRT>::iterator s = g_rts.find(srcTex);
     if (s == g_rts.end() || !s->second.fbo) return 0;
 
-    GLuint dstFbo = RanGL_DefaultFramebuffer();   // no texture means the screen
+    GLuint dstFbo = baseFramebuffer();   // no texture means the screen
     if (dstTex) {
         std::map<GLuint, RanRT>::iterator d = g_rts.find(dstTex);
         if (d == g_rts.end() || !d->second.fbo) return 0;
@@ -1577,7 +1633,7 @@ extern "C" int RanGLR_BlitTexture(unsigned srcTex, int sx0, int sy0, int sx1, in
                       GL_COLOR_BUFFER_BIT, linear ? GL_LINEAR : GL_NEAREST);
 
     //  Leave the binding where the renderer expects it.
-    glBindFramebuffer(GL_FRAMEBUFFER, g_rtActive ? g_rtFbo : RanGL_DefaultFramebuffer());
+    glBindFramebuffer(GL_FRAMEBUFFER, g_rtActive ? g_rtFbo : baseFramebuffer());
     ++g_callsState;
     return 1;
 }
@@ -1587,11 +1643,11 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
 
     if (!glTex || w <= 0 || h <= 0) {
         if (g_rtActive) {
-            glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
+            glBindFramebuffer(GL_FRAMEBUFFER, baseFramebuffer());
             g_rtActive = false;
             ++g_rtSwitches;
         }
-        glViewport(0, 0, RanGL_Width(), RanGL_Height());
+        glViewport(0, 0, baseWidth(), baseHeight());
         return;
     }
 
@@ -1646,9 +1702,9 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
         GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (st != GL_FRAMEBUFFER_COMPLETE) {
             LOGE("render target %ux%u incomplete: 0x%04X", w, h, st);
-            glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
+            glBindFramebuffer(GL_FRAMEBUFFER, baseFramebuffer());
             g_rtActive = false;
-            glViewport(0, 0, RanGL_Width(), RanGL_Height());
+            glViewport(0, 0, baseWidth(), baseHeight());
             return;
         }
     } else {
@@ -1660,6 +1716,107 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
     g_rtFbo = rt.fbo;
     g_rtW = w; g_rtH = h;
     glViewport(0, 0, w, h);
+}
+
+//  How much of the panel the world is drawn at: 1.0 is the panel itself and
+//  turns the whole mechanism off. Clamped to something that still looks like
+//  the game - below half the panel the world is mush whatever the filter.
+extern "C" void RanGLR_SetSceneScale(float s) {
+    if (s > 1.0f)  s = 1.0f;
+    if (s < 0.5f)  s = 0.5f;
+    if (s == g_sceneScale || g_sceneActive) return;
+    g_sceneScale = s;
+    g_sceneFailed = false;
+    //  The target is rebuilt at the new size on the next frame that uses it.
+    g_sceneW = g_sceneH = 0;
+}
+
+extern "C" float RanGLR_SceneScale(void) { return g_sceneScale; }
+
+//  The world pass starts here: everything drawn until RanGLR_SceneEnd lands in
+//  the smaller target. Safe to call when the scale is 1 - it does nothing.
+extern "C" void RanGLR_SceneBegin(void) {
+    if (!g_inited || g_sceneActive || g_sceneFailed) return;
+    if (g_sceneScale >= 0.999f) return;
+
+    const int w = (int)lroundf(RanGL_Width()  * g_sceneScale);
+    const int h = (int)lroundf(RanGL_Height() * g_sceneScale);
+    if (w <= 0 || h <= 0) return;
+
+    if (!g_sceneFbo || g_sceneW != w || g_sceneH != h) {
+        if (!g_sceneFbo)   glGenFramebuffers(1, &g_sceneFbo);
+        if (!g_sceneTex)   glGenTextures(1, &g_sceneTex);
+        if (!g_sceneDepth) glGenRenderbuffers(1, &g_sceneDepth);
+
+        bindTex2D(g_sceneTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        //  Depth AND stencil: the engine clears stencil for the shadow volumes,
+        //  and a target without one silently drops those clears.
+        glBindRenderbuffer(GL_RENDERBUFFER, g_sceneDepth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, g_sceneFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_sceneTex, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                                  GL_RENDERBUFFER, g_sceneDepth);
+
+        const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (st != GL_FRAMEBUFFER_COMPLETE) {
+            //  Fall back to drawing at the panel rather than to nothing at all.
+            LOGE("scene target %dx%d incomplete: 0x%04X - drawing at full size", w, h, st);
+            glBindFramebuffer(GL_FRAMEBUFFER, RanGL_DefaultFramebuffer());
+            g_sceneFailed = true;
+            return;
+        }
+        g_sceneW = w; g_sceneH = h;
+        LOGI("scene target %dx%d (%.2f of %dx%d panel)", w, h, g_sceneScale,
+             RanGL_Width(), RanGL_Height());
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_sceneFbo);
+    }
+
+    g_sceneActive = true;
+    ++g_rtSwitches;
+    glViewport(0, 0, w, h);
+
+    //  The frame's own clear may already have gone to the panel, so the target
+    //  starts undefined every frame. Clear it here and the world draws over a
+    //  known surface whichever side of this call the client's clear falls.
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearDepthf(1.0f);
+    glClearStencil(0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    g_gl.reset();
+}
+
+//  The world is finished: stretch it over the panel and put the interface back
+//  on the real frame, at full resolution.
+extern "C" void RanGLR_SceneEnd(void) {
+    if (!g_inited || !g_sceneActive) return;
+    g_sceneActive = false;
+
+    const GLuint dst = RanGL_DefaultFramebuffer();
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_sceneFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+    glBlitFramebuffer(0, 0, g_sceneW, g_sceneH,
+                      0, 0, RanGL_Width(), RanGL_Height(),
+                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, dst);
+    glViewport(0, 0, RanGL_Width(), RanGL_Height());
+    ++g_rtSwitches;
+    //  The blit changed bindings behind the state cache's back.
+    RanGLR_InvalidateStateCache();
 }
 
 //  A texture that has been drawn into must never be re-uploaded from its CPU
@@ -1699,8 +1856,9 @@ extern "C" void RanGLR_ClearRect(int x, int y, int w, int h) {
     //  "the client expects last frame to still be there".
     if (!g_rtActive && !RanGL_SwapPreserved()) { glDisable(GL_SCISSOR_TEST); return; }
 
-    const float scale = g_rtActive ? 1.0f : RanGL_UIScale();
-    const int surfaceH = g_rtActive ? g_rtH : RanGL_Height();
+    const float scale = g_rtActive ? 1.0f
+                                   : RanGL_UIScale() * (g_sceneActive ? g_sceneScale : 1.0f);
+    const int surfaceH = g_rtActive ? g_rtH : baseHeight();
     //  Edges rounded, not sizes: with a fractional scale two adjacent rects
     //  must still meet on the same pixel column.
     const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
@@ -1755,8 +1913,9 @@ extern "C" void RanGLR_SetViewport(int x, int y, int w, int h) {
     //  The client works in logical pixels (see RanGL_UIScale) and the frame is
     //  stretched to the panel, so a viewport it sets scales with it — except on
     //  a render target, which is already sized in real pixels.
-    const float scale = g_rtActive ? 1.0f : RanGL_UIScale();
-    const int surfaceH = g_rtActive ? g_rtH : RanGL_Height();
+    const float scale = g_rtActive ? 1.0f
+                                   : RanGL_UIScale() * (g_sceneActive ? g_sceneScale : 1.0f);
+    const int surfaceH = g_rtActive ? g_rtH : baseHeight();
     const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
     const int y0 = (int)lroundf(y * scale), y1 = (int)lroundf((y + h) * scale);
     // D3D viewport Y is measured from the top, GL's from the bottom.

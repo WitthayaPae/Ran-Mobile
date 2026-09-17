@@ -141,6 +141,14 @@ void RanGLR_UpdateBufferRange(unsigned buffer, int isIndex, unsigned offset,
                               const void *data, unsigned size);
 void RanGLR_LogTextureStats(void);
 void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h);
+
+// The 3D world is drawn into a target this fraction of the panel and stretched
+// over it when the pass ends; the interface still draws at the full panel. 1.0
+// turns it off. See the comment on the implementation.
+void  RanGLR_SetSceneScale(float s);
+float RanGLR_SceneScale(void);
+void  RanGLR_SceneBegin(void);
+void  RanGLR_SceneEnd(void);
 // The target now bound has no alpha channel in D3D terms (X8R8G8B8, X1R5G5B5...),
 // so its destination alpha reads as one.
 void RanGLR_SetTargetOpaque(int opaque);
