@@ -241,9 +241,16 @@ static int  g_imeInsetPerMille = 0;
                     double left = 0.0;
                     if ( @available(iOS 13.0, *) )
                         left = (double)os_proc_available_memory() / 1048576.0;
+                    //  The heat, as iOS itself rates it, so "the phone is hot"
+                    //  is a number that a change can be measured against.
+                    //  nominal -> fair -> serious (iOS starts throttling) ->
+                    //  critical.
+                    static const char *const kHeat[] = { "nominal", "fair", "serious", "critical" };
+                    const NSInteger heat = NSProcessInfo.processInfo.thermalState;
                     RanPlat_Log ( RANLOG_INFO, "RanMem",
-                                  "MEM footprint %.0f MB | headroom %.0f MB",
-                                  (double)vm.phys_footprint / 1048576.0, left );
+                                  "MEM footprint %.0f MB | headroom %.0f MB | heat %s",
+                                  (double)vm.phys_footprint / 1048576.0, left,
+                                  ( heat >= 0 && heat <= 3 ) ? kHeat[heat] : "?" );
                     //  Who owns it. A crowd test died at 3,050 MB and the
                     //  footprint alone could not say whether that was textures,
                     //  buffers or the engine's own models and animation data.
