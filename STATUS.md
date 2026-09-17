@@ -3,12 +3,99 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-14
+- **Last updated:** 2026-09-18
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-18 (1) — The iPhone heat is fragments, not draw calls: draw the world smaller than the panel
+
+Asked, after the HUD editor: "is it possible to keep 60 frame but no heat like
+ROV?", then "read the real code and do the real analysis... do it until you fix
+the problem".
+
+**The measurement that redirected everything.** The session had been cutting GL
+calls - names in two passes took the frame from 13,200 calls to 5,416. That is
+worth having, but it is not the heat. On the iPhone `dvt energy` and `dvt
+graphics` put the GPU at 59-70% busy and spending **more energy than the CPU**,
+and on LDPlayer the frame is bound by `submit` (9.0 ms of GL calls through the
+emulator's host bridge), which is an emulator artefact - a real phone submits
+the same calls in about a fifth of the time. The two platforms have different
+bottlenecks, and the phone's is fragments.
+
+Fragments scale with the square of the resolution. The panel on an iPhone 15 is
+2556x1179; the art was authored for 1024x768. Every one of those pixels is
+shaded, blended and written, for the world, the effects and the overdraw on top.
+Nothing about the scene's *detail* depends on them being 1:1 with the panel.
+
+**The fix.** The 3D world renders into a target that is a fraction of the panel
+and is stretched over it once, with a linear filter, at the end of the world
+pass. The interface is deliberately not in that target: text, names and the HUD
+are cheap to shade and do resolve as finely as the buffer allows, so they keep
+the full panel and stay sharp at every setting. This is what the phone games
+this one is compared against ship as "graphics quality".
+
+The seams were already in place and this is why the change is small:
+
+- `RanGL_DefaultFramebuffer()` was the one place that meant "the screen", so
+  "the screen" becomes the scene target while the world is drawn, and the
+  engine's own off-screen passes (glow, blur, refraction, post) come back to the
+  right place when they restore render target 0.
+- `RanGL_UIScale()` was already the factor the viewport and scissor paths
+  multiply by; the world pass adds one more.
+- Depth **and** stencil are attached - the shadow volumes clear stencil, and a
+  target without one silently drops those clears.
+- `glInvalidateFramebuffer` on the depth/stencil at the end of the pass, so a
+  tile-based GPU never writes them out to memory just to discard them.
+
+`Settings > Function` gains a graphics quality row: สูงสุด / สูง / ลื่น = 100 /
+85 / 70 percent, saved in `RANPARAM::dwMobileWorldScale` and applied at startup.
+`/sdcard/ran/worldscale` (a percentage) overrides it live, for measurement
+without a rebuild.
+
+**Verified on LDPlayer**, GM crowd, ~40 characters drawn and ~230 names: the
+target switches live to 1792x1008 of a 2560x1440 panel, the world, shadows and
+effects render correctly, the interface and every name stay sharp, and the frame
+rate is unchanged (53-58 fps against a 55-57 baseline). Unchanged is the
+expected result there and is the point of measuring it: the emulator is bound by
+call submission, not by fill, so this proves the blit and the extra pass cost
+nothing while the saving waits for a real GPU.
+
+**Not yet verified on the iPhone** - the iOS binary is built on a Mac and signed
+with Sideloadly, which is not reachable from here. That build and a heat reading
+at ลื่น is the next step.
+
+Also fixed along the way:
+
+- **A real regression from the HUD editor commit.** `FUNCTION_HUDEDIT_BUTTON`
+  had been inserted *inside* the `FUNCTION_PLAYERDRAW_20/40/60` fallthrough
+  group, so tapping 20, 40 or 60 opened the HUD editor instead of setting the
+  character count. Only ทั้งหมด worked.
+- **`DxCharPart::Render` formatted a string per effect per part per frame** to
+  decide whether to log a line it had already logged; the set filled with its 64
+  names in the first second and the formatting carried on all session. Behind
+  the `chareffdump` flag now.
+- Names in two passes (plates, then text) and a cached name-occlusion ray, both
+  committed: 13,200 -> 5,416 GL calls a frame, `interface` out of the top ten,
+  names visually identical.
+- iOS asks `CADisplayLink` for 30 Hz while `NSProcessInfo` reports thermal state
+  serious or worse, which breaks the loop where a throttled frame misses the
+  deadline that caused the throttling.
+
+**What was ruled out, with the measurement.** Bone-palette dedupe (550 uploads a
+frame, but costume parts of one character have different bone groups, so they
+are not duplicates); light-block dedupe (the per-variant uniform cache already
+does it - 113 of ~190 uploads a frame are a variant seeing the current block for
+the first time, and the lights genuinely change 75 times a frame); folding
+`alphaTest` out of the shader variant key (it flips 178 times a frame, the
+largest single churn, but making `discard` reachable in every variant costs
+early-Z on exactly the tile-based GPUs this is meant to help).
+
+**Commits.** SOURCE 95d310c, 51dc2be, c7190f6; MOBILE f89ce00, 28d3b1b, 762ac3d.
 
 ---
 
