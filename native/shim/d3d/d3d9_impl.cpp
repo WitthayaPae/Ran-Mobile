@@ -23,6 +23,8 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 extern "C" void RanGLR_ResetShadowBudget(void);
 #include <vector>
 #include <atomic>
+#include <mutex>
+#include <set>
 #include <map>
 #include <algorithm>
 #include <string.h>
@@ -56,6 +58,13 @@ struct Live {
     std::atomic<long long> ibBytes{0};      // index buffer RAM copies
     std::atomic<long>      textures{0}, vbs{0}, ibs{0};
 } g_live;
+
+//  Every live texture, so the once-a-second report can say WHICH decoded copies
+//  are still in RAM, not just how many bytes. Walked once a second, never per
+//  draw; the lock only guards membership.
+class RanTexture;
+std::mutex             g_texSetLock;
+std::set<RanTexture *> g_texSet;
 
 //  What the frame's draws actually are, so optimisation aims at the big bucket.
 struct DrawBuckets {
@@ -247,9 +256,15 @@ public:
             mh = mh > 1 ? mh / 2 : 1;
         }
         g_live.texBytes += m_bytesAll; ++g_live.textures;
+        std::lock_guard<std::mutex> lk(g_texSetLock);
+        g_texSet.insert(this);
     }
     ~RanTexture() {
         g_live.texBytes -= m_bytesAll; --g_live.textures;
+        {
+            std::lock_guard<std::mutex> lk(g_texSetLock);
+            g_texSet.erase(this);
+        }
         if (m_glTex) { RanGLR_ForgetRenderTarget(m_glTex); RanGLR_DeleteTexture(m_glTex); }
         for (auto *s : m_surfaces) s->Release();
     }
@@ -2378,6 +2393,48 @@ extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
              "tex %ld = %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB",
              (long)g_live.textures, g_live.texBytes / MB, g_live.texCpuBytes / MB,
              (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB);
+}
+
+//  Where the decoded RAM copies are, by why they were not freed.
+//
+//  A copy is released the first time the texture reaches GL, and then only for
+//  a compressed or file-loaded texture. So two kinds stay doubled: textures that
+//  were loaded but have not been drawn yet, and uncompressed textures with no
+//  file path (made in memory). Split by those, plus the five largest holders by
+//  name, so a crowd test says what to free instead of only how much.
+extern "C" void RanD3D_HeldMemLine(char *out, int cap) {
+    const double MB = 1048576.0;
+    long long pending = 0, kept = 0; long nPending = 0, nKept = 0;
+    struct Top { long long b; const RanTexture *t; } top[5] = {};
+    {
+        std::lock_guard<std::mutex> lk(g_texSetLock);
+        for (const RanTexture *t : g_texSet) {
+            long long b = 0;
+            for (const RanSurface *sf : t->m_surfaces) b += (long long)sf->m_bits.size();
+            if (!b) continue;
+            if (!t->m_glTex) { pending += b; ++nPending; }
+            else             { kept += b;    ++nKept; }
+            for (int i = 0; i < 5; ++i) if (b > top[i].b) {
+                for (int j = 4; j > i; --j) top[j] = top[j - 1];
+                top[i].b = b; top[i].t = t; break;
+            }
+        }
+        int n = snprintf(out, cap,
+                         "not drawn yet %.0f MB (%ld) | drawn, kept %.0f MB (%ld) | largest:",
+                         pending / MB, nPending, kept / MB, nKept);
+        for (int i = 0; i < 5 && top[i].t && n > 0 && n < cap; ++i) {
+            const RanTexture *t = top[i].t;
+            const char *path = t->m_srcPath.empty() ? "(no file)" : t->m_srcPath.c_str();
+            const char *slash = strrchr(path, '/');
+            const char *bs = strrchr(path, '\\');
+            if (bs > slash) slash = bs;
+            n += snprintf(out + n, cap - n, " %s %ux%u %.1fMB%s",
+                          slash ? slash + 1 : path,
+                          t->m_surfaces.empty() ? 0 : t->m_surfaces[0]->m_width,
+                          t->m_surfaces.empty() ? 0 : t->m_surfaces[0]->m_height,
+                          top[i].b / MB, t->m_glTex ? "" : "(undrawn)");
+        }
+    }
 }
 
 // Lets the platform layer print a one-line summary instead of tailing a log.

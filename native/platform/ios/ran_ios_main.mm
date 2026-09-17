@@ -70,6 +70,7 @@ void        RanIOS_InstallPlatformPaths ( void );
 
 //  Live texture and buffer memory by owner, for the MEM line.
 void RanD3D_LiveMemLine ( char *out, int cap );
+void RanD3D_HeldMemLine ( char *out, int cap );
 }
 
 //  Set by RanIME_SetNumeric, read when UIKit builds the keyboard.
@@ -249,6 +250,9 @@ static int  g_imeInsetPerMille = 0;
                     char own[200];
                     RanD3D_LiveMemLine ( own, sizeof(own) );
                     RanPlat_Log ( RANLOG_INFO, "RanMem", "MEM owners: %s", own );
+                    char held[600];
+                    RanD3D_HeldMemLine ( held, sizeof(held) );
+                    RanPlat_Log ( RANLOG_INFO, "RanMem", "MEM RAM copies: %s", held );
                 }
             }
 

@@ -399,6 +399,7 @@ extern "C" void RanProf_Section(const char *szName, double fSeconds) {
 //  swap - and on a tiled GPU the swap is where the frame is actually drawn, so
 //  a big Present with a small Render means the GPU is the limit, not the shim.
 extern "C" void RanD3D_LiveMemLine(char *out, int cap);
+extern "C" void RanD3D_HeldMemLine(char *out, int cap);
 
 extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
     static double s_update = 0.0, s_render = 0.0, s_present = 0.0, s_last = 0.0;
@@ -435,6 +436,9 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
         char own[200];
         RanD3D_LiveMemLine(own, sizeof(own));
         LOGI("MEM owners: %s", own);
+        char held[600];
+        RanD3D_HeldMemLine(held, sizeof(held));
+        LOGI("MEM RAM copies: %s", held);
     }
     LOGI("FRAME collision: %lu rays/frame, %.1f ms/frame",
          g_collCalls / s_frames, g_collSeconds * 1000.0 / s_frames);
