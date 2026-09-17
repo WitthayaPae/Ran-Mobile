@@ -96,6 +96,7 @@ static int  g_imeInsetPerMille = 0;
 @property (nonatomic, assign) BOOL           booted;
 @property (nonatomic, assign) BOOL           bootFailed;
 @property (nonatomic, assign) CFTimeInterval lastTick;
+@property (nonatomic, assign) BOOL           pacedForHeat;
 - (void)ensureImeField;
 @end
 
@@ -188,6 +189,37 @@ static int  g_imeInsetPerMille = 0;
     [self.link addToRunLoop:NSRunLoop.currentRunLoop forMode:NSDefaultRunLoopMode];
 }
 
+//  Half the frame rate once the phone is hot, back to full when it cools.
+//
+//  Measured in a crowd: at nominal a frame costs ~6 ms of CPU and holds 60 fps.
+//  Once iOS rates the phone "serious" it halves the clocks, the same frame
+//  costs ~17 ms, and at 60 Hz there is no idle left in a 16.7 ms frame - so the
+//  CPU runs flat out, which is what keeps it hot. Asking for 30 gives the frame
+//  33.3 ms for the same work: the chip idles half the time and can cool. The
+//  game does not slow down, it is drawn less often (elapsed time drives it).
+//
+//  Only at serious or critical. Nominal and fair stay at the display rate, so a
+//  phone that is merely warm plays at 60 as before. "pace30" still forces 30.
+- (void)updateThermalPacing
+{
+    if (!self.link) return;
+    if (RanPlat_DiagExists ( "pace30" )) return;
+
+    const NSInteger heat = NSProcessInfo.processInfo.thermalState;
+    const BOOL bHot = ( heat >= NSProcessInfoThermalStateSerious );
+    if (bHot == self.pacedForHeat) return;
+    self.pacedForHeat = bHot;
+
+    if (@available(iOS 15.0, *)) {
+        self.link.preferredFrameRateRange = bHot ? CAFrameRateRangeMake ( 30, 30, 30 )
+                                                 : CAFrameRateRangeMake ( 30, 60, 60 );
+    } else {
+        self.link.preferredFramesPerSecond = bHot ? 30 : 0;
+    }
+    RanPlat_Log ( RANLOG_INFO, "RanPace", "thermal state %d: frame loop at %s",
+                  (int)heat, bHot ? "30 Hz" : "the display rate" );
+}
+
 //  The frame loop. android_main owns a while(); here CADisplayLink owns it and
 //  calls in. That is the one structural difference between the two files.
 - (void)tick:(CADisplayLink *)link
@@ -245,6 +277,7 @@ static int  g_imeInsetPerMille = 0;
                     //  is a number that a change can be measured against.
                     //  nominal -> fair -> serious (iOS starts throttling) ->
                     //  critical.
+                    [self updateThermalPacing];
                     static const char *const kHeat[] = { "nominal", "fair", "serious", "critical" };
                     const NSInteger heat = NSProcessInfo.processInfo.thermalState;
                     RanPlat_Log ( RANLOG_INFO, "RanMem",
