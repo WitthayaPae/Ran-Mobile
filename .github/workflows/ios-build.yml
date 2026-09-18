@@ -21,6 +21,13 @@ on:
       - 'native/platform/ios/**'
       - 'native/shim/**'
       - 'native/CMakeLists.txt'
+      #  The iOS bundle version is read out of this file by CMakeLists.txt
+      #  (RAN_PRODUCT_VERSION = 1.0.<android versionCode>), and the version
+      #  is bumped by MAKE-PATCH *after* the code was pushed. Without this
+      #  line the .ipa keeps the old number, which is the number already on
+      #  the phone, and AltStore never offers the update. It cost two
+      #  releases before it was noticed.
+      - 'native/android/AndroidManifest.xml'
       - 'native/build-ios.sh'
       - '.github/workflows/ios-build.yml'
 
