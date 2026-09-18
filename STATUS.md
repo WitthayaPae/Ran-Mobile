@@ -14,6 +14,8 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
+**Patch 476 / APK V080 (versionCode 102) / iOS 1.0.102.**
+
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
 top bar looks wrong.
@@ -42,6 +44,12 @@ the first drag threw it several screens away. `g_adj[].dx` is in units of
 the tray was reading it as a fraction of the surface and multiplying by the
 width. `RanTouch_GetPotionAdjust` now converts on the shim side, where `g_unit`
 lives. Verified on LDPlayer: drag moves the row, cancel restores it.
+
+**iOS caught a GLES2 call.** The potion hand-over asked the driver for the
+texture's size with `glGetTexLevelParameteriv` / `GL_TEXTURE_WIDTH`, neither of
+which exists in GLES2 - the Android NDK headers have them, Apple's do not, so
+only CI saw it. It also bound a texture behind the bind cache's back. Both gone:
+`RanGLR_TextureSize`, the way the skill icons already ask.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
