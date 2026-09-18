@@ -12,6 +12,59 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
+
+The corner carried 21 taps: nine standalone buttons at 35 logical units and the
+twelve-icon `GAME_MENU` strip at 26. On an iPhone 15 the client lays 1278
+logical units across 852 pt, so those are **23 pt and 17 pt targets** against
+Apple's 44 pt minimum and Material's 48 dp — a third to a half of what a finger
+needs. That is why they were fiddly, and it is measured, not felt.
+
+They are one button now. `CMobileMenuWindow` (new, `Lib_ClientUI/Interface`)
+is an 11x2 grid on a 66-unit pitch — exactly 44 pt — and the icons in it are
+**the client's own controls, moved, not copied**: each keeps its art, its
+tooltip, its handler and its own rules about when it appears. Re-parenting
+would have taken all of that with it.
+
+What the grid taught us, each one a wrong assumption paid for on the device:
+
+- **`AlignSubControl` only resizes children that carry `UI_FLAG_XSIZE/YSIZE`.**
+  Six composite icons ignored every size we set. `ReSizeControl` scales by the
+  parent ratio unconditionally and recurses, so that is what the layout uses.
+- **Squashing art into a square moves the clickable child.** A 35x59 icon
+  forced to 56x56 put the party finder's hit box somewhere else, so it read as
+  dead. The fit is aspect-preserving now.
+- **`CheckBoundary` clamps a negative left/top to 0.** Parking hidden icons at
+  -4000 piled them in the top-left corner the moment the window closed, and
+  `SetNonBoundaryCheck` does not reach child art. They are hidden instead, with
+  `s_bIconWanted[]` remembering which ones the client actually wants back.
+- **The window is in the focus list, so it ate the presses.** The icons sit
+  above it via `ShowGroupFocus` (`InsertTail` = topmost).
+- **`BASIC_WINDOW` is 120x28 with a 7-unit body piece**, so its own chrome
+  covers about 140 of 404 units however large the window is set. The grid
+  carries its own backdrop control instead.
+
+**Popping up was slow** because the layout ran inside `MobileArrangeInterface`'s
+once-a-second sweep: up to a full second of empty frames. `MobileArrangeMenu()`
+is split out and runs every frame, above the gate. Screenshot at **150 ms**
+after the tap shows it fully populated.
+
+**The button matches the HUD now.** It was a `MENU` plate lifted out of
+`Interface_Main.dds`, which looked like a piece of another UI parked next to the
+compass. It is `RANTOUCH_SLOT_MENU` in the touch overlay — same disc, ring,
+bevel and gloss as auto-target, PK and camera lock, four squares for a glyph,
+and its own HUD-editor group so it moves and resizes with the rest.
+
+All 22 cells were swept on LDPlayer, one tap each, log-verified. Three that
+looked broken are not: the item shop is a `JP_PARAM` no-op in this build, the
+quest box is a toggle, the party finder is async.
+
+Ships with code **and** a repacked `Gui.rcc` — new keywords `MOBILE_MENU_WINDOW`
+and `MOBILE_MENU_BUTTON`, new gameword `MOBILE_MENU`.
+
+**Not yet tested on the iPhone.**
+
+
 ## 2026-09-18 (5) — A trustworthy sweep at last, and what the character effects actually do
 
 **The sweep works now.** 1.0.86 lifts the thermal clamp properly and the tool
