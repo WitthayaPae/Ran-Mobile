@@ -96,6 +96,16 @@ extern "C" void RanTouch_SetSkillPage(int page);
 //  The skill icons, drawn by the overlay so they can be cropped to their round
 //  button. Positions and radii are in surface pixels; the UVs come straight
 //  off the control the icon was taken from.
+//  The potion tray's slots, drawn round to match the skill slots. Same shape
+//  of hand-over: the client owns the slots and says where they are.
+extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
+                                        const float *cx, const float *cy, const float *r,
+                                        const float *u0, const float *v0,
+                                        const float *u1, const float *v1);
+
+//  Where the player has dragged the potion row in the HUD editor.
+extern "C" void RanTouch_GetPotionAdjust(float *dx, float *dy, float *scale);
+
 //  The painted sheet the controls are drawn from: one texture, sixteen cells
 //  in a 4 x 4 grid. Handed over by the client, which owns the texture. Pass 0
 //  and the overlay falls back to drawing the controls as shapes.

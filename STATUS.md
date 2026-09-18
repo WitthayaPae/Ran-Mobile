@@ -3,12 +3,51 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-18
+- **Last updated:** 2026-09-19
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
+
+Asked: the quest tile on screen is stale, the potion slots are not in the skill
+slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
+top bar looks wrong.
+
+**The quest tile.** A third copy of a notification: the quest box sits in the
+corner with its own alarm and ภารกิจ is a cell in the menu. Hidden in
+`DxGameStage::MobileKeepMenuIconsAbove`, which runs AFTER
+`CInnerInterface::FrameMove` - hiding it before that only lasted until the
+interface ran and turned it back on.
+
+**The potion row.** Six slots moved into a row under the attack disc, drawn by
+the overlay the way the skill slots are: `stick_base` as the bezel, the item's
+own picture cropped into it. The client keeps the slots, so a tap still drinks.
+Three measured corrections after the first build:
+
+| Seen | Cause |
+|---|---|
+| squares and shortcut letters redrew over the discs | a text box draws on `IsVisible()` alone, and the slots re-show their art as they update - so the hide moved out into `MobileHideSquares()`, called after `FrameMove` |
+| slots overlapped each other | the bezel is drawn at 1.62x the icon radius; a 2.25x step is less than two bezels. 3.45x |
+| the first slot sat on the pick-up button | `touch_ui` puts pick-up directly under the attack disc. The row starts at 1.35 radii left instead of 0.5 |
+
+**The editor's offsets are in `g_unit`, not fractions.** `kGrpPotion` was missing
+from `groupAt`'s order list, so the row could not be grabbed at all; once added,
+the first drag threw it several screens away. `g_adj[].dx` is in units of
+`g_unit` - that is what makes a drag feel the same on a phone and a tablet - and
+the tray was reading it as a fraction of the surface and multiplying by the
+width. `RanTouch_GetPotionAdjust` now converts on the shim side, where `g_unit`
+lives. Verified on LDPlayer: drag moves the row, cancel restores it.
+
+**The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
+being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
+`TITLE_H` is 20 (1.11x, which the art carries), the title is centred across the
+612-unit bar instead of tucked into the left cap, and the close box fills the
+right-hand cap. `MOBILE_MENU_WINDOW` is 612x420 in `uiinnercfg02.xml` to match.
 
 ---
 

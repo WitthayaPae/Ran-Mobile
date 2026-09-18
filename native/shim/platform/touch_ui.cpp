@@ -60,7 +60,7 @@ float g_unit = 100.0f;
 //  group: it hangs off the attack button, so moving the attack button moves it,
 //  and its own offset moves it relative to the button.
 enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
-       kGrpPickup, kGrpCamera, kGrpMenu, kGrpCount };
+       kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCount };
 struct HudAdj { float dx, dy, scale, alpha; };
 HudAdj g_adj[kGrpCount] = {
     { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
@@ -936,6 +936,21 @@ void toolCircle(int t, Vec2 &c, float &r) {
 }
 
 //  Where a group is, for selecting and outlining it.
+//  The potion slots.
+//
+//  The client's own tray, moved and re-dressed the way the skill tray already
+//  is: it owns the slots, their items and what a tap does, and hands over
+//  where each one sits so the overlay can draw it round to match. Plain arrays
+//  rather than the SkillIcon struct because the editor needs the centres here,
+//  well before that struct is declared.
+const int kPotMax = 8;
+unsigned g_potTex[kPotMax] = { 0 };
+float g_potX[kPotMax] = { 0 }, g_potY[kPotMax] = { 0 }, g_potRad[kPotMax] = { 0 };
+float g_potU0[kPotMax] = { 0 }, g_potV0[kPotMax] = { 0 };
+float g_potU1[kPotMax] = { 0 }, g_potV1[kPotMax] = { 0 };
+float g_potTW[kPotMax] = { 0 }, g_potTH[kPotMax] = { 0 };
+int   g_potCount = 0;
+
 bool groupCircle(int g, Vec2 &c, float &r) {
     switch (g) {
         case kGrpStick:  c = g_stick.centre; r = g_stick.radius * 1.25f; return true;
@@ -949,6 +964,18 @@ bool groupCircle(int g, Vec2 &c, float &r) {
             c.x = (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f;
             c.y = (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f;
             r = (g_buttons[2].centre.y - g_buttons[1].centre.y) * 0.5f + g_buttons[1].radius * 1.3f;
+            return true;
+        }
+        case kGrpPotion: {
+            if (g_potCount <= 0) return false;
+            float sx = 0, sy = 0;
+            for (int i = 0; i < g_potCount; ++i) { sx += g_potX[i]; sy += g_potY[i]; }
+            c.x = sx / (float)g_potCount; c.y = sy / (float)g_potCount;
+            r = 0.0f;
+            for (int i = 0; i < g_potCount; ++i) {
+                const float d = hypotf(g_potX[i] - c.x, g_potY[i] - c.y) + g_potRad[i] * 1.45f;
+                if (d > r) r = d;
+            }
             return true;
         }
         case kGrpSkill: {
@@ -971,8 +998,8 @@ bool groupCircle(int g, Vec2 &c, float &r) {
 //  The group under a finger. Small buttons first, so one sitting on top of a
 //  bigger group can still be picked; the skill slots before the stick.
 int groupAt(float x, float y) {
-    static const int order[] = { -2, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera, kGrpMenu,
-                                 kGrpAttack, kGrpStick };
+    static const int order[] = { -2, kGrpPotion, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera,
+                                 kGrpMenu, kGrpAttack, kGrpStick };
     g_editSlot = -1;
     for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
         const int g = order[k];
@@ -1571,6 +1598,49 @@ void drawIcons(float w, float h) {
 } // namespace
 
 //  Handed over by the tray each time it arranges the arc.
+//  Where the potion tray has put its slots, handed over each time it arranges.
+extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
+                                        const float *cx, const float *cy, const float *r,
+                                        const float *u0, const float *v0,
+                                        const float *u1, const float *v1) {
+    if (count < 0) count = 0;
+    if (count > 8) count = 8;
+    g_potCount = count;
+    for (int i = 0; i < count; ++i) {
+        g_potTex[i] = tex ? tex[i] : 0;
+        g_potX[i]   = cx ? cx[i] : 0.0f;
+        g_potY[i]   = cy ? cy[i] : 0.0f;
+        g_potRad[i] = r  ? r[i]  : 0.0f;
+        g_potU0[i]  = u0 ? u0[i] : 0.0f;
+        g_potV0[i]  = v0 ? v0[i] : 0.0f;
+        g_potU1[i]  = u1 ? u1[i] : 1.0f;
+        g_potV1[i]  = v1 ? v1[i] : 1.0f;
+        int tw = 0, th = 0;
+        if (g_potTex[i]) {
+            glBindTexture(GL_TEXTURE_2D, g_potTex[i]);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+        }
+        g_potTW[i] = (float)tw;
+        g_potTH[i] = (float)th;
+    }
+}
+
+//  What the player has done to the potion row in the HUD editor, so the tray
+//  can lay itself out there.
+//
+//  Handed over in PIXELS. The editor keeps every offset in units of g_unit -
+//  that is what makes a drag feel the same on a phone and a tablet - and the
+//  tray had no way to know that: it read the raw number as a fraction of the
+//  screen and multiplied by the width, which threw the row several screens
+//  away on the first drag. The conversion belongs on this side, where g_unit
+//  lives.
+extern "C" void RanTouch_GetPotionAdjust(float *dx, float *dy, float *scale) {
+    if (dx)    *dx    = g_adj[kGrpPotion].dx * g_unit;
+    if (dy)    *dy    = g_adj[kGrpPotion].dy * g_unit;
+    if (scale) *scale = g_adj[kGrpPotion].scale;
+}
+
 //  The painted sheet for the controls. Handed over once by the client, which
 //  owns the texture; 0 puts the drawn shapes back.
 extern "C" void RanTouch_SetHudSheet(unsigned tex, int w, int h) {
@@ -2368,6 +2438,10 @@ void RanTouch_Render(void) {
             continue;
         }
 
+        //  Painted bezels are drawn in the live pass below, for the same
+        //  reason the buttons are: this loop fills a cache that is replayed.
+        if (hudSheet()) continue;
+
         chromeDisc(c.x, c.y, fr, 1.0f, kFace, kFaceE);
     }
 
@@ -2512,6 +2586,47 @@ void RanTouch_Render(void) {
             drawHudCell(kCellStickBase, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
             drawHudCell(kCellStickKnob, g_stick.knob.x, g_stick.knob.y,
                         g_stick.radius * 0.47f, sa);
+        }
+        glUseProgram(g_prog);
+        glBindVertexArray(g_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        glUniform2f(uViewport, (float)g_width, (float)g_height);
+    }
+
+    //  The skill slots get the painted bezel too - it was in the sheet from the
+    //  start and only the potion row was using it.
+    if (hudSheet() && g_skillCircleCount > 0) {
+        const float sa = g_adj[kGrpSkill].alpha;
+        for (int i = 0; i < g_skillCircleCount; ++i) {
+            const SkillCircle &c = g_skillCircles[i];
+            //  The stick's seat, not the square frame that came with the
+            //  set: these slots are circles, and a square bezel round a round
+            //  icon leaves its corners hanging in the air. The seat is the
+            //  one round bezel in the sheet.
+            drawHudCell(kCellStickBase, c.x, c.y, c.r * 1.62f, sa);
+        }
+    }
+
+    //  The potion slots: the painted bezel, then the item inside it.
+    if (hudSheet() && g_potCount > 0) {
+        const float pa = g_adj[kGrpPotion].alpha;
+        for (int i = 0; i < g_potCount; ++i)
+            drawHudCell(kCellStickBase, g_potX[i], g_potY[i], g_potRad[i] * 1.62f, pa);
+        ensureTexProg();
+        if (g_texProg) {
+            glUseProgram(g_texProg);
+            glUniform2f(uTexViewport, (float)g_width, (float)g_height);
+            glUniform1f(uTexAlpha, pa);
+            glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
+            for (int i = 0; i < g_potCount; ++i) {
+                SkillIcon ic;
+                ic.tex = g_potTex[i]; ic.x = g_potX[i]; ic.y = g_potY[i]; ic.r = g_potRad[i];
+                ic.u0 = g_potU0[i]; ic.v0 = g_potV0[i];
+                ic.u1 = g_potU1[i]; ic.v1 = g_potV1[i];
+                ic.texW = g_potTW[i]; ic.texH = g_potTH[i];
+                drawIconDisc(ic);
+            }
+            glBindVertexArray(0);
         }
         glUseProgram(g_prog);
         glBindVertexArray(g_vao);
