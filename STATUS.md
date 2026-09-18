@@ -64,6 +64,18 @@ and `MOBILE_MENU_BUTTON`, new gameword `MOBILE_MENU`.
 
 **Not yet tested on the iPhone.**
 
+**Shipped as patch 450 / APK V067 (versionCode 89) / iOS 1.0.89.**
+
+Getting there caught a release bug that had already cost two rounds:
+CMakeLists stamps the iOS bundle version as `1.0.<android versionCode>`, read
+straight out of `AndroidManifest.xml`, but that file was not in the iOS
+workflow's push path filter - and MAKE-PATCH bumps the number *after* the code
+is pushed. So CI stamped the version already installed on the phone and
+AltStore had nothing to offer. The file is in the filter now, which the very
+next push proved by triggering a build.
+
+Upload set: 2 blobs, 94.4 MB, plus `manifest` and `ios/`.
+
 
 ## 2026-09-18 (5) — A trustworthy sweep at last, and what the character effects actually do
 
