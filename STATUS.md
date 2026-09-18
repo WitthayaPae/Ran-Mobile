@@ -123,6 +123,14 @@ a hold becomes a right-click after 450 ms (`GESTURE right(hold) ... after
 450ms`), so the flip lives about one frame - and `CBasicButton::Update` clears
 it at the top of every frame before `TranslateMouseMessage` can set it again.
 
+**The amber event ring is gone again, by request.** `AUCTION_ALERT` and
+`COMPETITION_NOTIFY_BUTTON_BLINK` draw nothing now - a zero-area source rect,
+the same way the GAME_MENU bar is suppressed, so no behaviour changes and the
+controls still exist for anything that looks them up. The press ring stays but
+is neutral rather than cream, so no yellow ring is left anywhere on an icon.
+The gold inside a glyph - the skill spark, the quest seal, the ranking crown -
+is icon design, not a notification, and is untouched.
+
 
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
