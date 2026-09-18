@@ -86,6 +86,43 @@ and the quest box slid across into the space - movement nobody asked for, under
 a finger already on its way. Verified by screenshot either side of the tap: the
 quest box does not move.
 
+**The three overlays an icon wears, and what was wrong with each.** An icon in
+this client is not one picture: a press shows `MENU_OVER_IMAGE`, an event
+blinks `AUCTION_ALERT` / `COMPETITION_NOTIFY_BUTTON_BLINK` over it, and the
+competition button can wear a lock. All three were still the original 24x24 and
+35x35 art from `Interface_Main` and `q_icon`, laid over a rounded 128-pixel
+plate - small hard boxes in the corner of a cell. They are drawn at 128 into
+`mobile_icons.dds` now, on the plate's own corner radius.
+
+Three faults found while doing it, each measured rather than guessed:
+
+* **The plate's outline was lop-sided.** In the source art the rim read 146,
+  144 and 145 on top, bottom and left - and **64 on the right**. It was an outer
+  rounded rect with a reversed inner one inside it, and `roundRectPts` starts
+  its path at the bottom-right corner, so the two segments bridging outer to
+  inner both run along the right edge and cancel the fill exactly there under
+  non-zero winding. A closed stroke has no seam. Re-measured 149/149/149/147.
+* **The overlays carried an opaque plate.** They were built in the same loop as
+  the icons, which draws `plate()` first - so the press ring and the event ring
+  each came with a slab that blanked out the icon they were meant to decorate.
+  Overlays skip the plate now.
+* **The competition blink and lock sat at `Y="24"`**, the offset from the days
+  when that button was a 35x59 box with a badge above the picture. The box is
+  square now, so both drew below the icon.
+
+And the icons stopped floating over everything. They are the client's own
+controls, not children of the menu, so their place in the interface is whatever
+`ShowGroupFocus` last made it - and that is an `InsertTail`. Raising them every
+frame kept shoving them to the very top: with the menu up, opening the inventory
+put its window correctly over the menu's panel and left the menu's icons on top
+of it. They are raised on the rising edge now.
+
+Worth knowing for any future work on the press state: it cannot be photographed
+on the emulator. The gesture layer delivers a left press only on finger-up, and
+a hold becomes a right-click after 450 ms (`GESTURE right(hold) ... after
+450ms`), so the flip lives about one frame - and `CBasicButton::Update` clears
+it at the top of every frame before `TranslateMouseMessage` can set it again.
+
 
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
