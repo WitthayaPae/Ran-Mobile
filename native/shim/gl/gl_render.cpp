@@ -299,12 +299,15 @@ const char *kFS =
     "uniform highp int uPlain;\n"
     "uniform float uAlphaRef;\n"
     "out vec4 oColor;\n"
+    //  Baked into the variant when the stage fold is on - see stageKeyId.
+    "#ifndef uColorOp\n"
     "uniform int uColorOp;\n"     // D3DTOP_*, stage 0
     "uniform int uColorArg1;\n"   // D3DTA_*
     "uniform int uColorArg2;\n"
     "uniform int uAlphaOp;\n"
     "uniform int uAlphaArg1;\n"
     "uniform int uAlphaArg2;\n"
+    "#endif\n"
     "uniform vec4 uTexFactor;\n"
     "uniform samplerCube uTexCube;\n"
     //  Stage 1 as a plain 2D texture. The character effects put a gloss map
@@ -1083,6 +1086,7 @@ GLenum cmpFunc(DWORD d3d) {
 extern "C" void RanD3D_ProbeTextures(void);
 extern "C" void  RanGLR_SetSceneScale(float s);
 extern "C" float RanGLR_SceneScale(void);
+bool g_foldStages = false;
 
 extern "C" void RanGLR_RefreshDiagnostics(void) {
     struct { const char *name; bool *flag; const char *what; } diag[] = {
@@ -1097,6 +1101,9 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
         { "nouisharp", &g_noUiSharp, "the sharper magnification filter on interface art" },
         { "vaocache",  &g_vaoCacheOn, "NOT using a VAO per client buffer layout (on while present)" },
         { "nobaseonly", &g_noBaseOnly, "re-issuing only pointers when just the vertex source moved" },
+        //  Present = ON, unlike its neighbours: this is a candidate waiting for
+        //  a measurement on a phone, not something being switched off.
+        { "foldstages", &g_foldStages, "NOT baking the texture stage into the shader (baked while present)" },
         { "plainfs",   &g_plainFS,   "everything the fragment shader does after the texture fetch" },
         { "reflectchars", &g_reflectChars, "NOT skipping character reflections (they are skipped by default)" },
         { "nocull",    &g_noCull,      "face culling entirely" },
@@ -1363,8 +1370,59 @@ unsigned variantKey(int preTransformed, int lighting, int specular, int fogMode,
 //  default: highp is what fixes the blocky interface on Apple GPUs.
 bool g_uvMediump = false;
 
+//  The texture-stage settings, folded into the shader instead of read from
+//  uniforms.
+//
+//  The six stage values are the fixed-function emulation, and as uniforms they
+//  cost every pixel of every draw two operation ladders and four argValue
+//  chains to rediscover what the stage was set to. Measured in the GM crowd the
+//  whole frame uses 14 distinct combinations and two of them are 78% of the
+//  draws, so they fit in the variant key, where the compiler folds them to
+//  straight-line code and most of them to nothing at all.
+//
+//  Id 0 always means "read them from the uniforms", which is the behaviour this
+//  replaces: it is what a combination past the end of the table falls back to,
+//  and what the whole frame uses while the fold is switched off.
+struct StageKey { unsigned v[6]; };
+static StageKey g_stageKeyTab[15];
+static int      g_stageKeyCount = 0;
+
+//  Which combination the draw being set up uses; 0 means the uniform path, and
+//  then the six uniforms still have to be sent.
+static unsigned g_stageId = 0;
+
+//  Give this combination its variant id, interning it if it is new.
+static unsigned stageKeyId(void) {
+    if (!g_foldStages) return 0;
+    for (int i = 0; i < g_stageKeyCount; ++i) {
+        const StageKey &k = g_stageKeyTab[i];
+        if (k.v[0] == (unsigned)g_colorOp   && k.v[1] == (unsigned)g_colorArg1 &&
+            k.v[2] == (unsigned)g_colorArg2 && k.v[3] == (unsigned)g_alphaOp   &&
+            k.v[4] == (unsigned)g_alphaArg1 && k.v[5] == (unsigned)g_alphaArg2)
+            return (unsigned)(i + 1);
+    }
+    if (g_stageKeyCount >= 15) return 0;      // past the table: stay dynamic
+    StageKey &k = g_stageKeyTab[g_stageKeyCount++];
+    k.v[0] = (unsigned)g_colorOp;   k.v[1] = (unsigned)g_colorArg1;
+    k.v[2] = (unsigned)g_colorArg2; k.v[3] = (unsigned)g_alphaOp;
+    k.v[4] = (unsigned)g_alphaArg1; k.v[5] = (unsigned)g_alphaArg2;
+    return (unsigned)g_stageKeyCount;
+}
+
 std::string variantPreamble(unsigned key) {
-    char buf[600];
+    char buf[900];
+    //  Bits 15-18: which interned stage combination, 0 for the uniform path.
+    const unsigned stageId = (key >> 15) & 15;
+    std::string stage;
+    if (stageId && (int)stageId <= g_stageKeyCount) {
+        const StageKey &k = g_stageKeyTab[stageId - 1];
+        char sb[300];
+        snprintf(sb, sizeof(sb),
+                 "#define uColorOp %u\n#define uColorArg1 %u\n#define uColorArg2 %u\n"
+                 "#define uAlphaOp %u\n#define uAlphaArg1 %u\n#define uAlphaArg2 %u\n",
+                 k.v[0], k.v[1], k.v[2], k.v[3], k.v[4], k.v[5]);
+        stage = sb;
+    }
     snprintf(buf, sizeof(buf),
              "#define RAN_UVP %s\n"
              "#define uPreTransformed %d\n"
@@ -1388,7 +1446,7 @@ std::string variantPreamble(unsigned key) {
              (key & 0x400) ? 1 : 0,
              (key & 0x800) ? 1 : 0,
              (int)((key >> 12) & 7));
-    return std::string(buf);
+    return stage + std::string(buf);
 }
 
 //  The version line has to stay first, so the defines go after it.
@@ -2159,7 +2217,10 @@ void applyProgramUniforms() {
         //  path through argValue and the two op ladders.
         setUniform1i(uColorOp, 4); setUniform1i(uColorArg1, 2); setUniform1i(uColorArg2, 0);
         setUniform1i(uAlphaOp, 4); setUniform1i(uAlphaArg1, 2); setUniform1i(uAlphaArg2, 0);
-    } else {
+    } else if (g_stageId == 0) {
+        //  Only when the combination is not baked into the variant: with the
+        //  fold on, these locations do not exist and the values are constants
+        //  in the shader.
         setUniform1i(uColorOp,   (GLint)g_colorOp);
         setUniform1i(uColorArg1, (GLint)g_colorArg1);
         setUniform1i(uColorArg2, (GLint)g_colorArg2);
@@ -3480,11 +3541,14 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
     //  goes. Everything in the key is a constant inside the program, so the
     //  driver compiles away the paths this draw does not use.
     g_uniAfterSwitch = false;       // useVariant sets it again if this draw switches
+    //  Interned before the key is built, because it decides four of its bits.
+    g_stageId = (g_fsProbe & 1) ? 0 : stageKeyId();
     useVariant(variantKey(preTransformed ? 1 : 0, lightingNow, g_specularOn,
                           g_fogMode, (g_fsProbe & 2) ? 0 : g_stage1Mode,
                           ((g_fsProbe & 8) == 0 && g_dsATest) ? 1 : 0,
                           (g_gammaOn && g_gammaLut) ? 1 : 0,
-                          glTexture ? 1 : 0, indexedBlend ? 1 : 0, blendCountNow));
+                          glTexture ? 1 : 0, indexedBlend ? 1 : 0, blendCountNow)
+               | (g_stageId << 15));
     g_palBucket = indexedBlend ? 5 : (blendCountNow <= 0 ? 0 : (blendCountNow > 3 ? 4 : blendCountNow));
     ++g_palDraws[g_palBucket];
     if (indexedBlend) {
