@@ -30,8 +30,24 @@ if [ ${#SECTIONS[@]} -eq 0 ]; then
              ui:names-plate ui:names-text )
 fi
 
-restore() { "$HERE/ios-device.sh" unflag sectionskip >/dev/null 2>&1 || true; }
+#  Hold the frame rate for the duration.
+#
+#  A section's cost is the drop in GPU utilisation when it stops being drawn,
+#  and that only compares if every reading was taken at the same frame rate.
+#  The first real sweep crossed the thermal threshold four minutes in, the clamp
+#  halved the display rate, and every section after that read as costing ~33
+#  points - children of world-eff apparently costing three times their parent.
+#  So the sweep sets noheatpace itself rather than trusting whoever runs it to
+#  remember, and clears it again at the end.
+restore() {
+  "$HERE/ios-device.sh" unflag sectionskip  >/dev/null 2>&1 || true
+  "$HERE/ios-device.sh" unflag noheatpace   >/dev/null 2>&1 || true
+}
 trap restore EXIT INT TERM
+
+"$HERE/ios-device.sh" flag noheatpace >/dev/null 2>&1 \
+  && echo "noheatpace set - the frame rate is held for the sweep" \
+  || echo "WARNING: could not set noheatpace; a thermal clamp mid-sweep will fake large costs"
 
 #  Average Device Utilisation over SAMPLE readings. dvt emits one a second.
 gpu() {
