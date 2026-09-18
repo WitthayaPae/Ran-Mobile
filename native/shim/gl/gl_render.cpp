@@ -1140,6 +1140,7 @@ extern "C" void RanGLR_NoteSectionDraw(int vcount, int icount, int blended);
 extern "C" void RanGLR_LogSectionDraws(unsigned frames);
 extern "C" void  RanGLR_SetSceneScale(float s);
 extern "C" float RanGLR_SceneScale(void);
+extern "C" void  RanGLR_SetSceneScaleDiag(int pct);
 bool g_foldStages = false;
 
 extern "C" void RanGLR_RefreshDiagnostics(void) {
@@ -1267,23 +1268,27 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
     }
     //  A percentage of the panel to draw the world at, so the setting can be
     //  A/B'd on a device without a rebuild: 70 means 70%, absent means full.
+    //  Absent means "no override", NOT "draw at full size" - see
+    //  RanGLR_SetSceneScaleDiag. Reading it as full size overwrote the player's
+    //  graphics quality setting once a second.
     {
-        float want = 1.0f;
+        int pct = 0;
         FILE *f = (RanPlat_DiagExists("worldscale")) ? RanPlat_DiagOpen("worldscale") : NULL;
         if (f) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
-                const int pct = atoi(buf);
+                const int v = atoi(buf);
                 //  Over 100 is the supersampling measuring mode - see
                 //  RanGLR_SetSceneScale. The settings page only offers 70-100.
-                if (pct >= 50 && pct <= 200) want = (float)pct / 100.0f;
+                if (v >= 50 && v <= 200) pct = v;
             }
             fclose(f);
         }
-        if (want != RanGLR_SceneScale()) {
-            RanGLR_SetSceneScale(want);
-            LOGI("diagnostic: world drawn at %.0f%% of the panel", RanGLR_SceneScale() * 100.0f);
-        }
+        const float before = RanGLR_SceneScale();
+        RanGLR_SetSceneScaleDiag(pct);
+        if (before != RanGLR_SceneScale())
+            LOGI("world drawn at %.0f%% of the panel (%s)", RanGLR_SceneScale() * 100.0f,
+                 pct ? "worldscale diagnostic" : "the player's setting");
     }
     for (size_t i = 0; i < sizeof(diag) / sizeof(diag[0]); ++i) {
         const bool on = RanPlat_DiagExists(diag[i].name) != 0;
@@ -1838,7 +1843,43 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
 //  How much of the panel the world is drawn at: 1.0 is the panel itself and
 //  turns the whole mechanism off. Clamped to something that still looks like
 //  the game - below half the panel the world is mush whatever the filter.
+//  The player's choice, and whether the diagnostic is currently overriding it.
+//
+//  These have to be separate. The diagnostic is re-read once a second, and when
+//  the file is absent it means "no override" - not "draw at full size". Reading
+//  it as the latter is what made the graphics quality setting impossible to
+//  use: the player picked 70%, and a second later the refresh set it back to
+//  100%, every time. A diagnostic that is not present must leave the setting
+//  exactly where the player put it.
+static float g_sceneScaleWanted = 1.0f;
+static bool  g_sceneDiagOn = false;
+
+static void applySceneScale(float s);
+
+//  What the player chose, from RANPARAM. Applied unless a diagnostic is
+//  currently overriding it, and remembered either way so that removing the
+//  diagnostic comes back here rather than to full size.
 extern "C" void RanGLR_SetSceneScale(float s) {
+    if (s > 2.0f)  s = 2.0f;
+    if (s < 0.5f)  s = 0.5f;
+    g_sceneScaleWanted = s;
+    if (!g_sceneDiagOn) applySceneScale(s);
+}
+
+//  The diagnostic: a percentage while the file is there, and the player's own
+//  setting again once it is gone.
+extern "C" void RanGLR_SetSceneScaleDiag(int pct) {
+    if (pct <= 0) {
+        if (!g_sceneDiagOn) return;
+        g_sceneDiagOn = false;
+        applySceneScale(g_sceneScaleWanted);
+        return;
+    }
+    g_sceneDiagOn = true;
+    applySceneScale((float)pct / 100.0f);
+}
+
+static void applySceneScale(float s) {
     //  Above 1 the world is drawn LARGER than the panel and scaled back down.
     //  Nobody would ship that - it is a measuring tool. The question "how much
     //  of the frame is fragment cost?" cannot be answered on a machine where
