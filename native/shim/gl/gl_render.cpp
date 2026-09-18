@@ -1213,7 +1213,9 @@ extern "C" void RanGLR_RefreshDiagnostics(void) {
             char buf[16] = { 0 };
             if (fread(buf, 1, sizeof(buf) - 1, f) > 0) {
                 const int pct = atoi(buf);
-                if (pct >= 50 && pct <= 100) want = (float)pct / 100.0f;
+                //  Over 100 is the supersampling measuring mode - see
+                //  RanGLR_SetSceneScale. The settings page only offers 70-100.
+                if (pct >= 50 && pct <= 200) want = (float)pct / 100.0f;
             }
             fclose(f);
         }
@@ -1595,6 +1597,9 @@ static int    g_sceneW = 0, g_sceneH = 0;
 static bool   g_sceneActive = false;
 static float  g_sceneScale = 1.0f;
 static bool   g_sceneFailed = false;
+//  A scale asked for while the pass was running, taken up at the next begin.
+static float  g_scenePending = 1.0f;
+static bool   g_sceneHasPending = false;
 
 extern "C" void RanGLR_InvalidateStateCache(void);
 
@@ -1722,11 +1727,27 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
 //  turns the whole mechanism off. Clamped to something that still looks like
 //  the game - below half the panel the world is mush whatever the filter.
 extern "C" void RanGLR_SetSceneScale(float s) {
-    if (s > 1.0f)  s = 1.0f;
+    //  Above 1 the world is drawn LARGER than the panel and scaled back down.
+    //  Nobody would ship that - it is a measuring tool. The question "how much
+    //  of the frame is fragment cost?" cannot be answered on a machine where
+    //  something else is the bottleneck, and the emulator is bound by call
+    //  submission. Drawing four times the pixels makes fill the bottleneck, and
+    //  then the fragment shader's cost is visible in the frame time here
+    //  instead of only on a phone.
+    if (s > 2.0f)  s = 2.0f;
     if (s < 0.5f)  s = 0.5f;
-    if (s == g_sceneScale || g_sceneActive) return;
+    if (s == g_sceneScale) return;
+    //  Asked for in the middle of the world pass - the diagnostics are re-read
+    //  from inside the frame - so it is remembered and taken up at the start of
+    //  the next one. Changing the target out from under the pass that is
+    //  drawing into it would lose the frame; dropping the request lost the
+    //  setting entirely, which is what made it look as though it had no effect.
+    g_scenePending = s;
+    g_sceneHasPending = true;
+    if (g_sceneActive) return;
     g_sceneScale = s;
     g_sceneFailed = false;
+    g_sceneHasPending = false;
     //  The target is rebuilt at the new size on the next frame that uses it.
     g_sceneW = g_sceneH = 0;
 }
@@ -1736,8 +1757,19 @@ extern "C" float RanGLR_SceneScale(void) { return g_sceneScale; }
 //  The world pass starts here: everything drawn until RanGLR_SceneEnd lands in
 //  the smaller target. Safe to call when the scale is 1 - it does nothing.
 extern "C" void RanGLR_SceneBegin(void) {
-    if (!g_inited || g_sceneActive || g_sceneFailed) return;
-    if (g_sceneScale >= 0.999f) return;
+    if (!g_inited || g_sceneActive) return;
+    if (g_sceneHasPending) {
+        g_sceneHasPending = false;
+        if (g_scenePending != g_sceneScale) {
+            g_sceneScale = g_scenePending;
+            g_sceneFailed = false;
+            g_sceneW = g_sceneH = 0;
+        }
+    }
+    if (g_sceneFailed) return;
+    //  Exactly the panel means there is nothing to gain from a target at all;
+    //  larger than the panel is the supersampling measuring mode, which does.
+    if (g_sceneScale > 0.999f && g_sceneScale < 1.001f) return;
 
     const int w = (int)lroundf(RanGL_Width()  * g_sceneScale);
     const int h = (int)lroundf(RanGL_Height() * g_sceneScale);
@@ -2081,6 +2113,45 @@ extern "C" void RanGLR_SetTextureStage(DWORD colorOp, DWORD colorArg1, DWORD col
 //
 //  This used to run inside RanGLR_ApplyState, which is called before the draw
 //  chooses its shader variant - so the uniforms went to the previous program.
+//  The texture-stage combinations seen this frame, and how many draws used
+//  each. Small and flat: if this ever needs more than 32 the answer to the
+//  question it is asking - "do these belong in the variant key?" - is no.
+struct StageCombo { unsigned key[6]; unsigned long draws; };
+static StageCombo g_stageCombo[32];
+static int g_stageComboCount = 0;
+static unsigned long g_stageComboOverflow = 0;
+
+extern "C" void RanGLR_NoteStageCombo(unsigned co, unsigned c1, unsigned c2,
+                                      unsigned ao, unsigned a1, unsigned a2) {
+    for (int i = 0; i < g_stageComboCount; ++i) {
+        StageCombo &s = g_stageCombo[i];
+        if (s.key[0] == co && s.key[1] == c1 && s.key[2] == c2 &&
+            s.key[3] == ao && s.key[4] == a1 && s.key[5] == a2) { ++s.draws; return; }
+    }
+    if (g_stageComboCount >= 32) { ++g_stageComboOverflow; return; }
+    StageCombo &s = g_stageCombo[g_stageComboCount++];
+    s.key[0] = co; s.key[1] = c1; s.key[2] = c2;
+    s.key[3] = ao; s.key[4] = a1; s.key[5] = a2;
+    s.draws = 1;
+}
+
+extern "C" void RanGLR_LogStageCombos(void) {
+    char line[900];
+    int at = snprintf(line, sizeof(line), "FRAME stage combos: %d distinct%s",
+                      g_stageComboCount,
+                      g_stageComboOverflow ? " (more than 32, truncated)" : "");
+    for (int i = 0; i < g_stageComboCount && at < 800; ++i) {
+        const StageCombo &s = g_stageCombo[i];
+        at += snprintf(line + at, sizeof(line) - at, " | c%u(%u,%u) a%u(%u,%u) x%lu",
+                       s.key[0], s.key[1], s.key[2], s.key[3], s.key[4], s.key[5], s.draws);
+    }
+    LOGI("%s", line);
+    LOGI("FRAME gamma ramp: %s (3 dependent texture reads a pixel while on)",
+         g_gammaOn ? "ON" : "off");
+    g_stageComboCount = 0;
+    g_stageComboOverflow = 0;
+}
+
 //  The state is all in globals already, so it simply moved.
 void applyProgramUniforms() {
     if (g_fsProbe & 1) {
@@ -2095,6 +2166,16 @@ void applyProgramUniforms() {
         setUniform1i(uAlphaOp,   (GLint)g_alphaOp);
         setUniform1i(uAlphaArg1, (GLint)g_alphaArg1);
         setUniform1i(uAlphaArg2, (GLint)g_alphaArg2);
+        //  How many distinct texture-stage settings a frame actually uses.
+        //
+        //  These six are the fixed-function stage emulation and they are plain
+        //  uniforms, so every pixel of every draw walks two operation ladders
+        //  and four argValue chains to discover what the stage was set to. If
+        //  the frame only ever uses a handful of combinations they belong in
+        //  the shader variant key instead, where they cost nothing - this
+        //  counts them so that is a measurement rather than an assumption.
+        RanGLR_NoteStageCombo((unsigned)g_colorOp, (unsigned)g_colorArg1, (unsigned)g_colorArg2,
+                              (unsigned)g_alphaOp, (unsigned)g_alphaArg1, (unsigned)g_alphaArg2);
     }
     setUniformVec4(uTexFactor, g_texFactor);
     setUniform1i(uStage1, (g_fsProbe & 2) ? 0 : g_stage1Mode);
@@ -2588,6 +2669,7 @@ extern "C" void RanGLR_ReportVariantFlips(unsigned frames) {
     LOGI("FRAME uniforms on switching draws/frame: %lu calls %lu KB",
          g_uniSwitchCalls / frames, g_uniSwitchBytes / 1024 / frames);
     g_uniSwitchCalls = g_uniSwitchBytes = 0;
+    RanGLR_LogStageCombos();
 }
 
 extern "C" void RanGLR_TakeUpStream(unsigned long *calls, unsigned long *bytes) {
