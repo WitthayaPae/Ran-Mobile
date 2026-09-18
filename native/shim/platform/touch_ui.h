@@ -96,6 +96,11 @@ extern "C" void RanTouch_SetSkillPage(int page);
 //  The skill icons, drawn by the overlay so they can be cropped to their round
 //  button. Positions and radii are in surface pixels; the UVs come straight
 //  off the control the icon was taken from.
+//  The painted sheet the controls are drawn from: one texture, sixteen cells
+//  in a 4 x 4 grid. Handed over by the client, which owns the texture. Pass 0
+//  and the overlay falls back to drawing the controls as shapes.
+extern "C" void RanTouch_SetHudSheet(unsigned tex, int w, int h);
+
 extern "C" void RanTouch_SetSkillIcons(int count, const unsigned *tex,
                                        const float *cx, const float *cy, const float *r,
                                        const float *u0, const float *v0,

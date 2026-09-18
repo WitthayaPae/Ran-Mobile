@@ -1461,6 +1461,97 @@ float iconPressScale(const SkillIcon &ic) {
     return 1.0f;
 }
 
+//  The painted sheet for the controls themselves.
+//
+//  The buttons used to be drawn from shapes - a chrome disc and a vector mark -
+//  which read as machined rather than painted beside the client's own art. The
+//  client hands over one texture and the overlay samples a cell out of it, the
+//  same way it already does for the skill pictures. If the sheet never arrives
+//  the old shapes still draw, so a missing file costs the look and nothing else.
+unsigned g_hudTex = 0;
+float    g_hudTexW = 0.0f, g_hudTexH = 0.0f;
+const int kHudCols = 4;
+
+enum {
+    kCellAtk = 0, kCellAtkRing, kCellSkillFrame, kCellAuto,
+    kCellAutoOn,  kCellPK,      kCellPKOn,       kCellCamLock,
+    kCellCamLockOn, kCellPickup, kCellVehicle,   kCellMenu,
+    kCellPageUp,  kCellPageDown, kCellStickBase, kCellStickKnob,
+};
+
+bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
+
+//  One cell of the sheet, as a square centred on a point.
+void drawHudCell(int cell, float cx, float cy, float half, float alpha) {
+    if (!hudSheet() || cell < 0) return;
+    ensureTexProg();
+    if (!g_texProg) return;
+
+    const float cw = 1.0f / (float)kHudCols;
+    const float ch = cw;                       //  the sheet is square, 4 x 4
+    const float u0 = (float)(cell % kHudCols) * cw;
+    const float v0 = (float)(cell / kHudCols) * ch;
+
+    glUseProgram(g_texProg);
+    //  Say what the blend is rather than inheriting it. The pad sets its own
+    //  blend for the stick's segments and for the halo fans, and a cell drawn
+    //  while one of those is in force comes out invisible with no GL error.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glUniform2f(uTexViewport, (float)g_width, (float)g_height);
+    glUniform1f(uTexAlpha, alpha);
+    glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
+    glUniform2f(uTexTexSize, g_hudTexW, g_hudTexH);
+    //  One output pixel per texel is the honest ratio here: the cell is square
+    //  and drawn square, unlike the skill discs which crop a rectangle.
+    glUniform1f(uTexSharpen, 1.0f);
+
+    const float v[] = {
+        cx - half, cy - half, u0,      v0,
+        cx + half, cy - half, u0 + cw, v0,
+        cx + half, cy + half, u0 + cw, v0 + ch,
+        cx - half, cy - half, u0,      v0,
+        cx + half, cy + half, u0 + cw, v0 + ch,
+        cx - half, cy + half, u0,      v0 + ch,
+    };
+    glBindVertexArray(g_texVao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof(v), v);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_hudTex);
+    //  The sheet ships with one level and no mipmaps, and a texture whose min
+    //  filter asks for mipmaps it does not have is incomplete - it samples as
+    //  nothing at all. Every control drawn from it was invisible, with no GL
+    //  error to say why, until these were set.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    //  Back to the flat shader the rest of the overlay draws with.
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+}
+
+//  Which cell a button uses, and which when it is switched on.
+int hudCellFor(int slot, bool on) {
+    switch (slot) {
+        case kSlotAuto:    return on ? kCellAutoOn    : kCellAuto;
+        case kSlotPK:      return on ? kCellPKOn      : kCellPK;
+        case kSlotCamLock: return on ? kCellCamLockOn : kCellCamLock;
+        case kSlotPickup:  return kCellPickup;
+        case kSlotVehicle: return kCellVehicle;
+        case kSlotMenu:    return kCellMenu;
+        case kSlotPagePrev:return kCellPageUp;
+        case kSlotPageNext:return kCellPageDown;
+    }
+    return -1;
+}
+
 void drawIcons(float w, float h) {
     if (g_iconCount <= 0) return;
     ensureTexProg();
@@ -1480,6 +1571,14 @@ void drawIcons(float w, float h) {
 } // namespace
 
 //  Handed over by the tray each time it arranges the arc.
+//  The painted sheet for the controls. Handed over once by the client, which
+//  owns the texture; 0 puts the drawn shapes back.
+extern "C" void RanTouch_SetHudSheet(unsigned tex, int w, int h) {
+    g_hudTex  = tex;
+    g_hudTexW = (float)w;
+    g_hudTexH = (float)h;
+}
+
 extern "C" void RanTouch_SetSkillIcons(int count, const unsigned *tex,
                                        const float *cx, const float *cy, const float *r,
                                        const float *u0, const float *v0,
@@ -1914,20 +2013,28 @@ static void drawStickShapes(const Vec2 &base) {
         //  disc that covered the world under the thumb; at 30% the ring still
         //  reads and the ground shows through.
         drawHalo(base.x, base.y + R * 0.12f, R * 0.86f, rgba(0.0f, 0.0f, 0.0f, 0.42f), 1.55f);
+
+        //  Painted seat, if the sheet is here. What stays drawn is everything
+        //  that moves: the heading wedge, the amber rim at full deflection and
+        //  the glow under the knob all answer the thumb, and none of that can
+        //  come out of a still image.
+        if (!hudSheet())
         drawFan(base.x, base.y, R * 0.92f, kFaceE.r, kFaceE.g, kFaceE.b, 0.30f * a);
 
         //  Eight ticks, which is what gives the ring a sense of direction even
         //  before the thumb moves.
-        for (int i = 0; i < 8; ++i) {
-            const float t = -1.5707963f + (float)i * 6.2831853f / 8.0f;
-            const float c = cosf(t), si = sinf(t);
-            drawCapsule(base.x + c * R * 0.62f, base.y + si * R * 0.62f,
-                        base.x + c * R * 0.74f, base.y + si * R * 0.74f,
-                        R * 0.028f, alpha(kSteel, 0.55f * a));
+        if (!hudSheet()) {
+            for (int i = 0; i < 8; ++i) {
+                const float t = -1.5707963f + (float)i * 6.2831853f / 8.0f;
+                const float c = cosf(t), si = sinf(t);
+                drawCapsule(base.x + c * R * 0.62f, base.y + si * R * 0.62f,
+                            base.x + c * R * 0.74f, base.y + si * R * 0.74f,
+                            R * 0.028f, alpha(kSteel, 0.55f * a));
+            }
+            drawRing(base.x, base.y, R * 0.90f, R * 0.93f, kDark.r, kDark.g, kDark.b, 0.40f * a);
+            bevel(base.x, base.y, R * 0.92f, R, a);
+            rimLight(base.x, base.y, R, a);
         }
-        drawRing(base.x, base.y, R * 0.90f, R * 0.93f, kDark.r, kDark.g, kDark.b, 0.40f * a);
-        bevel(base.x, base.y, R * 0.92f, R, a);
-        rimLight(base.x, base.y, R, a);
 
         //  A heading wedge on the rim, which the old stick gave no sign of at
         //  all, and the whole rim goes amber at full deflection - which is how
@@ -1947,6 +2054,7 @@ static void drawStickShapes(const Vec2 &base) {
         //  The knob: the solid part, the thing the thumb is actually holding.
         const float kr = R * 0.42f;
         if (g_stick.held) bloom(g_stick.knob.x, g_stick.knob.y, kr, kAmber, 0.20f);
+        if (!hudSheet())
         chromeDisc(g_stick.knob.x, g_stick.knob.y, kr, 1.0f,
                    g_stick.held ? rgba(0.659f, 0.486f, 0.227f, 1.0f) : kFace,
                    g_stick.held ? rgba(0.204f, 0.102f, 0.016f, 1.0f) : kFaceE);
@@ -2285,6 +2393,14 @@ void RanTouch_Render(void) {
             bloom(b.centre.x, b.centre.y, R, kAmber, b.down ? 0.42f : 0.20f);
             //  Twelve segments: the swing timer. Full until the client feeds a
             //  fraction in, so it reads as ready rather than as broken.
+            if (hudSheet()) {
+                //  Painted, in the pass below. The swing timer stays here: it
+                //  is live and it is flat colour, so the cache suits it.
+                segRing(b.centre.x, b.centre.y, R * 1.00f, R * 1.09f, 12, 1.0f,
+                        kAmber, kSteel, 0.62f, 0.22f);
+                continue;
+            }
+
             segRing(b.centre.x, b.centre.y, R * 1.00f, R * 1.09f, 12, 1.0f,
                     kAmber, kSteel, 0.62f, 0.22f);
             chromeDisc(b.centre.x, b.centre.y, R * 0.94f, a,
@@ -2305,6 +2421,19 @@ void RanTouch_Render(void) {
         const bool pk  = (b.slot == kSlotPK);
         const bool loot = (b.slot == kSlotPickup);
         const Col state = pk ? kCrim : kCyan;
+
+        //  Painted: nothing to build here.
+        //
+        //  This loop fills a cache that is rebuilt only when the layout
+        //  changes, and then replayed every frame - so a texture drawn from
+        //  inside it appears for the one frame of the rebuild and never again.
+        //  That is exactly what happened. The cells are drawn in their own
+        //  pass after the cache is replayed; all that is left here is the
+        //  bloom under a lit toggle, which is flat colour and caches happily.
+        if (hudSheet() && hudCellFor(b.slot, b.toggled) >= 0) {
+            if (b.toggled) bloom(b.centre.x, b.centre.y, R, state, 0.26f);
+            continue;
+        }
 
         if (b.toggled) {
             bloom(b.centre.x, b.centre.y, R, state, 0.26f);
@@ -2351,6 +2480,43 @@ void RanTouch_Render(void) {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glBindVertexArray(g_vao);
         glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    }
+
+    //  The painted controls, drawn live.
+    //
+    //  Everything above this point is cached geometry replayed from a buffer;
+    //  these are textures and have to be issued every frame, after that replay
+    //  so they sit on top of the faces and under the skill pictures.
+    emit();
+    if (hudSheet()) {
+        for (int i = 0; i < kButtonCount; ++i) {
+            const Button &b = g_buttons[i];
+            if (b.slot == kSlotVehicle && !g_vehShow) continue;
+            const int grp = groupOfButton(i);
+            const float ga = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
+            const float R  = b.radius * (b.down ? 0.94f : 1.0f);
+            if (b.slot == kSlotAttack) {
+                drawHudCell(kCellAtkRing, b.centre.x, b.centre.y, R * 1.18f, ga);
+                drawHudCell(kCellAtk,     b.centre.x, b.centre.y, R * 1.02f, ga);
+                continue;
+            }
+            const int cell = hudCellFor(b.slot, b.toggled);
+            if (cell >= 0)
+                drawHudCell(cell, b.centre.x, b.centre.y, R * 1.06f, ga);
+        }
+        if (g_stick.radius > 0.0f) {
+            //  The seat follows the thumb the way the drawn one did: where the
+            //  finger landed while it is held, its resting place otherwise.
+            const Vec2 sbase = g_stick.held ? g_stick.origin : g_stick.centre;
+            const float sa = g_adj[kGrpStick].alpha;
+            drawHudCell(kCellStickBase, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
+            drawHudCell(kCellStickKnob, g_stick.knob.x, g_stick.knob.y,
+                        g_stick.radius * 0.47f, sa);
+        }
+        glUseProgram(g_prog);
+        glBindVertexArray(g_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+        glUniform2f(uViewport, (float)g_width, (float)g_height);
     }
 
     //  The icons go on top of their faces.

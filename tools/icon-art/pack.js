@@ -22,7 +22,7 @@ const CELLS=[
  ['auction.png','new-auction.png'],     ['itemmall.png','new-itemmall.png'],
  ['product.png','new-product.png'],     ['escmenu.png','new-escmenu.png'],
  [null,'new-run_on.png'],               ['press.png','new-over.png'],
- [null,'new-alert.png'],                ['qbox.png',null],
+ ['alert.png','new-alert.png'],         ['qbox.png',null],
  ['miniparty.png',null],
 ];
 
