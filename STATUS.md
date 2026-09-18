@@ -71,6 +71,21 @@ Verified on LDPlayer: opens under the compass, 20 icons and 20 names, a tap
 opens the thing and closes the menu, the corner keeps its two, nothing is left
 on screen when shut. **Not yet tested on the iPhone.**
 
+**Three follow-ups, shipped as 456 / V070 / iOS 1.0.92.**
+
+The walk/run cell is gone - the overlay has its own control for it, and a
+second one in a menu is a second thing to keep in step. The item bank now sits
+beside the item mall: it was the tenth cell of the strip and the mall was the
+sixth standalone, four cells apart though they are the same errand. Both lists
+carry the label index with the control now rather than taking it from the loop
+counter, because the order is no longer the order the names were written in.
+
+And the corner icons each own a slot. They were packed right to left, skipping
+whichever was hidden, so opening the party panel took its icon off the corner
+and the quest box slid across into the space - movement nobody asked for, under
+a finger already on its way. Verified by screenshot either side of the tap: the
+quest box does not move.
+
 
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
