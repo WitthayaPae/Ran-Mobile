@@ -905,6 +905,58 @@ char g_sectionSkipName[48] = { 0 };
 const char *g_sectionStack[16] = { 0 };
 int  g_sectionTop = 0;
 
+//  Draws, triangles and blended triangles charged to each section this frame.
+//  The names are string literals from the RAN_SECTION markers, so the pointer
+//  is the key and nothing has to be copied or compared.
+struct SectionDraws {
+    const char *name;
+    unsigned long draws, tris, blendTris;
+};
+SectionDraws g_sectionDraws[48];
+int g_sectionDrawCount = 0;
+
+extern "C" void RanGLR_NoteSectionDraw(int vcount, int icount, int blended) {
+    const char *sec = (g_sectionTop > 0 && g_sectionTop <= 16)
+                    ? g_sectionStack[g_sectionTop - 1] : NULL;
+    if (!sec) return;
+    const unsigned long tris = (unsigned long)(icount > 0 ? icount : vcount) / 3;
+
+    for (int i = 0; i < g_sectionDrawCount; ++i) {
+        if (g_sectionDraws[i].name == sec) {
+            ++g_sectionDraws[i].draws;
+            g_sectionDraws[i].tris += tris;
+            if (blended) g_sectionDraws[i].blendTris += tris;
+            return;
+        }
+    }
+    if (g_sectionDrawCount >= 48) return;
+    SectionDraws &d = g_sectionDraws[g_sectionDrawCount++];
+    d.name = sec; d.draws = 1; d.tris = tris;
+    d.blendTris = blended ? tris : 0;
+}
+
+//  Sorted by blended triangles, because that is the one that predicts fill.
+extern "C" void RanGLR_LogSectionDraws(unsigned frames) {
+    if (!frames) frames = 1;
+    for (int i = 0; i < g_sectionDrawCount; ++i)
+        for (int j = i + 1; j < g_sectionDrawCount; ++j)
+            if (g_sectionDraws[j].blendTris > g_sectionDraws[i].blendTris) {
+                SectionDraws t = g_sectionDraws[i];
+                g_sectionDraws[i] = g_sectionDraws[j];
+                g_sectionDraws[j] = t;
+            }
+    char line[900];
+    int at = snprintf(line, sizeof(line), "FRAME section draws/frame (blended tris first):");
+    for (int i = 0; i < g_sectionDrawCount && i < 12 && at < 800; ++i) {
+        const SectionDraws &d = g_sectionDraws[i];
+        at += snprintf(line + at, sizeof(line) - at, " %s %lu draws %lu tris (%lu blended)",
+                       d.name ? d.name : "?", d.draws / frames,
+                       d.tris / frames, d.blendTris / frames);
+    }
+    LOGI("%s", line);
+    g_sectionDrawCount = 0;
+}
+
 extern "C" void RanGLR_SectionEnter(const char *name) {
     if (g_sectionTop < 16) g_sectionStack[g_sectionTop] = name;
     ++g_sectionTop;
@@ -1084,6 +1136,8 @@ GLenum cmpFunc(DWORD d3d) {
 //  can be taken without restarting and logging in again - which matters when
 //  the server drops a session on every reconnect.
 extern "C" void RanD3D_ProbeTextures(void);
+extern "C" void RanGLR_NoteSectionDraw(int vcount, int icount, int blended);
+extern "C" void RanGLR_LogSectionDraws(unsigned frames);
 extern "C" void  RanGLR_SetSceneScale(float s);
 extern "C" float RanGLR_SceneScale(void);
 bool g_foldStages = false;
@@ -2731,6 +2785,7 @@ extern "C" void RanGLR_ReportVariantFlips(unsigned frames) {
          g_uniSwitchCalls / frames, g_uniSwitchBytes / 1024 / frames);
     g_uniSwitchCalls = g_uniSwitchBytes = 0;
     RanGLR_LogStageCombos();
+    RanGLR_LogSectionDraws(frames);
 }
 
 extern "C" void RanGLR_TakeUpStream(unsigned long *calls, unsigned long *bytes) {
@@ -3629,6 +3684,15 @@ static void drawInternal(DWORD primType, UINT primCount, const void *verts,
         setUniform1f(uPanelH, g_rtActive ? 0.0f : (float)RanGL_Height());
     }
     }
+
+    //  Charge this draw to the innermost open section.
+    //
+    //  The GPU cost of a pass can only be read on a phone, and a phone that is
+    //  hot cannot hold a frame rate steady long enough to read more than a few.
+    //  What a pass SUBMITS can be counted anywhere, and for the alpha-blended
+    //  effect passes - where the cost is overdraw, not geometry - the triangle
+    //  count is the closest proxy there is to how much fill they ask for.
+    RanGLR_NoteSectionDraw(vcount, icount ? icount : vcount, g_dsBlend != 0);
 
     if (glIB && indexBits) {
         bindElements(glIB);   // part of the bound VAO's state, and cached with it
