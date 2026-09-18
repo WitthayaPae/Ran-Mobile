@@ -1615,14 +1615,19 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
         g_potV0[i]  = v0 ? v0[i] : 0.0f;
         g_potU1[i]  = u1 ? u1[i] : 1.0f;
         g_potV1[i]  = v1 ? v1[i] : 1.0f;
+        //  The renderer's own record, not the driver's.
+        //
+        //  glGetTexLevelParameteriv does not exist on iOS's GLES2 headers, and
+        //  binding a texture here to ask about it goes behind the bind cache's
+        //  back - the next draw would sample whatever this left bound. The
+        //  skill icons ask the same way.
         int tw = 0, th = 0;
-        if (g_potTex[i]) {
-            glBindTexture(GL_TEXTURE_2D, g_potTex[i]);
-            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
-            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+        if (g_potTex[i] && RanGLR_TextureSize(g_potTex[i], &tw, &th)) {
+            g_potTW[i] = (float) tw;
+            g_potTH[i] = (float) th;
+        } else {
+            g_potTW[i] = g_potTH[i] = 0.0f;
         }
-        g_potTW[i] = (float)tw;
-        g_potTH[i] = (float)th;
     }
 }
 
