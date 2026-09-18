@@ -60,7 +60,7 @@ float g_unit = 100.0f;
 //  group: it hangs off the attack button, so moving the attack button moves it,
 //  and its own offset moves it relative to the button.
 enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
-       kGrpPickup, kGrpCamera, kGrpCount };
+       kGrpPickup, kGrpCamera, kGrpMenu, kGrpCount };
 struct HudAdj { float dx, dy, scale, alpha; };
 HudAdj g_adj[kGrpCount] = {
     { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
@@ -118,10 +118,11 @@ const int kSlotPK       = RANTOUCH_SLOT_PK;
 const int kSlotPickup   = RANTOUCH_SLOT_PICKUP;
 const int kSlotCamLock  = RANTOUCH_SLOT_CAMLOCK;
 const int kSlotVehicle  = RANTOUCH_SLOT_VEHICLE;
+const int kSlotMenu     = RANTOUCH_SLOT_MENU;
 
 //  Attack, two page arrows, the auto-target and PK toggles, pick-up, camera
-//  lock, and the ride button.
-const int kButtonCount = 8;
+//  lock, the ride button, and the menu.
+const int kButtonCount = 9;
 
 //  The ride button is placed by the client, not by layout(): it lives beside
 //  the chat window, which the player drags. Hidden until the client says where.
@@ -793,6 +794,16 @@ void layout() {
     g_buttons[6].radius   = modeR;
     g_buttons[6].slot     = kSlotCamLock;
 
+    //  The menu, at the top of the same column. It was a plate in the corner
+    //  borrowed from the interface art, which looked like what it was - a piece
+    //  of another UI sitting on this one. As a round button here it is the same
+    //  object as everything else the thumb works, and the HUD editor can move
+    //  it like the rest.
+    g_buttons[8].centre.x = arrowX;
+    g_buttons[8].centre.y = attackY - g_unit * 3.40f;
+    g_buttons[8].radius   = modeR;
+    g_buttons[8].slot     = kSlotMenu;
+
     //  Pick-up sits directly under the attack button, where the thumb already
     //  is - looting is something you do between fights, in the same rhythm.
     g_buttons[5].centre.x = attackX;
@@ -824,8 +835,8 @@ void layout() {
     g_attackBaseR = g_buttons[0].radius;
     g_attackBaseX = g_buttons[0].centre.x;
     g_attackBaseY = g_buttons[0].centre.y;
-    const int single[5][2] = { { 0, kGrpAttack }, { 3, kGrpAuto }, { 4, kGrpPK },
-                               { 5, kGrpPickup }, { 6, kGrpCamera } };
+    const int single[6][2] = { { 0, kGrpAttack }, { 3, kGrpAuto }, { 4, kGrpPK },
+                               { 5, kGrpPickup }, { 6, kGrpCamera }, { 8, kGrpMenu } };
     for (int k = 0; k < 5; ++k) {
         Button &b = g_buttons[single[k][0]];
         const HudAdj &a = g_adj[single[k][1]];
@@ -861,6 +872,7 @@ int groupOfButton(int i) {
         case 4: return kGrpPK;
         case 5: return kGrpPickup;
         case 6: return kGrpCamera;
+        case 8: return kGrpMenu;
         default: return -1;
     }
 }
@@ -902,6 +914,7 @@ bool groupCircle(int g, Vec2 &c, float &r) {
         case kGrpPK:     c = g_buttons[4].centre; r = g_buttons[4].radius * 1.35f; return true;
         case kGrpPickup: c = g_buttons[5].centre; r = g_buttons[5].radius * 1.35f; return true;
         case kGrpCamera: c = g_buttons[6].centre; r = g_buttons[6].radius * 1.35f; return true;
+        case kGrpMenu:   c = g_buttons[8].centre; r = g_buttons[8].radius * 1.35f; return true;
         case kGrpPage: {
             c.x = (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f;
             c.y = (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f;
@@ -928,7 +941,7 @@ bool groupCircle(int g, Vec2 &c, float &r) {
 //  The group under a finger. Small buttons first, so one sitting on top of a
 //  bigger group can still be picked; the skill slots before the stick.
 int groupAt(float x, float y) {
-    static const int order[] = { -2, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera,
+    static const int order[] = { -2, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera, kGrpMenu,
                                  kGrpAttack, kGrpStick };
     g_editSlot = -1;
     for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
@@ -1758,6 +1771,15 @@ void glyphMark(const Button &b, float a) {
         drawRect(b.centre.x - t*0.5f, b.centre.y + R*0.38f, t, R*0.22f, c.r, c.g, c.b, c.a);
         drawRect(b.centre.x - R*0.60f, b.centre.y - t*0.5f, R*0.22f, t, c.r, c.g, c.b, c.a);
         drawRect(b.centre.x + R*0.38f, b.centre.y - t*0.5f, R*0.22f, t, c.r, c.g, c.b, c.a);
+    }
+    else if (b.slot == kSlotMenu) {
+        //  Four squares. The same mark the design used, and the one thing a
+        //  grid of icons can be drawn as at this size and still be read.
+        const float s2 = R * 0.30f, g2 = R * 0.10f;
+        drawRect(b.centre.x - s2 - g2*0.5f, b.centre.y - s2 - g2*0.5f, s2, s2, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x + g2*0.5f,      b.centre.y - s2 - g2*0.5f, s2, s2, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x - s2 - g2*0.5f, b.centre.y + g2*0.5f,      s2, s2, c.r, c.g, c.b, c.a);
+        drawRect(b.centre.x + g2*0.5f,      b.centre.y + g2*0.5f,      s2, s2, c.r, c.g, c.b, c.a);
     }
     else if (b.slot == kSlotCamLock) {
         drawRing(b.centre.x, b.centre.y, R * 0.13f, R * 0.21f, c.r, c.g, c.b, c.a);

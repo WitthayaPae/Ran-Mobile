@@ -56,6 +56,7 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot);
 #define RANTOUCH_SLOT_PICKUP      (-6)
 #define RANTOUCH_SLOT_CAMLOCK     (-7)
 #define RANTOUCH_SLOT_VEHICLE     (-8)
+#define RANTOUCH_SLOT_MENU        (-9)
 
 //  Where the client put its quick-skill slots, as fractions of the surface, so
 //  the overlay can draw a round rim over each one.
