@@ -12,6 +12,66 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (7) — The menu grid: drawn icons, names, and five reasons a CUIWindowEx could not hold it
+
+**Patch 454 / APK V069 (versionCode 91) / iOS 1.0.91.**
+
+Four things were asked for. Three were small; the fourth took the day.
+
+**Names under every icon.** `MOBILE_MENULABEL`: the twelve `GAMEMENU` strings
+said shorter — those carry the PC keyboard shortcut,
+"ช่องเก็บของ(I)", which is noise on a phone — plus the eight that were
+never in that list. Looked up **by position, not by control id**: the strip's
+twelve are that group's own local ids numbered from `NO_ID + 1`, so they are not
+unique against the standalone buttons'.
+
+**The quest box and the party icon stay in the corner.** Both are watched rather
+than visited, and a badge nobody can see is not a badge.
+
+**New art.** The originals are 24x24 for the strip and 35x35 for the rest, shown
+at 56 units — 112 real pixels on a phone. There is nothing in a 24-pixel picture
+to enlarge; that *is* the pixellation. All 21 redrawn at 128 and downsampled,
+packed into `mobile_icons.dds`. The slot frame behind each is gone: the plate is
+the box.
+
+**The window.** It is a plain `CUIGroup` now. Five engine facts, each measured:
+
+| | |
+|---|---|
+| `CUIControlContainer::InsertControl` | rejects a duplicate id and returns false, silently. `CUIWindow` numbers title, close box and body from `NO_ID + 1` — exactly where a derived class starts. The backdrop and first cells were never added. |
+| `CUIWindow::CreateBody` | passes `UI_FLAG_XSIZE\|YSIZE`, and every line acting on those flags is commented out in `AlignSubControlEX`. The body keeps ~120 units forever — and it is what the window draws and clips against. That was a grid one column wide. |
+| `CUIWindow::Update` | snaps the window to the pointer whenever it is the exclusive control. On touch that dragged it into the corner every frame. |
+| `SetLocalPos` | does not touch what is drawn. A child's global is recomputed from its local only when the **parent's** `SetGlobalPos` runs. |
+| `CreateSub` | does `SetUseRender(texture name non-empty)` — a keyword with no `TEXTURE` never renders. |
+
+Two more behaviours: the placement ran on the shut-to-open transition and never
+fired, because the window is created `ShowGroupFocus` then `HideGroup` and the
+latch was already set; and the large dark panel was `GAME_MENU`'s own 2-unit bar
+stretched across the grid, whose bottom edge fell exactly across the third row's
+names. Suppressed with a zero-area source rect — `SetUseRender(false)` would take
+the group's twelve icons with it.
+
+The frame is now built from the same pieces every other window uses, laid in the
+same order, and the fill is doubled per band because the art is semi-transparent
+and names have to read over a street full of players.
+
+**The HUD editor moves it.** Edit mode keeps every touch in the overlay by
+design, so the overlay hit-tests the window, drags it, and the position is kept
+in RANPARAM as a fraction of the screen.
+
+**Two art faults caught on the device and fixed:** the podium ran 30..112, so its
+middle sat seven units right of the plate's; and the crossed swords are drawn
+upright then turned 39 degrees, and a rotated shape's footprint is smaller than
+the box it was drawn in. A third was an edit that had silently gone into a
+**commented-out** `WINDOW_POS` — that block records the control's original
+position in a comment before the live rect — leaving the competition button at
+35x59 and scaling it to 33 wide against everyone else's 56.
+
+Verified on LDPlayer: opens under the compass, 20 icons and 20 names, a tap
+opens the thing and closes the menu, the corner keeps its two, nothing is left
+on screen when shut. **Not yet tested on the iPhone.**
+
+
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
 The corner carried 21 taps: nine standalone buttons at 35 logical units and the
