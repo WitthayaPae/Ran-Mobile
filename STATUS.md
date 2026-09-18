@@ -12,6 +12,73 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (2) — Measured on the phone: the heat is effects and name plates, not characters
+
+Asked, after the quiet-area test: is the phone hot in normal play or only in a
+crowd? Answer, measured rather than assumed.
+
+**Quiet area, no other players, 5.5 minutes.** 337 of 337 samples `heat
+nominal`; 60.1 fps; 8.5 ms of a 16.6 ms budget; frame time flat across all ten
+deciles (8.4 -> 8.5 ms), memory flat, no leak. The client on its own does not
+heat this phone at all.
+
+**The same crowd that prompted the complaint: 242 players seen, 40 drawn.** The
+phone climbed nominal -> fair -> serious over about four minutes, and the whole
+time it held 60 fps with the CPU half idle (9.6 ms flat, zero frames over 20 ms).
+So this was never a frame rate problem. `dvt graphics` said what it was: the GPU
+pinned at **82%**, Tiler and Renderer both, held for minutes.
+
+Then `sectionskip` dropped one section at a time while `dvt graphics` watched:
+
+| skipped | GPU | cost |
+|---|---|---|
+| *(baseline)* | 82% | — |
+| `world-eff` | 43% | **39 points** |
+| `interface` (UI + 242 names) | 52% | **30 points** |
+| `w:land` | 65% | 17 points |
+| `w:mobitem` (characters) | 70% | 12 points |
+
+**The characters are fourth.** `pcdraw` from 40 to 10 - a 75% cut - moved the GPU
+by 13 points, giving a floor of roughly 65% that is not other players at all.
+The touch HUD, despite submitting 108k verts a frame, is worth 1 point and is
+ruled out. World effects cost 0.2-0.6 ms of CPU and 39 points of GPU, which is
+the signature of alpha-blended overdraw: nearly free to submit, brutal to fill.
+That is why five sessions of draw-call work never touched it.
+
+This retires three ideas, each of which looked reasonable until it was measured:
+
+- **Character LOD** - 12 points available. Not the fix.
+- **The world render scale** built earlier the same day - a real lever, but aimed
+  at fill in general when two specific systems are the problem, and it costs
+  picture quality to use. It stays as an option and is not the answer.
+- **Baking the texture stage into the shader** - the frame has CPU headroom to
+  spare and the emulator cannot measure fragment cost anyway (eight times the
+  fragments changed LDPlayer's frame rate by nothing). Still off by default.
+
+Done in response:
+
+- **A name limit**, separate from the body limit and larger, reusing the ranking
+  already built for bodies (target, action target, party, then club and PK, then
+  nearest). A dropped name also skips its occlusion ray. Default 0 (every name,
+  unchanged) until the phone gives a number; `/sdcard/ran/pcname` overrides.
+  LDPlayer with `pcname 20`: names a frame 228 -> 29, 40 characters still drawn,
+  60 fps, and the crowd stopped being a solid wall of plates.
+- **`world-eff` split into its eight passes** (`eff:animan`, `eff:alphamap`,
+  `eff:tree-after`, `eff:tree-after1`, `eff:afterrender`, `eff:alphapiece`,
+  `eff:landeff`, `eff:weather`) so `sectionskip` can say which of them the 39
+  points belong to. Being told the bundle costs 39 says nothing about what to fix.
+
+**Still open.** The phone is running a build from before all of today's work -
+none of `scene target`, `stage combos` or `gamma ramp` appear in its log, and the
+`worldscale` flag had no effect on it. The next `build-ios.sh` gets the eight
+effect sections and the name limit, and then the 39 points can be attributed and
+the name limit given a measured default.
+
+**Commits.** SOURCE 95d310c, 51dc2be, c7190f6, b64c045; MOBILE f89ce00, 28d3b1b,
+762ac3d, 37b064e, c17ad29.
+
+---
+
 ## 2026-09-18 (1) — The iPhone heat is fragments, not draw calls: draw the world smaller than the panel
 
 Asked, after the HUD editor: "is it possible to keep 60 frame but no heat like
