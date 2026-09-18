@@ -42,12 +42,39 @@ fi
 restore() {
   "$HERE/ios-device.sh" unflag sectionskip  >/dev/null 2>&1 || true
   "$HERE/ios-device.sh" unflag noheatpace   >/dev/null 2>&1 || true
+  [ -n "${FPSPID:-}" ] && kill "$FPSPID" 2>/dev/null
+  [ -n "${FPSLOG:-}" ] && rm -f "$FPSLOG"
+  return 0
 }
 trap restore EXIT INT TERM
 
 "$HERE/ios-device.sh" flag noheatpace >/dev/null 2>&1 \
   && echo "noheatpace set - the frame rate is held for the sweep" \
   || echo "WARNING: could not set noheatpace; a thermal clamp mid-sweep will fake large costs"
+
+#  Read the frame rate back, per reading, and print it beside the GPU figure.
+#
+#  Setting noheatpace is not enough on its own. It has been wrong twice: once
+#  the clamp engaged half way through and halved the rate, and once the rate
+#  climbed from 30 to 60 during the baseline itself, so every later section
+#  measured against a baseline taken at the wrong rate and came out NEGATIVE -
+#  a section whose removal made the GPU busier. Both were caught by hand,
+#  afterwards. The tool should catch them.
+FPSLOG="$(mktemp -t ranfps.XXXXXX)"
+"$HERE/ios-device.sh" log > "$FPSLOG" 2>&1 &
+FPSPID=$!
+
+#  The mean frame rate over the lines logged since the marker this writes.
+fps_since() {
+  awk -v start="$1" '
+    /FRAME [0-9.]+ fps/ && NR > start {
+      if (match($0, /FRAME [0-9.]+ fps/)) {
+        s = substr($0, RSTART + 6, RLENGTH - 10); t += s; n++
+      }
+    }
+    END { if (n) printf "%.0f", t / n; else printf "?" }' "$FPSLOG"
+}
+fps_mark() { wc -l < "$FPSLOG" 2>/dev/null || echo 0; }
 
 #  Average Device Utilisation over SAMPLE readings. dvt emits one a second.
 gpu() {
@@ -60,21 +87,41 @@ gpu() {
 echo "settle ${SETTLE}s, average ${SAMPLE} samples per section"
 echo
 
-restore; sleep "$SETTLE"
-BASE=$(gpu)
-printf '  %-18s %4s%%\n' "(baseline)" "$BASE"
+#  The baseline waits twice: once for the rate to settle after noheatpace lifts
+#  the clamp, and once more to measure it. A baseline taken while the rate is
+#  still climbing poisons every reading that follows.
+"$HERE/ios-device.sh" unflag sectionskip >/dev/null 2>&1 || true
+sleep "$SETTLE"
+M=$(fps_mark); sleep "$SETTLE"; BASEFPS=$(fps_since "$M")
+M=$(fps_mark); BASE=$(gpu); BASEFPS2=$(fps_since "$M")
+printf '  %-18s %4s%%   %s fps\n' "(baseline)" "$BASE" "$BASEFPS2"
+if [ "$BASEFPS" != "$BASEFPS2" ]; then
+  echo
+  echo "  STOP: the frame rate moved during the baseline ($BASEFPS -> $BASEFPS2 fps)."
+  echo "  Every reading would be measured against the wrong one. Let the phone"
+  echo "  settle and run it again."
+  exit 1
+fi
 echo
 
+BAD=0
 for S in "${SECTIONS[@]}"; do
   "$HERE/ios-device.sh" flag sectionskip "$S" >/dev/null 2>&1
   sleep "$SETTLE"
-  V=$(gpu)
+  M=$(fps_mark); V=$(gpu); F=$(fps_since "$M")
   if [ "$V" = "?" ] || [ "$BASE" = "?" ]; then
-    printf '  %-18s %4s%%   (no reading)\n' "$S" "$V"
+    printf '  %-18s %4s%%   %-3s fps  (no reading)\n' "$S" "$V" "$F"
+  elif [ "$F" != "$BASEFPS2" ]; then
+    #  Not a cost. The frame rate is the variable, not the section.
+    printf '  %-18s %4s%%   %-3s fps  INVALID - rate differs from baseline %s\n' \
+           "$S" "$V" "$F" "$BASEFPS2"
+    BAD=$((BAD + 1))
   else
-    printf '  %-18s %4s%%   -%s points\n' "$S" "$V" "$((BASE - V))"
+    printf '  %-18s %4s%%   %-3s fps  %s points\n' "$S" "$V" "$F" "$((BASE - V))"
   fi
 done
 
 echo
-echo "baseline $BASE% - a section's points are what the GPU stopped doing without it."
+echo "baseline $BASE% at $BASEFPS2 fps - a section's points are what the GPU stopped doing without it."
+[ "$BAD" -gt 0 ] && echo "$BAD reading(s) INVALID: taken at a different frame rate, so the difference is not a cost."
+exit 0

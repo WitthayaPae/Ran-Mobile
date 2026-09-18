@@ -215,7 +215,22 @@ static int  g_imeInsetPerMille = 0;
 {
     if (!self.link) return;
     if (RanPlat_DiagExists ( "pace30" )) return;
-    if (RanPlat_DiagExists ( "noheatpace" )) return;
+
+    //  Setting the switch while the clamp is already on has to LIFT it, not
+    //  merely stop it being re-applied: returning early left the link pinned at
+    //  30 for as long as the flag was there, which is the opposite of what it
+    //  is for. Lift it once, then stay out of the way.
+    if (RanPlat_DiagExists ( "noheatpace" ))
+    {
+        if (self.pacedForHeat)
+        {
+            self.pacedForHeat = NO;
+            if (@available(iOS 15.0, *))
+                self.link.preferredFrameRateRange = CAFrameRateRangeMake ( 30, 60, 60 );
+            RanPlat_Log ( RANLOG_INFO, "RanPace", "thermal pacing lifted (noheatpace)" );
+        }
+        return;
+    }
 
     const NSInteger heat = NSProcessInfo.processInfo.thermalState;
     const BOOL bHot = ( heat >= NSProcessInfoThermalStateSerious );
