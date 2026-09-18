@@ -48,9 +48,18 @@ restore() {
 }
 trap restore EXIT INT TERM
 
-"$HERE/ios-device.sh" flag noheatpace >/dev/null 2>&1 \
-  && echo "noheatpace set - the frame rate is held for the sweep" \
-  || echo "WARNING: could not set noheatpace; a thermal clamp mid-sweep will fake large costs"
+#  HOLD=0 leaves the thermal clamp alone and measures at whatever rate the
+#  phone is actually holding. Once a phone is hot enough it cannot sustain 60
+#  in a crowd even with the clamp lifted - it throttles and drifts, and the
+#  readings stop comparing. A steady clamped 30 is worth more than an unsteady
+#  60: the costs come out roughly halved, but they come out.
+if [ "${HOLD:-1}" = 0 ]; then
+  echo "HOLD=0 - measuring at the phone own rate, clamp left alone"
+else
+  "$HERE/ios-device.sh" flag noheatpace >/dev/null 2>&1 \
+    && echo "noheatpace set - the frame rate is held for the sweep" \
+    || echo "WARNING: could not set noheatpace; a clamp mid-sweep will fake large costs"
+fi
 
 #  Read the frame rate back, per reading, and print it beside the GPU figure.
 #
