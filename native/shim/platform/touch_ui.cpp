@@ -664,6 +664,20 @@ void drawDigit(float x, float y, float w, float h, int d,
         {1,1,1,1,1,1,1},{1,1,1,1,0,1,1},
     };
     if (d < 0 || d > 9) return;
+
+    //  A one is a single unbroken bar, not two seven-segment bars with the
+    //  middle segment's gap between them.
+    //
+    //  On a real seven-segment display that gap is just how a 1 looks, and at
+    //  the size the skill page readout is drawn - a couple of dozen pixels, in
+    //  amber, in a dark box - a short bar above a shorter bar reads as an
+    //  exclamation mark. It was reported as an alert, which is exactly what it
+    //  looked like.
+    if (d == 1) {
+        drawRect(x + w - t, y, t, h, r_, g_, b_, a_);
+        return;
+    }
+
     const bool *S = on[d];
     if (S[0]) drawRect(x + t,     y,              w - t * 2.0f, t, r_, g_, b_, a_);
     if (S[1]) drawRect(x + w - t, y + t,          t, h * 0.5f - t * 1.5f, r_, g_, b_, a_);
