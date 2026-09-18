@@ -131,6 +131,22 @@ is neutral rather than cream, so no yellow ring is left anywhere on an icon.
 The gold inside a glyph - the skill spark, the quest seal, the ranking crown -
 is icon design, not a notification, and is untouched.
 
+**Then put straight back, because the complaint was the "!" and not the ring.**
+The exclamation mark was the skill page readout: `drawDigit` is a seven-segment
+renderer, and a 1 there is segments b and c - a short bar above a shorter bar
+with the middle segment's gap between them. Correct for a seven-segment
+display; at a couple of dozen pixels, in amber, in a dark box beside the attack
+ring, it reads as an exclamation mark. A 1 is one unbroken bar now (V073), and
+`AUCTION_ALERT` / `COMPETITION_NOTIFY_BUTTON_BLINK` have their ring again.
+
+**All 17 cells swept on LDPlayer.** Two looked dead - the ranking at 2.0% of the
+screen changing and the competition button at 0.2% - and that was the test's
+fault, not theirs: by that point the windows opened by earlier cells covered the
+grid and were swallowing the taps. From a clean login they open in their own
+right, 24.2% and 27.1%, and the ranking window was photographed with its tabs.
+A sweep that leaves its own windows open cannot measure the cells underneath
+them.
+
 
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
