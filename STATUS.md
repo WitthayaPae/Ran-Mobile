@@ -12,6 +12,71 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (3) — How we work, written down, because three things were guessed at instead
+
+Asked, twice and sharply: "why need the sideloadly? are you guessing?" and then
+"I said we already setup the patch? have you check the memory? stop guessing!!!"
+
+Both were right. Three separate claims about the iOS release path were made from
+memory of a script header rather than from the scripts, and all three were wrong:
+
+- **"Build it on your Mac."** There is no Mac. `.github/workflows/ios-build.yml`
+  says so in its own header - the `macos-14` runner *is* the compiler.
+- **"Sign it with Sideloadly."** `tools/patch/make-ios-source.js` exists
+  specifically to remove that step: AltStore/SideStore re-signs the unsigned CI
+  bundle with the player's own Apple ID. Reaching for Sideloadly means working
+  around the setup that is already there.
+- **"A patch cannot carry it."** Half true and useless as stated. The code cannot
+  ride the *data* payload, but the `.ipa` and `ios/source.json` are published
+  into the same `out/launcher_mobile` tree, so one upload serves both. That is
+  what "we already setup the patch" meant.
+
+`PATCHING.md` had **zero** mentions of iOS. That is the actual root cause: the
+document that wins disputes did not cover half the platforms, so the gap got
+filled with recollection. It now has a full section, read out of the scripts.
+
+**The division of labour, stated so it is not re-invented.** Commit, push, run
+the workflow, download the artifact, verify the binary, run `make-ios-source.js`
+- none of that is the user's job. The user deploys `out/launcher_mobile`. That is
+the only manual step and the only one that needs their machine.
+
+**The sequence:**
+
+    1. commit, then `git push`      (plain form; the refspec form is refused)
+    2. gh workflow run ios-build.yml
+    3. gh run watch <id> --exit-status
+    4. gh run download <id> -n ran-ios-unsigned -D native/out/ios-ci
+    5. grep the binary for a string only the new code has
+    6. node tools/patch/make-ios-source.js native/out/ios-ci/RanLegacyM-unsigned.ipa
+    7. hand over out/launcher_mobile
+
+**Three traps found doing it, all now in PATCHING.md:**
+
+- **`1.0.<versionCode>` is the whole iOS version.** CI rebuilt at `1.0.83` while
+  the phone already had `1.0.83`, so AltStore would never have offered it - and
+  this is why the phone had been running a pre-today binary all along, with every
+  diagnostic flag pushed to it doing nothing. Bumped to 84 and rebuilt.
+  `AndroidManifest.xml` is not in the workflow's push filter, so a version bump
+  never triggers a build by itself: push, then dispatch.
+- **`strings` returns nothing for a Mach-O on this machine.** The first "is my
+  code in this build?" check reported every marker missing, which looks exactly
+  like a failed build. `grep -qaF` on the binary works. A broken instrument that
+  answers "no" to everything is worse than none - checked the instrument against
+  a string known to be present, which is what caught it.
+- **`git push origin HEAD:main` is refused** by the sandbox classifier as
+  exfiltration where plain `git push` is not. Earlier pushes in the same session
+  had used the plain form, which is why it looked like a new restriction.
+
+**Shipped to the store tree:** `1.0.84`, CI run `35305784747`, verified by
+grepping the arm64 binary for `eff:afterrender`, `pcname`, `ui:names-plate` and
+`worldscale`. Nothing in it changes behaviour by default - name limit 0, world
+scale 100, stage fold off - and `manifest.json` / `minIos` were deliberately not
+touched, so no other player is told to update. It exists to be measured.
+
+**Commits.** MOBILE ec5ce69, f6b6470 (+ this doc); SOURCE b64c045.
+
+---
+
 ## 2026-09-18 (2) — Measured on the phone: the heat is effects and name plates, not characters
 
 Asked, after the quiet-area test: is the phone hot in normal play or only in a
