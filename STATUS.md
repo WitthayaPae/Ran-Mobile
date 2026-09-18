@@ -147,6 +147,34 @@ right, 24.2% and 27.1%, and the ranking window was photographed with its tabs.
 A sweep that leaves its own windows open cannot measure the cells underneath
 them.
 
+**The drawn icons are gone; the grid is painted now.** The vector glyphs were
+honest about what each button did and wrong about what game they belonged to -
+the client's own art is painted, and a flat pictogram on a grey plate reads as
+a phone launcher beside it. `MOBILE/ICON-BRIEF.md` is the brief that went out:
+the prompt, the format, and a subject line for every icon. Thirty-eight came
+back at 1254x1254 and are kept in `MOBILE/tools/icon-art/` with `pack.js`, which
+rebuilds the atlas from them.
+
+Two things that had to be handled on the way in:
+
+* **Four arrived as flat RGB on a grey gradient**, no alpha. A flood fill made a
+  poor job of it - the background runs 200 at the corners to 140 mid-edge, and
+  any tolerance loose enough to walk that starts eating the icon. But every menu
+  icon is the same rounded plate in the same place, so the silhouette was
+  already known from the ones that did have alpha: the mask is the median of
+  five of them, which is exact rather than approximate.
+* **Transparent texels still carry a colour**, and the sampler mixes it in at
+  the edges when the icon is scaled. Every cell gets four passes of alpha bleed
+  so the mix has nothing wrong to find.
+
+The qbox and the mini party joined the atlas at the same time - they had been
+left on the original `q_icon.dds` art and would have been the only flat things
+left on screen.
+
+**The sixteen on-screen controls were delivered too** and are not in yet: the
+overlay draws those from shapes rather than from art, so they need a sheet and
+the code to sample it. It already does exactly that for the skill pictures.
+
 
 ## 2026-09-18 (6) — The top-right corner is one HUD button and a grid window
 
