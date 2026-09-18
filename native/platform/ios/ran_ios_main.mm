@@ -200,10 +200,22 @@ static int  g_imeInsetPerMille = 0;
 //
 //  Only at serious or critical. Nominal and fair stay at the display rate, so a
 //  phone that is merely warm plays at 60 as before. "pace30" still forces 30.
+//  "noheatpace": hold the display rate whatever the thermal state says.
+//
+//  Not a setting anyone should ship - it is there so the GPU can be measured.
+//  Attributing a frame means dropping one section at a time and watching GPU
+//  utilisation, and that only compares if the frame rate is the same for every
+//  reading. On 2026-09-18 a sweep crossed the serious threshold half way
+//  through: the clamp halved the frame rate, utilisation fell with it, and
+//  every section after that point read as though it cost 33 points - a child
+//  of world-eff apparently costing three times its parent, which is how the
+//  measurement was caught. At 30 Hz the GPU sits at 28% and every section is
+//  inside the noise, so the attribution cannot be done there either.
 - (void)updateThermalPacing
 {
     if (!self.link) return;
     if (RanPlat_DiagExists ( "pace30" )) return;
+    if (RanPlat_DiagExists ( "noheatpace" )) return;
 
     const NSInteger heat = NSProcessInfo.processInfo.thermalState;
     const BOOL bHot = ( heat >= NSProcessInfoThermalStateSerious );
