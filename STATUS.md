@@ -12,6 +12,65 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (4) — The attribution sweep measured its own frame rate clamp
+
+First run on the phone of the build made for measuring (1.0.84, confirmed on the
+device by the `eff:` and `ui:names` sections appearing in its log). The sweep
+produced numbers that could not be true, and the reason is worth keeping.
+
+**What came out.** `world-eff` cost 12 points, and then every one of its eight
+children cost 33 to 36. A child cannot cost three times its parent. That is what
+gave it away - not a suspicion about the result, an arithmetic impossibility in
+it.
+
+**The cause was this morning's own thermal pacing.** The sweep takes several
+minutes; four minutes in, the phone reached `serious` and the clamp dropped the
+display link to 30 Hz. GPU utilisation fell with the frame rate, and every
+reading after that point was measuring the 60-to-30 transition rather than a
+section. A section attribution only compares if the frame rate is identical for
+every reading, and nothing in the tool enforced that.
+
+**Re-running while stably hot does not rescue it.** At 30 Hz the GPU sits at 28%
+and all ten sections came back inside +/-3 points - everything is noise, because
+the work is halved and the GPU has headroom to spare. Attribution is impossible
+at both ends: too hot to hold 60, too idle at 30 to resolve anything.
+
+So `noheatpace` (1.0.85): hold the display rate whatever the thermal state says.
+Not a setting to ship - the clamp is doing its job - but without it the frame
+cannot be attributed on a phone that heats in four minutes.
+
+**What is valid.** The first six readings happened before the clamp engaged, at a
+genuine 60 fps:
+
+| section | 1.0.84 | the old build, 2026-09-18 (2) |
+|---|---|---|
+| *baseline* | **61%** | 82% |
+| `world-eff` | **12 pts** | 39 pts |
+| `interface` | **7 pts** | 30 pts |
+| `w:mobitem` | ~2 (noise) | 12 pts |
+| `w:land` | ~1 (noise) | 17 pts |
+
+Everything is far cheaper than it was. **This is not claimed as an improvement
+from the day's changes**: the two runs are different camera angles in a moving
+crowd, and that alone moves these numbers. It needs a controlled re-measure with
+`noheatpace`, which is the point of the next build.
+
+**The pacing works, and does not fix the heat.** Mechanically it is exact - 689
+consecutive `serious` samples at a 33.3 ms median, p95 and max all identical,
+zero frames over 34 ms. But over eleven minutes at 30 Hz and 28% GPU the phone
+never returned to `fair`. Halving the frame rate keeps the game smooth while hot;
+it does not cool it down.
+
+**Two confounds recorded before they are forgotten.** The phone is charging over
+USB throughout, which is itself a heat source, so every thermal reading here is
+pessimistic against how the game is actually played. And thermal state has
+hysteresis, so a reading taken while descending from `serious` is not comparable
+with one taken while climbing to it.
+
+**Commits.** MOBILE f50fefe, fbf512e. Staged for upload: 1.0.85.
+
+---
+
 ## 2026-09-18 (3) — How we work, written down, because three things were guessed at instead
 
 Asked, twice and sharply: "why need the sideloadly? are you guessing?" and then
