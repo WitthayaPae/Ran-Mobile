@@ -12,6 +12,68 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-18 (5) — A trustworthy sweep at last, and what the character effects actually do
+
+**The sweep works now.** 1.0.86 lifts the thermal clamp properly and the tool
+reads the frame rate back per reading. Eight readings at a verified constant
+60 fps, seven correctly refused:
+
+| section | GPU | cost |
+|---|---|---|
+| *baseline* | 83% | — |
+| `world-eff` | 56% | **27 points** |
+| `interface` | 68% | **15 points** |
+| `w:land` | 77% | 6 |
+| `eff:animan` | 79% | 4 |
+| `eff:tree-after` | 80% | 3 |
+| `eff:alphamap` | 82% | 1 |
+| `w:mobitem` | 86% | **-3, i.e. nothing** |
+
+The characters cost nothing measurable, now at a checked constant frame rate
+rather than inferred. The seven refusals were rejected because the rate fell to
+51-58 fps: with the clamp lifted, **the phone physically cannot hold 60 in this
+crowd once hot**. 83% GPU at 60 fps, decaying to ~51 fps. That is the shape of
+the complaint, measured.
+
+**What each pass submits, counted on the emulator** (a proxy for fill, not a
+cost - the emulator has fill to spare). Per frame, blended triangles first:
+`part:chareff` 111 draws / 38,426 blended; `world` 20,774 of 40,944;
+`interface` 269 draws / 9,874 all blended; `eff:tree-after` 6,736. Against that,
+`part:skinned` submits 143,527 triangles of which only 2,604 are blended - the
+character meshes are opaque and cheap to fill, which agrees with the phone.
+
+**And what part:chareff is**, from the effect profiler (`effprof`, re-read live):
+
+| effect | calls/frame | draws | RT switches |
+|---|---|---|---|
+| `DxEffCharSpecular2` | 38.6 | 38.6 | 0 |
+| `DxEffCharUserColor` | 38.6 | 38.6 | 0 |
+| `DxEffCharLevel` | 34.3 | 38.9 | 0 |
+| `DxEffCharMultiTex` | 13.8 | 39.5 | **71.9** |
+
+Two things worth chasing. Every visible character piece is **redrawn about three
+extra times, blended** (Specular2, UserColor, Level). And `DxEffCharMultiTex`
+re-renders a scrolling texture into a shared 128x128 target before drawing the
+piece with it, which costs **72 render-target switches a frame** - nearly free on
+the emulator's immediate-mode desktop GPU, and a tile flush each on a
+tile-based one. That asymmetry is exactly the kind of thing that shows on an
+iPhone and not on LDPlayer, so it is a hypothesis with a reason, not a hunch.
+
+**It is still only a hypothesis.** `part:chareff` sits inside `w:mobitem`, which
+the phone measured at zero points. Either the emulator's crowd carries far more
+character effects than the phone's did, or that -3 hid something. Not resolved.
+
+**Next, and it needs no rebuild:** `effskip` takes an effect name, is re-read
+live, and the names above are exactly what it matches. So on the phone -
+`DxEffCharMultiTex`, then `DxEffCharSpecular2`, `DxEffCharUserColor`,
+`DxEffCharLevel`, one at a time against `dvt graphics` - plus `part:chareff` and
+the five `eff:` passes the throttle refused. All of it works on 1.0.86 as
+installed.
+
+**Commits.** MOBILE 5b4a5b7, e609638.
+
+---
+
 ## 2026-09-18 (4) — The attribution sweep measured its own frame rate clamp
 
 First run on the phone of the build made for measuring (1.0.84, confirmed on the
