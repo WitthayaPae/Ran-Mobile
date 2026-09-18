@@ -882,6 +882,22 @@ bool hit(const Vec2 &c, float r, float x, float y) {
 }
 
 //  --- HUD editor -----------------------------------------------------------
+//  The client's menu window takes part in the editor too.
+//
+//  It is the client's control, not one of ours, so the overlay cannot lay it
+//  out - but in edit mode every touch belongs to the editor and nothing
+//  reaches the client at all, so the window could not be dragged by its own
+//  title bar either. The client lends us its rect and takes back the movement.
+//  Weakly linked, like RanUI_PointInControl above: this file is also built
+//  into targets with no client to ask.
+extern "C" int  RanUI_MenuWindowRect(float *x, float *y, float *w, float *h) __attribute__((weak));
+extern "C" void RanUI_MenuWindowMove(float dx, float dy) __attribute__((weak));
+
+static bool menuWindowRect(float *x, float *y, float *w, float *h) {
+    return RanUI_MenuWindowRect && RanUI_MenuWindowRect(x, y, w, h) != 0;
+}
+
+bool   g_editMenu = false;          //  dragging the client's menu window
 bool   g_edit = false;
 int    g_editSel = -1;              //  selected group, -1 none
 int    g_editSlot = -1;             //  which skill slot, when the group is the arc
@@ -968,6 +984,7 @@ void editDefaultsAll() {
 
 void editEnd() {
     g_edit = false;
+    g_editMenu = false;
     g_editSel = -1;
     g_editSlot = -1;
     g_editPtr = -1;
@@ -1045,8 +1062,22 @@ int RanTouch_PointerDown(int id, float x, float y) {
             layout();
             return 1;
         }
+        //  The client's menu window first: it is drawn over everything else
+        //  while the editor is up, so a press inside it is meant for it.
+        {
+            float wx, wy, ww, wh;
+            if (menuWindowRect(&wx, &wy, &ww, &wh) &&
+                x >= wx && x < wx + ww && y >= wy && y < wy + wh) {
+                g_editMenu = true;
+                g_editSel = -1;
+                g_editPtr = id; g_editLastX = x; g_editLastY = y;
+                return 1;
+            }
+        }
+
         const int g = groupAt(x, y);
         g_editSel = g;
+        g_editMenu = false;
         if (g >= 0) { g_editPtr = id; g_editLastX = x; g_editLastY = y; }
         return 1;
     }
@@ -1124,6 +1155,11 @@ int RanTouch_PointerDown(int id, float x, float y) {
 int RanTouch_PointerMove(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
     if (g_edit) {
+        if (id == g_editPtr && g_editMenu) {
+            if (RanUI_MenuWindowMove) RanUI_MenuWindowMove(x - g_editLastX, y - g_editLastY);
+            g_editLastX = x; g_editLastY = y;
+            return 1;
+        }
         if (id == g_editPtr && g_editSel >= 0) {
             const float mdx = (x - g_editLastX) / g_unit;
             const float mdy = (y - g_editLastY) / g_unit;
@@ -1963,6 +1999,22 @@ void drawEditor() {
             drawRing(c.x, c.y, r - u * 0.016f, r, kAmber.r, kAmber.g, kAmber.b, 0.95f);
         } else {
             drawRing(c.x, c.y, r - u * 0.02f, r, kInk.r, kInk.g, kInk.b, 0.55f);
+        }
+    }
+
+    //  The client's menu window, outlined like everything else so it is
+    //  obvious it can be moved here too. A rectangle, not a ring: it is the
+    //  one editable thing on screen that is not round.
+    {
+        float wx, wy, ww, wh;
+        if (menuWindowRect(&wx, &wy, &ww, &wh)) {
+            const float t = u * (g_editMenu ? 0.020f : 0.016f);
+            const Col c = g_editMenu ? kAmber : kInk;
+            const float a2 = g_editMenu ? 0.95f : 0.55f;
+            drawRect(wx, wy, ww, t, c.r, c.g, c.b, a2);
+            drawRect(wx, wy + wh - t, ww, t, c.r, c.g, c.b, a2);
+            drawRect(wx, wy, t, wh, c.r, c.g, c.b, a2);
+            drawRect(wx + ww - t, wy, t, wh, c.r, c.g, c.b, a2);
         }
     }
     emit();
