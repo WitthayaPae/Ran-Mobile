@@ -13,6 +13,10 @@ void RanInput_PointerMove ( int x, int y );
 void RanInput_PointerButton ( int button, int down );
 int  RanTouch_IsPinching ( void );
 int  RanUI_PointInControl ( int x, int y );
+//  The same question with the world's name plates left out - see the client's
+//  RanUI_PointInDragControl. A plate is a control, and a crowd of them covers
+//  the middle of the screen.
+int  RanUI_PointInDragControl ( int x, int y );
 void RanUI_EndEditIfOutside ( int x, int y );
 }
 
@@ -171,7 +175,15 @@ extern "C" void RanGesture_Move ( int x, int y ) {
             //  pressed the middle button, which turns the camera. That is why
             //  no window could be dragged unless something had already been
             //  tapped inside it.
-            gesturePress ( RanUI_PointInControl ( g_gesture.x, g_gesture.y ) ? 0 : 2 );
+            //  Name plates do not count here.
+            //
+            //  They are controls, so in a crowd the answer was "on the
+            //  interface" almost anywhere the finger landed and the drag came
+            //  out left - which drags a control and leaves the camera still.
+            //  Dragging from a player's name is the commonest way to turn the
+            //  camera in town, because in town there is a name under every
+            //  pixel.
+            gesturePress ( RanUI_PointInDragControl ( g_gesture.x, g_gesture.y ) ? 0 : 2 );
             RanInput_PointerMove ( x, y );
         }
     }
