@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 480 / APK V083 (versionCode 105) / iOS 1.0.105.**
+**Patch 482 / APK V084 (versionCode 106) / iOS 1.0.106.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -94,6 +94,21 @@ arrangement that was already on file. 80 now, and `SetHudLayout` reads a short
 own repository and CI checks it out separately; this session's client changes
 sat uncommitted in the working tree for several releases. Commit SOURCE too, or
 the .ipa is Android's code from last week.
+
+**The framed slot in the very top left corner goes.** Two of them, in fact,
+drawn on top of each other: `BASIC_QUICK_SKILL_SLOT`, which the PC shows while
+the skill tray is closed, and the left-top group's single quick POTION slot,
+which it turns back on whenever the potion tray closes. Both are stand-ins for
+a tray; on the phone both trays are on screen all the time, so each previewed
+something already in front of the player, in the corner the status bars and the
+potion row share. The skill one is simply never shown; the potion one is hidden
+after the interface has updated - subtree and rect both, or the corner still
+takes taps.
+
+Finding it took a walk of the whole control container logging every control
+whose rect lands in the corner. Worth remembering: `SetVisibleSingle(FALSE)` on
+the quick potion slot, which the client already does, hides the slot and not
+its children, so the picture and frame carried on drawing.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
