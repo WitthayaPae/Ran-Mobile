@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 492 / APK V090 (versionCode 112) / iOS 1.0.112.**
+**Patch 494 / APK V091 (versionCode 113) / iOS 1.0.113.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -149,6 +149,14 @@ and none of them showed in the numbers.
   one and the list gets none - it already has the window's body under it.
   Sampled in one frame: four passes read 2,2,2 and 5,5,5 against the chat
   window's 41,47,47; one pass reads 33,32,26 and 27,27,26 against 31,31,29.
+
+**And the empty column.** Asked "why the left side is dark space at btm?" - it
+was: the plate ran the window's full height so the columns lined up, and the
+doll is only 159 of those 412, so everything below the equipment was nothing at
+all. Trimmed to the doll's box; the header spanning both columns is what ties
+them together now. The edge pieces were laid out against half the plate's height
+while its bands covered all of it, so the bottom rule had been sitting across
+the middle of the column - both come off one height now.
 
 **Sampling beats eyeballing, and `out/shots` does not survive a build.** Two
 rounds were spent nudging opacity by eye before measuring; and `build-apk.sh`
