@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 488 / APK V088 (versionCode 110) / iOS 1.0.110.**
+**Patch 492 / APK V090 (versionCode 112) / iOS 1.0.112.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -131,6 +131,29 @@ the window by the height the doll occupied, moves the list up into that space
 and puts the doll at a negative local x - out to the left, level with the list.
 Measured live: window 239x435, doll 225x159 beside it, 154 rows to spare on a
 phone.
+
+**Then three more, asked for after looking at it: "the top header should cover
+both", "it is not aligned", "the inventory looks darker".** All three were true
+and none of them showed in the numbers.
+
+* The title bar was the window's, 239 wide, stopping where the list starts -
+  the doll sat under open sky beside it. Its cap / stretch / cap pieces are
+  laid out by hand now (UI_FLAG_XSIZE and UI_FLAG_RIGHT are ignored by the
+  align pass, same as the body) and it spans from the doll's left edge to the
+  window's right.
+* The doll's plate was only as tall as the doll, so the columns did not line
+  up. It runs the body's full height.
+* And the backdrop. Four passes of the body art made both columns black slabs.
+  The fix came from measuring rather than nudging: one pass of that art over
+  the world IS the tone every other window in the game has, so the plate gets
+  one and the list gets none - it already has the window's body under it.
+  Sampled in one frame: four passes read 2,2,2 and 5,5,5 against the chat
+  window's 41,47,47; one pass reads 33,32,26 and 27,27,26 against 31,31,29.
+
+**Sampling beats eyeballing, and `out/shots` does not survive a build.** Two
+rounds were spent nudging opacity by eye before measuring; and `build-apk.sh`
+clears `native/out`, which took the before/after frames with it. Copy a frame
+out before rebuilding, or measure it first.
 
 **It shipped half-done first, and a screenshot at half size hid it.** Asked "have
 you looked at how it actually looks?" - the answer was no, not properly. At full
