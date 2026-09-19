@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ran.native"
-    android:versionCode="105"
-    android:versionName="V083">
+    android:versionCode="106"
+    android:versionName="V084">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
