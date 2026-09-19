@@ -60,7 +60,7 @@ float g_unit = 100.0f;
 //  group: it hangs off the attack button, so moving the attack button moves it,
 //  and its own offset moves it relative to the button.
 enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
-       kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCount };
+       kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCorner, kGrpCount };
 struct HudAdj { float dx, dy, scale, alpha; };
 HudAdj g_adj[kGrpCount] = {
     { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
@@ -80,6 +80,16 @@ float g_attackBaseX = 0.0f, g_attackBaseY = 0.0f;
 //  put one skill where their thumb wants it without moving the rest.
 struct SlotAdj { float dx, dy; };
 SlotAdj g_slotAdj[RANTOUCH_MAX_SKILL_CIRCLES] = { { 0, 0 } };
+//  The potion slots move one at a time too, for the same reason the skill
+//  slots do: six buttons in a fixed row is a layout, not an arrangement.
+const int kPotMax = 8;
+SlotAdj g_potAdj[kPotMax] = { { 0, 0 } };
+
+//  The quest box and the small party frame, which stay out of the menu grid
+//  and so are placed by the client in the top right corner. It hands over the
+//  box they occupy each frame so the editor can outline and grab them; the
+//  offset goes back the same way the potion row's does.
+struct { float x, y, r; bool has; } g_corner = { 0, 0, 0, false };
 
 //  --- movement stick -----------------------------------------------------
 struct Stick {
@@ -896,22 +906,15 @@ bool hit(const Vec2 &c, float r, float x, float y) {
 }
 
 //  --- HUD editor -----------------------------------------------------------
-//  The client's menu window takes part in the editor too.
+//  The menu WINDOW is not one of the things the editor arranges.
 //
-//  It is the client's control, not one of ours, so the overlay cannot lay it
-//  out - but in edit mode every touch belongs to the editor and nothing
-//  reaches the client at all, so the window could not be dragged by its own
-//  title bar either. The client lends us its rect and takes back the movement.
-//  Weakly linked, like RanUI_PointInControl above: this file is also built
-//  into targets with no client to ask.
-extern "C" int  RanUI_MenuWindowRect(float *x, float *y, float *w, float *h) __attribute__((weak));
-extern "C" void RanUI_MenuWindowMove(float dx, float dy) __attribute__((weak));
-
-static bool menuWindowRect(float *x, float *y, float *w, float *h) {
-    return RanUI_MenuWindowRect && RanUI_MenuWindowRect(x, y, w, h) != 0;
-}
-
-bool   g_editMenu = false;          //  dragging the client's menu window
+//  It used to be: the editor held it open and dragged it for the client, since
+//  in edit mode no touch reaches the client and the window could not be
+//  dragged by its own title bar. But it is not a control that stays on screen
+//  - it opens, a choice is made, it shuts - so arranging it means arranging
+//  something that is never there while playing. The menu BUTTON is the thing
+//  that sits in the way, and that is a group of its own.
+//
 bool   g_edit = false;
 int    g_editSel = -1;              //  selected group, -1 none
 int    g_editSlot = -1;             //  which skill slot, when the group is the arc
@@ -920,6 +923,7 @@ float  g_editLastX = 0, g_editLastY = 0;
 HudAdj g_editBefore[kGrpCount];     //  for cancel
 int    g_hudSavedGen = 0;           //  bumped on save; the client polls it
 SlotAdj g_slotBefore[RANTOUCH_MAX_SKILL_CIRCLES];
+SlotAdj g_potBefore[kPotMax];
 
 //  The toolbar across the top: cancel, reset all, size -, size +, opacity -,
 //  opacity +, save. Positions in surface pixels, recomputed from the unit.
@@ -943,7 +947,6 @@ void toolCircle(int t, Vec2 &c, float &r) {
 //  where each one sits so the overlay can draw it round to match. Plain arrays
 //  rather than the SkillIcon struct because the editor needs the centres here,
 //  well before that struct is declared.
-const int kPotMax = 8;
 unsigned g_potTex[kPotMax] = { 0 };
 float g_potX[kPotMax] = { 0 }, g_potY[kPotMax] = { 0 }, g_potRad[kPotMax] = { 0 };
 float g_potU0[kPotMax] = { 0 }, g_potV0[kPotMax] = { 0 };
@@ -978,6 +981,10 @@ bool groupCircle(int g, Vec2 &c, float &r) {
             }
             return true;
         }
+        case kGrpCorner:
+            if (!g_corner.has || g_corner.r <= 0.0f) return false;
+            c.x = g_corner.x; c.y = g_corner.y; r = g_corner.r;
+            return true;
         case kGrpSkill: {
             //  Outlined per slot in the editor; this is only its extent.
             if (g_skillCircleCount <= 0) return false;
@@ -998,8 +1005,8 @@ bool groupCircle(int g, Vec2 &c, float &r) {
 //  The group under a finger. Small buttons first, so one sitting on top of a
 //  bigger group can still be picked; the skill slots before the stick.
 int groupAt(float x, float y) {
-    static const int order[] = { -2, kGrpPotion, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK, kGrpCamera,
-                                 kGrpMenu, kGrpAttack, kGrpStick };
+    static const int order[] = { -2, -3, kGrpCorner, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK,
+                                 kGrpCamera, kGrpMenu, kGrpAttack, kGrpStick };
     g_editSlot = -1;
     for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
         const int g = order[k];
@@ -1012,6 +1019,15 @@ int groupAt(float x, float y) {
                 }
             continue;
         }
+        if (g == -3) {
+            //  And a potion slot on its own, for the same reason.
+            for (int i = 0; i < g_potCount && i < kPotMax; ++i)
+                if (len(x - g_potX[i], y - g_potY[i]) <= g_potRad[i] * 1.45f) {
+                    g_editSlot = i;
+                    return kGrpPotion;
+                }
+            continue;
+        }
         Vec2 c; float r;
         if (groupCircle(g, c, r) && hit(c, r, x, y)) return g;
     }
@@ -1021,11 +1037,11 @@ int groupAt(float x, float y) {
 void editDefaultsAll() {
     for (int i = 0; i < kGrpCount; ++i) { g_adj[i].dx = g_adj[i].dy = 0; g_adj[i].scale = 1; g_adj[i].alpha = 1; }
     for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) g_slotAdj[i].dx = g_slotAdj[i].dy = 0.0f;
+    for (int i = 0; i < kPotMax; ++i) g_potAdj[i].dx = g_potAdj[i].dy = 0.0f;
 }
 
 void editEnd() {
     g_edit = false;
-    g_editMenu = false;
     g_editSel = -1;
     g_editSlot = -1;
     g_editPtr = -1;
@@ -1088,6 +1104,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
                 case kToolCancel:
                     memcpy(g_adj, g_editBefore, sizeof(g_adj));
                     memcpy(g_slotAdj, g_slotBefore, sizeof(g_slotAdj));
+                    memcpy(g_potAdj,  g_potBefore,  sizeof(g_potAdj));
                     editEnd();
                     break;
                 case kToolReset:  editDefaultsAll(); break;
@@ -1103,22 +1120,8 @@ int RanTouch_PointerDown(int id, float x, float y) {
             layout();
             return 1;
         }
-        //  The client's menu window first: it is drawn over everything else
-        //  while the editor is up, so a press inside it is meant for it.
-        {
-            float wx, wy, ww, wh;
-            if (menuWindowRect(&wx, &wy, &ww, &wh) &&
-                x >= wx && x < wx + ww && y >= wy && y < wy + wh) {
-                g_editMenu = true;
-                g_editSel = -1;
-                g_editPtr = id; g_editLastX = x; g_editLastY = y;
-                return 1;
-            }
-        }
-
         const int g = groupAt(x, y);
         g_editSel = g;
-        g_editMenu = false;
         if (g >= 0) { g_editPtr = id; g_editLastX = x; g_editLastY = y; }
         return 1;
     }
@@ -1196,17 +1199,15 @@ int RanTouch_PointerDown(int id, float x, float y) {
 int RanTouch_PointerMove(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
     if (g_edit) {
-        if (id == g_editPtr && g_editMenu) {
-            if (RanUI_MenuWindowMove) RanUI_MenuWindowMove(x - g_editLastX, y - g_editLastY);
-            g_editLastX = x; g_editLastY = y;
-            return 1;
-        }
         if (id == g_editPtr && g_editSel >= 0) {
             const float mdx = (x - g_editLastX) / g_unit;
             const float mdy = (y - g_editLastY) / g_unit;
             if (g_editSel == kGrpSkill && g_editSlot >= 0) {
                 g_slotAdj[g_editSlot].dx += mdx;
                 g_slotAdj[g_editSlot].dy += mdy;
+            } else if (g_editSel == kGrpPotion && g_editSlot >= 0) {
+                g_potAdj[g_editSlot].dx += mdx;
+                g_potAdj[g_editSlot].dy += mdy;
             } else {
                 g_adj[g_editSel].dx += mdx;
                 g_adj[g_editSel].dy += mdy;
@@ -1629,6 +1630,29 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
             g_potTW[i] = g_potTH[i] = 0.0f;
         }
     }
+}
+
+//  Where the client has put the corner icons - the quest box and the small
+//  party frame - so the editor can outline and grab them. In pixels.
+extern "C" void RanTouch_SetCornerBox(float cx, float cy, float r) {
+    g_corner.x = cx; g_corner.y = cy; g_corner.r = r;
+    g_corner.has = (r > 0.0f);
+}
+
+//  And what the player did to them, in pixels, for the client to apply.
+extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale) {
+    if (dx)    *dx    = g_adj[kGrpCorner].dx * g_unit;
+    if (dy)    *dy    = g_adj[kGrpCorner].dy * g_unit;
+    if (scale) *scale = g_adj[kGrpCorner].scale;
+}
+
+//  Where potion slot i has been dragged, in pixels, on top of the row.
+extern "C" void RanTouch_GetPotionSlotOffset(int i, float *dx, float *dy) {
+    if (dx) *dx = 0.0f;
+    if (dy) *dy = 0.0f;
+    if (i < 0 || i >= kPotMax) return;
+    if (dx) *dx = g_potAdj[i].dx * g_unit;
+    if (dy) *dy = g_potAdj[i].dy * g_unit;
 }
 
 //  The box the skill slots occupy, in pixels. The potion row is laid out
@@ -2207,8 +2231,16 @@ void drawEditor() {
             drawRing(sc.x, sc.y, rr - u * 0.018f, rr, kInk.r, kInk.g, kInk.b, 0.5f);
         }
     }
+    for (int i = 0; i < g_potCount && i < kPotMax; ++i) {
+        const float rr = g_potRad[i] * 1.45f;
+        if (g_editSel == kGrpPotion && g_editSlot == i) {
+            drawRing(g_potX[i], g_potY[i], rr - u * 0.016f, rr, kAmber.r, kAmber.g, kAmber.b, 0.95f);
+        } else {
+            drawRing(g_potX[i], g_potY[i], rr - u * 0.018f, rr, kInk.r, kInk.g, kInk.b, 0.5f);
+        }
+    }
     for (int g = 0; g < kGrpCount; ++g) {
-        if (g == kGrpSkill) continue;          //  outlined slot by slot above
+        if (g == kGrpSkill || g == kGrpPotion) continue;   //  outlined slot by slot above
         Vec2 c; float r;
         if (!groupCircle(g, c, r)) continue;
         if (g == g_editSel) {
@@ -2218,21 +2250,6 @@ void drawEditor() {
         }
     }
 
-    //  The client's menu window, outlined like everything else so it is
-    //  obvious it can be moved here too. A rectangle, not a ring: it is the
-    //  one editable thing on screen that is not round.
-    {
-        float wx, wy, ww, wh;
-        if (menuWindowRect(&wx, &wy, &ww, &wh)) {
-            const float t = u * (g_editMenu ? 0.020f : 0.016f);
-            const Col c = g_editMenu ? kAmber : kInk;
-            const float a2 = g_editMenu ? 0.95f : 0.55f;
-            drawRect(wx, wy, ww, t, c.r, c.g, c.b, a2);
-            drawRect(wx, wy + wh - t, ww, t, c.r, c.g, c.b, a2);
-            drawRect(wx, wy, t, wh, c.r, c.g, c.b, a2);
-            drawRect(wx + ww - t, wy, t, wh, c.r, c.g, c.b, a2);
-        }
-    }
     emit();
 
     //  Toolbar plate.
@@ -2841,6 +2858,7 @@ extern "C" void RanTouch_SetEditMode(int on) {
     if (on && !g_edit) {
         memcpy(g_editBefore, g_adj, sizeof(g_adj));
         memcpy(g_slotBefore, g_slotAdj, sizeof(g_slotAdj));
+        memcpy(g_potBefore,  g_potAdj,  sizeof(g_potAdj));
         g_stick.pointer = -1; g_stick.held = false; g_stick.magnitude = 0.0f;
         g_stick.knob = g_stick.origin = g_stick.centre;
         for (int i = 0; i < kButtonCount; ++i) { g_buttons[i].pointer = -1; g_buttons[i].down = false; g_buttons[i].pressedEdge = false; }
@@ -2857,7 +2875,7 @@ extern "C" int RanTouch_IsEditMode(void) { return g_edit ? 1 : 0; }
 
 //  The arrangement as kGrpCount * 4 floats: dx, dy, size, opacity per group.
 extern "C" int RanTouch_GetHudLayout(float *out, int max) {
-    const int n = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
+    const int n = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2 + kPotMax * 2;
     if (!out || max < n) return n;
     for (int i = 0; i < kGrpCount; ++i) {
         out[i * 4]     = g_adj[i].dx;    out[i * 4 + 1] = g_adj[i].dy;
@@ -2867,14 +2885,27 @@ extern "C" int RanTouch_GetHudLayout(float *out, int max) {
         out[kGrpCount * 4 + i * 2]     = g_slotAdj[i].dx;
         out[kGrpCount * 4 + i * 2 + 1] = g_slotAdj[i].dy;
     }
+    const int base = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
+    for (int i = 0; i < kPotMax; ++i) {
+        out[base + i * 2]     = g_potAdj[i].dx;
+        out[base + i * 2 + 1] = g_potAdj[i].dy;
+    }
     return n;
 }
 
 //  Applies a saved arrangement. Values out of range are the ones a damaged or
 //  hand-edited file would carry, so each is clamped rather than trusted.
 extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
-    if (!in || n < kGrpCount * 4) return;
-    for (int i = 0; i < kGrpCount; ++i) {
+    if (!in || n < 4) return;
+    //  As many groups as the file actually carries.
+    //
+    //  A file written before a group was added is shorter than kGrpCount * 4,
+    //  and refusing it outright threw away the player's whole arrangement the
+    //  first time the corner icons joined the editor. The groups are appended,
+    //  never reordered, so a short file is simply an older one: read what is
+    //  there and leave the rest at its default.
+    const int nGrp = (n / 4 < kGrpCount) ? n / 4 : kGrpCount;
+    for (int i = 0; i < nGrp; ++i) {
         float dx = in[i * 4], dy = in[i * 4 + 1], sc = in[i * 4 + 2], al = in[i * 4 + 3];
         if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
         if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
@@ -2882,12 +2913,21 @@ extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
         if (!(al >= 0.2f && al <= 1.0f)) al = 1.0f;
         g_adj[i].dx = dx; g_adj[i].dy = dy; g_adj[i].scale = sc; g_adj[i].alpha = al;
     }
-    if (n >= kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2) {
+    if (nGrp == kGrpCount && n >= kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2) {
         for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
             float dx = in[kGrpCount * 4 + i * 2], dy = in[kGrpCount * 4 + i * 2 + 1];
             if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
             if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
             g_slotAdj[i].dx = dx; g_slotAdj[i].dy = dy;
+        }
+        const int base = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
+        if (n >= base + kPotMax * 2) {
+            for (int i = 0; i < kPotMax; ++i) {
+                float dx = in[base + i * 2], dy = in[base + i * 2 + 1];
+                if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
+                if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
+                g_potAdj[i].dx = dx; g_potAdj[i].dy = dy;
+            }
         }
     }
     if (g_inited) layout();

@@ -103,6 +103,14 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
                                         const float *u0, const float *v0,
                                         const float *u1, const float *v1);
 
+//  The corner icons - quest box, small party frame - and what the editor did
+//  to them. Set by the client each frame, read back by it the next.
+extern "C" void RanTouch_SetCornerBox(float cx, float cy, float r);
+extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale);
+
+//  Where potion slot i has been dragged, in pixels, on top of the row.
+extern "C" void RanTouch_GetPotionSlotOffset(int i, float *dx, float *dy);
+
 //  The box the skill slots occupy, so the potion row can sit on top of them.
 extern "C" int  RanTouch_GetSkillBounds(float *cx, float *top, float *width);
 
