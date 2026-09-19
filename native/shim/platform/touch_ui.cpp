@@ -2709,7 +2709,14 @@ void RanTouch_Render(void) {
                 //  An empty slot is a bezel and nothing else - the row keeps
                 //  its full length so a potion dropped into slot 5 does not
                 //  make the whole row jump.
-                if (!g_potTex[i]) continue;
+                //
+                //  And a handle that is no longer a texture draws as a black
+                //  disc: the client releases an item's picture when the slot
+                //  changes or the stack runs out, and anything holding the old
+                //  name samples nothing. glIsTexture is the one question GL
+                //  will answer about a name it did not just give us, and it
+                //  costs nothing at six slots a frame.
+                if (!g_potTex[i] || !glIsTexture(g_potTex[i])) continue;
                 SkillIcon ic;
                 ic.tex = g_potTex[i]; ic.x = g_potX[i]; ic.y = g_potY[i]; ic.r = g_potRad[i];
                 ic.u0 = g_potU0[i]; ic.v0 = g_potV0[i];
