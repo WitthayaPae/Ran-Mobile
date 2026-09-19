@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 498 / APK V093 (versionCode 115) / iOS 1.0.115.**
+**Patch 500 / APK V094 (versionCode 116) / iOS 1.0.116.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -184,6 +184,20 @@ raise together, and a tap on an equipped item opens its menu through the moved
 panel (verified on the device). A dark plate sits behind the doll, created
 *before* it in `CreateSubControl` because the container draws in registration
 order - made afterwards it would have covered the thing it was backing.
+
+**The potion slot's long press is a menu now.** ถอด (take it out of the slot)
+and ตั้งค่า (the auto-pot thresholds, a new `MOBILE_ITEM_SHEET` word at index
+20) - the quick-slot sheet the client already has, with the "use" row dropped
+because a tap on the slot drinks it. The PC's right-click-clears is off on
+mobile: the long press is that menu now. The item-name banner is off too - on
+the PC it follows the mouse and costs nothing, but a finger only hovers by
+pressing, so every tap threw the name across the top of the screen.
+
+**Data does not ride in the APK.** The ตั้งค่า row came back blank and the
+packed `Gui.rcc` was demonstrably correct: the device's copy was eight hours
+old. `build-apk.sh` does not carry `CLIENT/data`; push the .rcc with adb (or
+run the patch) after repacking, or the client keeps reading yesterday's
+strings.
 
 **And then, told to stop guessing and look: the bar itself was the fault.** At
 1:1 it is an 18-pixel hairline across a 1234-pixel window, with the title's own
