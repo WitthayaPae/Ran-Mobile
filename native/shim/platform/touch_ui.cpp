@@ -1515,6 +1515,21 @@ void drawIconDisc(const SkillIcon &ic) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), v);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ic.tex);
+    //  Say what we need sampled, every time.
+    //
+    //  This is the client's own texture and it carries whatever sampler state
+    //  the client last set on it. An item icon has ONE level; the moment
+    //  something asks for a mipmapped min filter the texture is incomplete,
+    //  and an incomplete texture samples as nothing at all - a black disc,
+    //  with no GL error. That is the potion slot going black during a skill or
+    //  while being hit and coming back after: combat is when the client is
+    //  drawing effects and changing filters. The sheet path sets these for the
+    //  same reason; this one never did, and a desktop GL driver - which is
+    //  what the emulator runs - is lenient enough to hide it.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glDrawArrays(GL_TRIANGLE_FAN, 0, n / 4);
 }
 
