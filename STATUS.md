@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 507 / APK V100 (versionCode 122) / iOS 1.0.122.**
+**Patch 509 / APK V101 (versionCode 123) / iOS 1.0.123.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -200,6 +200,20 @@ HTTP status where the message has one, and the cause's class - e.g.
 `(UnknownHostException / GaiException)`. Only types and three digits, so a
 screenshot cannot leak a host or a path. Verified by pointing `.patchbase` at a
 dead host.
+
+**And the black squares themselves: the client's own slot quads.** A photo of
+the phone settled it - six black SQUARES along the top where the round bezels
+should be, and the bezels nowhere, because the overlay draws under the client's
+interface and the squares were on top of them.
+
+The slot is kept visible on purpose (it takes the tap that drinks the potion)
+and was made to "draw nothing" with a zero-size texture rect. That is not
+nothing: it is a quad with all four corners on one texel. A desktop GL driver
+folds it away - which is why the emulator has looked right all along - and the
+phone's driver paints it, with texel (0,0) of that atlas being black.
+`SetUseRender(FALSE)` is what draws nothing; verified on the device that the
+slot still takes input with it off, because the long press still opens the
+sheet.
 
 **The potion slot blinking black in combat was sampler state, not the cache.**
 Reported as "when I use the skill, or when I get attacked, it turns black and
