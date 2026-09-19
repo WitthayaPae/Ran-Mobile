@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 478 / APK V081 (versionCode 103) / iOS 1.0.103.**
+**Patch 480 / APK V083 (versionCode 105) / iOS 1.0.105.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -59,6 +59,41 @@ them. And it moved from under the attack disc to on top of the skill cluster:
 `RanTouch_GetSkillBounds` hands the client the box the skill slots occupy, so
 the row caps them, centred, and follows when the player moves the slots in the
 HUD editor.
+
+**Then the editor itself, asked for after using it.** Four changes:
+
+* The menu WINDOW is off the editor's list. It is only on screen while a choice
+  is being made, so arranging it means arranging something that is never there
+  while playing; the menu BUTTON is its own group and always there. The
+  client's `RanUI_MenuWindowRect` / `Move` pair went with it.
+* Each potion slot moves on its own, like a skill slot, and is clamped on
+  screen. It had to be: a slot dragged past the top sat at y = -29 and the row
+  read as five buttons with no way to get the sixth back.
+* The quest box and the small party frame join the editor. They are the
+  client's controls, so it lends the overlay their box
+  (`RanTouch_SetCornerBox`) and takes back the offset, exactly as the potion
+  row does.
+* The editor's own toolbar can be dragged by its plate. It sits across the top,
+  which is where the status bars, the corner icons and the potion row are - the
+  one thing that could not be moved was covering the things it was there to
+  move.
+
+**The potion row went back where the tray has always been** - beside the status
+bars, anchored to the first slot's authored position, taken once before this
+code has moved anything. A long press on a slot opens the auto-pot window,
+which is what the tray's gear did before the gear went with the rest of the
+square furniture.
+
+**`nMOBILE_HUD_FLOATS` was too small and had been for a while.** It said 52
+while `RanTouch_GetHudLayout` wanted 56, then 60: that function writes nothing
+at all into a buffer too small for it, so pressing save in the editor saved the
+arrangement that was already on file. 80 now, and `SetHudLayout` reads a short
+(older) file instead of refusing it outright.
+
+**And the iOS builds had been built from stale client code.** `SOURCE/` is its
+own repository and CI checks it out separately; this session's client changes
+sat uncommitted in the working tree for several releases. Commit SOURCE too, or
+the .ipa is Android's code from last week.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
