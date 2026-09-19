@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 494 / APK V091 (versionCode 113) / iOS 1.0.113.**
+**Patch 496 / APK V092 (versionCode 114) / iOS 1.0.114.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -184,6 +184,21 @@ raise together, and a tap on an equipped item opens its menu through the moved
 panel (verified on the device). A dark plate sits behind the doll, created
 *before* it in `CreateSubControl` because the container draws in registration
 order - made afterwards it would have covered the thing it was backing.
+
+**The menu's close box, and why the title bar never behaved.** Asked "the close
+btn look odd". Logging the live rects said the bar and the box were both at
+y 84..102 - identical - while the screen showed the X hanging through the bar's
+lower edge. Measuring the drawn pixels across three builds explained it:
+
+* the title art draws at HALF the height of the rect it is given (26 -> 12
+  units on screen, 18 -> 8, 9 -> 4), stretching only sideways;
+* a button's art draws at its own texel size, CENTRED in its rect.
+
+So an 18-unit close box against an 18-unit bar put the X nine pixels below the
+strip. That also explains why setting the bar to 26, then 20, then 18 never
+changed what was drawn. The close box is half the bar's height now, at the art's
+own 14 wide, centred in the 24-wide right cap; window 414 to match. Checked at
+7x on the device: the X sits inside the bar.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
