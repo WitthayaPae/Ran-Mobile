@@ -916,6 +916,7 @@ bool hit(const Vec2 &c, float r, float x, float y) {
 //  that sits in the way, and that is a group of its own.
 //
 bool   g_edit = false;
+bool   g_editBar = false;           //  dragging the editor's own toolbar
 int    g_editSel = -1;              //  selected group, -1 none
 int    g_editSlot = -1;             //  which skill slot, when the group is the arc
 int    g_editPtr = -1;              //  the finger dragging it
@@ -929,14 +930,34 @@ SlotAdj g_potBefore[kPotMax];
 //  opacity +, save. Positions in surface pixels, recomputed from the unit.
 enum { kToolCancel, kToolReset, kToolSizeDn, kToolSizeUp, kToolAlphaDn, kToolAlphaUp,
        kToolSave, kToolCount };
+//  The toolbar can be moved out of the way.
+//
+//  It sits across the top, which is where the status bars, the corner icons
+//  and now the potion row live - so the one thing the player cannot arrange
+//  was covering the things they came to arrange. Dragging the PLATE (anywhere
+//  on the bar that is not one of its buttons) moves it; the buttons keep
+//  working as taps. In pixels, and cleared with everything else by reset.
+float g_toolDX = 0.0f, g_toolDY = 0.0f;
+
 void toolCircle(int t, Vec2 &c, float &r) {
     r = g_unit * 0.26f;
     const float step = g_unit * 0.66f;
     //  cancel, reset | size - [value] + | opacity - [value] + | save
     static const float slot[kToolCount] = { 0.0f, 1.0f, 2.6f, 4.4f, 5.6f, 7.4f, 9.0f };
     const float total = 9.0f * step;
-    c.x = (float)g_width * 0.5f - total * 0.5f + slot[t] * step;
-    c.y = g_unit * 0.50f;
+    c.x = (float)g_width * 0.5f - total * 0.5f + slot[t] * step + g_toolDX;
+    c.y = g_unit * 0.50f + g_toolDY;
+}
+
+//  The plate behind the buttons, which is also its handle.
+void toolBar(float *x, float *y, float *w, float *h) {
+    Vec2 c0, c1; float r;
+    toolCircle(kToolCancel, c0, r);
+    toolCircle(kToolSave, c1, r);
+    if (x) *x = c0.x - r * 1.5f;
+    if (y) *y = c0.y - r * 1.45f;
+    if (w) *w = (c1.x - c0.x) + r * 3.0f;
+    if (h) *h = r * 2.9f;
 }
 
 //  Where a group is, for selecting and outlining it.
@@ -1038,10 +1059,12 @@ void editDefaultsAll() {
     for (int i = 0; i < kGrpCount; ++i) { g_adj[i].dx = g_adj[i].dy = 0; g_adj[i].scale = 1; g_adj[i].alpha = 1; }
     for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) g_slotAdj[i].dx = g_slotAdj[i].dy = 0.0f;
     for (int i = 0; i < kPotMax; ++i) g_potAdj[i].dx = g_potAdj[i].dy = 0.0f;
+    g_toolDX = g_toolDY = 0.0f;
 }
 
 void editEnd() {
     g_edit = false;
+    g_editBar = false;
     g_editSel = -1;
     g_editSlot = -1;
     g_editPtr = -1;
@@ -1120,8 +1143,20 @@ int RanTouch_PointerDown(int id, float x, float y) {
             layout();
             return 1;
         }
+        //  The plate itself: not a button, so it is the bar's handle.
+        {
+            float bx, by, bw, bh;
+            toolBar(&bx, &by, &bw, &bh);
+            if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
+                g_editBar = true;
+                g_editPtr = id; g_editLastX = x; g_editLastY = y;
+                return 1;
+            }
+        }
+
         const int g = groupAt(x, y);
         g_editSel = g;
+        g_editBar = false;
         if (g >= 0) { g_editPtr = id; g_editLastX = x; g_editLastY = y; }
         return 1;
     }
@@ -1199,6 +1234,19 @@ int RanTouch_PointerDown(int id, float x, float y) {
 int RanTouch_PointerMove(int id, float x, float y) {
     if (!g_inited || !g_active) return 0;
     if (g_edit) {
+        if (id == g_editPtr && g_editBar) {
+            g_toolDX += x - g_editLastX;
+            g_toolDY += y - g_editLastY;
+            //  Kept where it can be grabbed again.
+            float bx, by, bw, bh;
+            toolBar(&bx, &by, &bw, &bh);
+            if (bx < 0.0f)                       g_toolDX -= bx;
+            if (by < 0.0f)                       g_toolDY -= by;
+            if (bx + bw > (float)g_width)        g_toolDX -= bx + bw - (float)g_width;
+            if (by + bh > (float)g_height)       g_toolDY -= by + bh - (float)g_height;
+            g_editLastX = x; g_editLastY = y;
+            return 1;
+        }
         if (id == g_editPtr && g_editSel >= 0) {
             const float mdx = (x - g_editLastX) / g_unit;
             const float mdy = (y - g_editLastY) / g_unit;
@@ -2252,13 +2300,11 @@ void drawEditor() {
 
     emit();
 
-    //  Toolbar plate.
+    //  Toolbar plate, which is also the handle it is dragged by.
     {
-        Vec2 c0, c1; float r;
-        toolCircle(kToolCancel, c0, r);
-        toolCircle(kToolSave, c1, r);
-        drawRect(c0.x - r * 1.5f, c0.y - r * 1.45f, (c1.x - c0.x) + r * 3.0f, r * 2.9f,
-                 0.0f, 0.0f, 0.0f, 0.55f);
+        float bx, by, bw, bh;
+        toolBar(&bx, &by, &bw, &bh);
+        drawRect(bx, by, bw, bh, 0.0f, 0.0f, 0.0f, g_editBar ? 0.75f : 0.55f);
     }
     const bool haveSel = g_editSel >= 0;
     for (int t = 0; t < kToolCount; ++t) {
