@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 504 / APK V097 (versionCode 119) / iOS 1.0.119.**
+**Patch 507 / APK V100 (versionCode 122) / iOS 1.0.122.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -200,6 +200,24 @@ HTTP status where the message has one, and the cause's class - e.g.
 `(UnknownHostException / GaiException)`. Only types and three digits, so a
 screenshot cannot leak a host or a path. Verified by pointing `.patchbase` at a
 dead host.
+
+**The potion slot blinking black in combat was sampler state, not the cache.**
+Reported as "when I use the skill, or when I get attacked, it turns black and
+back". Measured first: the item's texture pointer and its GL name were logged
+every frame across casts and neither ever changed, so the cached handle was not
+the fault.
+
+`drawIconDisc` binds the CLIENT's texture and sampled it with whatever sampler
+state the client had last set on it. An item icon has one level, so the moment
+anything asks that texture for a mipmapped min filter it is incomplete - and an
+incomplete texture samples as nothing at all, with no GL error. Combat is
+exactly when the client is drawing effects and changing filters. The sheet path
+has set MIN/MAG LINEAR and CLAMP since the painted controls went in, for this
+same reason; this path never did.
+
+It cannot be reproduced on the emulator: a desktop GL driver is lenient about
+completeness. That is the second time that has cost a round trip - the emulator
+is for layout, the phone is for anything that touches sampler or GPU state.
 
 **A cleared slot drew a black disc.** After ถอด the slot kept the texture handle
 of an item it no longer held - the cache is only refreshed while the slot still
