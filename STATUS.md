@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 500 / APK V094 (versionCode 116) / iOS 1.0.116.**
+**Patch 502 / APK V095 (versionCode 117) / iOS 1.0.117.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -184,6 +184,13 @@ raise together, and a tap on an equipped item opens its menu through the moved
 panel (verified on the device). A dark plate sits behind the doll, created
 *before* it in `CreateSubControl` because the container draws in registration
 order - made afterwards it would have covered the thing it was backing.
+
+**A cleared slot drew a black disc.** After ถอด the slot kept the texture handle
+of an item it no longer held - the cache is only refreshed while the slot still
+HAS a picture to give, which is what carries it through the hiding pass, and
+that is exactly wrong the moment the item leaves. The character's own quick-slot
+entry decides: `NATIVEID_NULL` clears the cache. Same index the tray already
+uses for `ReqActionQ`, so the mapping is the client's own.
 
 **The potion slot's long press is a menu now.** ถอด (take it out of the slot)
 and ตั้งค่า (the auto-pot thresholds, a new `MOBILE_ITEM_SHEET` word at index
