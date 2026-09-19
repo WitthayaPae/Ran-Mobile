@@ -1631,6 +1631,25 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
     }
 }
 
+//  The box the skill slots occupy, in pixels. The potion row is laid out
+//  against it - above the slots, centred on them - so the two read as one
+//  block of round buttons under the thumb instead of two rows that happen to
+//  be near each other. Returns 0 while there are no slots to measure.
+extern "C" int RanTouch_GetSkillBounds(float *cx, float *top, float *width) {
+    if (g_skillCircleCount <= 0) return 0;
+    float l = 1e9f, r = -1e9f, t = 1e9f;
+    for (int i = 0; i < g_skillCircleCount; ++i) {
+        const SkillCircle &c = g_skillCircles[i];
+        if (c.x - c.r < l) l = c.x - c.r;
+        if (c.x + c.r > r) r = c.x + c.r;
+        if (c.y - c.r < t) t = c.y - c.r;
+    }
+    if (cx)    *cx    = (l + r) * 0.5f;
+    if (top)   *top   = t;
+    if (width) *width = r - l;
+    return 1;
+}
+
 //  What the player has done to the potion row in the HUD editor, so the tray
 //  can lay itself out there.
 //
@@ -2624,6 +2643,10 @@ void RanTouch_Render(void) {
             glUniform1f(uTexAlpha, pa);
             glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
             for (int i = 0; i < g_potCount; ++i) {
+                //  An empty slot is a bezel and nothing else - the row keeps
+                //  its full length so a potion dropped into slot 5 does not
+                //  make the whole row jump.
+                if (!g_potTex[i]) continue;
                 SkillIcon ic;
                 ic.tex = g_potTex[i]; ic.x = g_potX[i]; ic.y = g_potY[i]; ic.r = g_potRad[i];
                 ic.u0 = g_potU0[i]; ic.v0 = g_potV0[i];

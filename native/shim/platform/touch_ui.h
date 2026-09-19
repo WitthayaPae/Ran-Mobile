@@ -103,6 +103,9 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
                                         const float *u0, const float *v0,
                                         const float *u1, const float *v1);
 
+//  The box the skill slots occupy, so the potion row can sit on top of them.
+extern "C" int  RanTouch_GetSkillBounds(float *cx, float *top, float *width);
+
 //  Where the player has dragged the potion row in the HUD editor.
 extern "C" void RanTouch_GetPotionAdjust(float *dx, float *dy, float *scale);
 
