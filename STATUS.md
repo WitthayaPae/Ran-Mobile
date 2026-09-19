@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 502 / APK V095 (versionCode 117) / iOS 1.0.117.**
+**Patch 504 / APK V097 (versionCode 119) / iOS 1.0.119.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -184,6 +184,22 @@ raise together, and a tap on an equipped item opens its menu through the moved
 panel (verified on the device). A dark plate sits behind the doll, created
 *before* it in `CreateSubControl` because the container draws in registration
 order - made afterwards it would have covered the thing it was backing.
+
+**"Could not reach the update server" now says which failure it was.** Reported
+from a phone. Checked against the live host first: manifest and signature
+byte-identical to ours, blobs present (40-blob sample, none missing),
+Cloudflare answering a Dalvik user agent with 200, and the whole Android
+update run end to end on the emulator against the live server - APK downloaded
+and installed, versionCode 117. So the host is not the fault.
+
+That message is the catch around the WHOLE patch, so it stood for a refused
+certificate, a wrong clock, a DNS failure, an HTTP status, a full disk and a
+signature that did not verify - indistinguishable from the screen, with the
+reason going only to the log. It now carries a short code: exception class, the
+HTTP status where the message has one, and the cause's class - e.g.
+`(UnknownHostException / GaiException)`. Only types and three digits, so a
+screenshot cannot leak a host or a path. Verified by pointing `.patchbase` at a
+dead host.
 
 **A cleared slot drew a black disc.** After ถอด the slot kept the texture handle
 of an item it no longer held - the cache is only refreshed while the slot still
