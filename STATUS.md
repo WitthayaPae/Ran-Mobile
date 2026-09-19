@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 496 / APK V092 (versionCode 114) / iOS 1.0.114.**
+**Patch 498 / APK V093 (versionCode 115) / iOS 1.0.115.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -184,6 +184,17 @@ raise together, and a tap on an equipped item opens its menu through the moved
 panel (verified on the device). A dark plate sits behind the doll, created
 *before* it in `CreateSubControl` because the container draws in registration
 order - made afterwards it would have covered the thing it was backing.
+
+**And then, told to stop guessing and look: the bar itself was the fault.** At
+1:1 it is an 18-pixel hairline across a 1234-pixel window, with the title's own
+glyphs taller than the strip and hanging out of the bottom. Every close-box
+adjustment before this was chasing a symptom.
+
+The art draws at half the height of the rect it is handed, so `TITLE_ART` hands
+it twice what it should draw and `TITLE_H` stays what the bar IS - 20 units -
+which is what the label, the close box and the body's edges lay out against.
+Window 416. Checked at 4x and 6x on the device: name and close box both sit
+inside the bar.
 
 **The menu's close box, and why the title bar never behaved.** Asked "the close
 btn look odd". Logging the live rects said the bar and the box were both at
