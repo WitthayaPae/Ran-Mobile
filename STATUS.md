@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 484 / APK V085 (versionCode 107) / iOS 1.0.107.**
+**Patch 486 / APK V087 (versionCode 109) / iOS 1.0.109.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -121,6 +121,22 @@ layer asks through `RanUI_PointInDragControl` with `NAME_DISPLAY_MAN` left out.
 Only the drag decision changed: a tap is still delivered where the finger went
 down, so tapping a name still selects that player. Both measured on LDPlayer -
 the same drag now logs `GESTURE middle(camera)` and the view swings.
+
+**The inventory is folded side by side for the phone.** Authored it is a column:
+the equipment doll (159 tall), then ten item rows, then the money and Sort rows
+- 598 in all, against the 589 rows an iPhone 15 gives the client. It used to fit
+by squeezing the one-unit gaps out of the slot rows (9 units, exactly the
+shortfall); that squeeze is gone. `CInventoryWindow::MobileSideBySide` shrinks
+the window by the height the doll occupied, moves the list up into that space
+and puts the doll at a negative local x - out to the left, level with the list.
+Measured live: window 239x435, doll 225x159 beside it, 154 rows to spare on a
+phone.
+
+It is still ONE window: the doll stays a child, so the two open, close, drag and
+raise together, and a tap on an equipped item opens its menu through the moved
+panel (verified on the device). A dark plate sits behind the doll, created
+*before* it in `CreateSubControl` because the container draws in registration
+order - made afterwards it would have covered the thing it was backing.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
