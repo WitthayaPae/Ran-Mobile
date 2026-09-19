@@ -3,12 +3,41 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-19
+- **Last updated:** 2026-09-20
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-20 — Every character name was "inappropriate", and the mark over the gate
+
+**Patch 511 / APK V102 (versionCode 124) / iOS 1.0.124.**
+
+**The name filter refused everything.** `SlangFilter::addSlang` builds its tree
+key with `_snwprintf(buf, n, L"%s", slang.c_str())`. `%s` in a WIDE format
+string means `char*` to bionic, where MSVC reads it as `wchar_t*` - so a UTF-32
+string was read a byte at a time and stopped at the first zero: U+0E41 became
+"A". `moblogic2.bin` bans about 53,000 code points by range, and between them
+they cover every low byte there is, so all of ASCII ended up in the tree. Any
+name came back `******` and the create screen said
+ชื่อตัวละครมีคำไม่เหมาะสม.
+
+Measured rather than guessed, in four steps: the chat filter passed "abcdef"
+while the name filter starred it; the ranges parsed correctly (AC00..D7A3 and
+twelve more, none of them ASCII); the matches were on 0041..0046 - the letters a
+hex string is made of, which is what a UTF-32 buffer looks like read as bytes;
+and a bounded copy in place of the printf fixed it. "abcdef" creates.
+
+**The mark on the character pages.** `LOGIN_MARK` is drawn centred, which on a
+phone is where the character stands - a gold disc hanging over the gate behind
+them. Hidden on select and create, mobile only; the login page keeps it.
+
+**A trap worth naming: a wide printf with `%s`.** MSVC and bionic disagree about
+what that means, and the failure is silent and data-dependent. Worth grepping
+for the next time something wide comes out truncated.
 
 ---
 
