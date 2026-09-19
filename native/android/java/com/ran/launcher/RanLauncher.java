@@ -401,13 +401,24 @@ public class RanLauncher extends Activity {
              *  host names and file paths, and this screen is the first thing a
              *  player screenshots when something goes wrong.                  */
             Log.e(TAG, "patch failed", t);
+            /*  A short, safe reason on the screen.
+             *
+             *  "Could not reach the update server" is this catch, and this
+             *  catch is every failure in patch(): a refused certificate, a
+             *  full disk, an HTTP status, a signature that did not verify.
+             *  They need different answers, and the screen said the same words
+             *  for all of them - which cost a round trip to find out which it
+             *  was. The class name and the status number say that much and
+             *  carry no URL, host or path; the detail stays in the log.      */
+            final String why = reasonCode(t);
             if (new File(ROOT, "data/glogic/GLogic.rcc").exists()) {
                 say("Could not reach the update server",
-                    "Starting with the data already installed.", 1000);
+                    "Starting with the data already installed.  (" + why + ")", 1000);
                 sleep(1800);
             } else {
                 fail("Could not download the game data",
-                     "The update server could not be reached.\nCheck your connection and try again.");
+                     "The update server could not be reached.\nCheck your connection and try again."
+                     + "\n\nReason: " + why);
                 return;
             }
         }
@@ -997,6 +1008,31 @@ public class RanLauncher extends Activity {
 
     private static String mb(long b) { return String.format("%.1f MB", b / 1048576.0); }
     private static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException e) {} }
+
+    /*  The shortest thing that says WHICH failure this was.
+     *
+     *  Class name, plus the HTTP status when the message carries one, plus the
+     *  cause's class where there is one - an SSLHandshakeException wrapped in
+     *  an IOException is the difference between "this phone does not trust the
+     *  certificate" and "this phone has no network". No message text is
+     *  copied, only the type and, where present, three digits, so nothing here
+     *  can put a path or a host on a screenshot.                             */
+    private static String reasonCode(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        Throwable c = t;
+        for (int depth = 0; c != null && depth < 3; ++depth) {
+            if (sb.length() > 0) sb.append(" / ");
+            sb.append(c.getClass().getSimpleName());
+            String msg = c.getMessage();
+            if (msg != null) {
+                java.util.regex.Matcher mm =
+                    java.util.regex.Pattern.compile("HTTP (\\d{3})").matcher(msg);
+                if (mm.find()) sb.append(' ').append(mm.group(1));
+            }
+            c = c.getCause();
+        }
+        return sb.toString();
+    }
 
     private void fail(final String title, final String msg) {
         ui.post(new Runnable() { public void run() {
