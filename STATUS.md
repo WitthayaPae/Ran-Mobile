@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 476 / APK V080 (versionCode 102) / iOS 1.0.102.**
+**Patch 478 / APK V081 (versionCode 103) / iOS 1.0.103.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -50,6 +50,15 @@ texture's size with `glGetTexLevelParameteriv` / `GL_TEXTURE_WIDTH`, neither of
 which exists in GLES2 - the Android NDK headers have them, Apple's do not, so
 only CI saw it. It also bound a texture behind the bind cache's back. Both gone:
 `RanGLR_TextureSize`, the way the skill icons already ask.
+
+**Then two corrections, asked after seeing it.** The row showed only two slots
+because an empty one reported nothing and so got no bezel; every slot reports
+itself now, with a zero texture when it is empty, and the overlay draws the
+bezel and leaves the middle blank - the row is six buttons long whatever is in
+them. And it moved from under the attack disc to on top of the skill cluster:
+`RanTouch_GetSkillBounds` hands the client the box the skill slots occupy, so
+the row caps them, centred, and follows when the player moves the slots in the
+HUD editor.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
