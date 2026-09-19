@@ -14,7 +14,7 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-19 — The potion row joins the round HUD, and three things the screen still carried
 
-**Patch 482 / APK V084 (versionCode 106) / iOS 1.0.106.**
+**Patch 484 / APK V085 (versionCode 107) / iOS 1.0.107.**
 
 Asked: the quest tile on screen is stale, the potion slots are not in the skill
 slots' style, the skill bezel can reuse `stick_base.png`, and the menu window's
@@ -109,6 +109,18 @@ Finding it took a walk of the whole control container logging every control
 whose rect lands in the corner. Worth remembering: `SetVisibleSingle(FALSE)` on
 the quick potion slot, which the client already does, hides the slot and not
 its children, so the picture and frame carried on drawing.
+
+**The camera would not turn in a crowd.** Reported as "I cannot rotate because
+I drag where the crowd is". The gesture layer decides what a drag means by
+asking whether the finger went down on a control: on the world it presses the
+middle button, which is the camera; on a control it presses the left, which
+drags the control. The world's name plates ARE controls, and in a busy town
+they cover most of the screen - so `GESTURE left(tap/drag)` and the view never
+moved. `CUIMan::IsPointInControlExcept` skips a named group, and the gesture
+layer asks through `RanUI_PointInDragControl` with `NAME_DISPLAY_MAN` left out.
+Only the drag decision changed: a tap is still delivered where the finger went
+down, so tapping a name still selects that player. Both measured on LDPlayer -
+the same drag now logs `GESTURE middle(camera)` and the view swings.
 
 **The menu's top bar.** `BASIC_WINDOW_TITLE_*` is authored 18 units tall and was
 being stretched to 26 - 1.44x, which smeared its bevel into a flat grey slab.
