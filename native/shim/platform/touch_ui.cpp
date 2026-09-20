@@ -1117,6 +1117,14 @@ void editDefaultsAll() {
     for (int i = 0; i < kPotMax; ++i) {
         g_potAdj[i].dx = g_potAdj[i].dy = 0.0f; g_potAdj[i].scale = 1.0f;
     }
+    //  The corner icons too.
+    //
+    //  They were added to the editor and not to this, so reset put everything
+    //  else back and left the quest box and the party frame wherever they had
+    //  been dragged - which reads as "reset does not work".
+    for (int i = 0; i < kCornerMax; ++i) {
+        g_cornerAdj[i].dx = g_cornerAdj[i].dy = 0.0f; g_cornerAdj[i].scale = 1.0f;
+    }
     g_toolDX = g_toolDY = 0.0f;
 }
 
@@ -1328,6 +1336,12 @@ int RanTouch_PointerMove(int id, float x, float y) {
             } else if (g_editSel == kGrpPotion && g_editSlot >= 0) {
                 g_potAdj[g_editSlot].dx += mdx;
                 g_potAdj[g_editSlot].dy += mdy;
+            } else if (g_editSel == kGrpCorner && g_editSlot >= 0) {
+                //  One corner icon, not the pair: they are picked separately,
+                //  so they have to move separately too - dragging the quest box
+                //  was taking the party frame with it.
+                g_cornerAdj[g_editSlot].dx += mdx;
+                g_cornerAdj[g_editSlot].dy += mdy;
             } else {
                 g_adj[g_editSel].dx += mdx;
                 g_adj[g_editSel].dy += mdy;
