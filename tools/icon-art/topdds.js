@@ -46,7 +46,11 @@ function readPng(file) {
   return { width: w, height: h, data: out };
 }
 
-const img = readPng(path.join(__dirname, 'atlas.png'));
+//  Which sheet to write. The menu icons come from atlas.png and the on-screen
+//  controls from hud.png, and both take the same header - so the source is an
+//  argument rather than a second copy of this file.
+const src = process.argv[3] || path.join(__dirname, 'atlas.png');
+const img = readPng(src);
 
 const H = Buffer.alloc(128);
 H.write('DDS ', 0, 'latin1');

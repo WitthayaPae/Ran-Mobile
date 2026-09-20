@@ -861,7 +861,12 @@ void layout() {
     g_attackBaseY = g_buttons[0].centre.y;
     const int single[6][2] = { { 0, kGrpAttack }, { 3, kGrpAuto }, { 4, kGrpPK },
                                { 5, kGrpPickup }, { 6, kGrpCamera }, { 8, kGrpMenu } };
-    for (int k = 0; k < 5; ++k) {
+    //  Six entries, six passes.
+    //
+    //  It ran to five, so the last row - the MENU button - was never given its
+    //  offset or its size. In the editor it outlined and selected like the
+    //  others and then ignored everything the player did to it.
+    for (int k = 0; k < 6; ++k) {
         Button &b = g_buttons[single[k][0]];
         const HudAdj &a = g_adj[single[k][1]];
         b.radius   *= a.scale;
@@ -1708,6 +1713,14 @@ extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale) {
     if (dy)    *dy    = g_adj[kGrpCorner].dy * g_unit;
     if (scale) *scale = g_adj[kGrpCorner].scale;
 }
+
+//  How big the player has asked the skill slots to be.
+//
+//  The arc's own radius already carries this (RanTouch_GetSkillArc), which
+//  spreads the slots further apart - but the slots themselves are the client's
+//  controls and kept their authored size, so "bigger" moved them and left them
+//  the same size. The tray scales its slots by this.
+extern "C" float RanTouch_GetSkillScale(void) { return g_adj[kGrpSkill].scale; }
 
 //  Where potion slot i has been dragged, in pixels, on top of the row.
 extern "C" void RanTouch_GetPotionSlotOffset(int i, float *dx, float *dy) {

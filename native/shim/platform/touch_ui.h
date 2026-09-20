@@ -108,6 +108,9 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
 extern "C" void RanTouch_SetCornerBox(float cx, float cy, float r);
 extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale);
 
+//  How big the player has asked the skill slots to be.
+extern "C" float RanTouch_GetSkillScale(void);
+
 //  Where potion slot i has been dragged, in pixels, on top of the row.
 extern "C" void RanTouch_GetPotionSlotOffset(int i, float *dx, float *dy);
 
