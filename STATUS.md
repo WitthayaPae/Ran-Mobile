@@ -12,6 +12,49 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (5) — Items and skills move on a tap, the way the PC's click does
+
+Asked: on the PC a click picks an item or skill up and another click puts it
+down; make the phone do that with one press, drag and let go included.
+
+**What the PC actually does** (read before touching anything): there is no
+press-and-hold drag. `CItemMove` draws whatever `GET_HOLD_ITEM()` returns at the
+cursor, and `ReqInvenTo` / `ReqSlotTo` / `ReqStorageTo` both LIFT (empty hand)
+and PLACE (full hand) - so a left click picks up and the next left click drops.
+Skills are the same shape: `CSkillSlot` puts the skill on `CSkillWindowToTray`
+on LB_DOWN, and `CBasicSkillTray` assigns it to a quick slot on LB_UP.
+
+**What mobile was doing.** A tap on a bag cell opened the action sheet and never
+moved anything; lifting needed a deliberate long press (the touch layer's right
+button). That is not how a bag is rearranged on a phone.
+
+**The rule now**, in one place - `CInnerInterface::MobileItemTouch`:
+
+| gesture | empty hand | full hand |
+|---|---|---|
+| tap | LIFT | DROP (place / swap / split) |
+| press, move, release | LIFT on the press, DROP where it lets go | DROP |
+| long press | SHEET (use, equip, split, drop) | DROP |
+
+The lift happens on the press so the icon has something to follow during a
+drag, and the release of *that* press is not a drop - the helper remembers
+which cell the lift came from, or every tap would put the item straight back.
+Callers: `InventoryWindow` (bag cells and worn slots), `StorageWindow`. Skills
+already worked this way once the tap reached the slot; nothing to change there.
+
+Also fixed in passing: `StorageWindow` had a copy of the mobile block pasted
+*inside* the ALT-preview branch, where it was dead code on a phone and
+swallowed the preview.
+
+**Verified on the device**, bag cell (0,0) holding bread: tap the cell, tap an
+empty cell six rows down - bread moves, (0,0) is empty, no long press anywhere.
+Instrumented runs confirmed each edge: `ITEMTOUCH lbd=1 ... ` then `ITEMLIFT
+touch=1 hr=00000000`, and the drop `touch=2`. Skills: `SKILLPICK 12,11` from the
+skill window, then `SKILLDROP slot=0 carry=12,11` on an EMPTY arc circle, and
+the circle then draws the skill. All instrumentation removed before the build.
+
+---
+
 ## 2026-09-20 (4) — The แข่งขัน cell strobes because the blink covers it
 
 "it still keep flicking! see the real code and do the real analysis!"
