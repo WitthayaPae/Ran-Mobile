@@ -14,7 +14,20 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-20 — Every character name was "inappropriate", and the mark over the gate
 
-**Patch 515 / APK V104 (versionCode 126) / iOS 1.0.126.**
+**Patch 517 / APK V105 (versionCode 127) / iOS 1.0.127.**
+
+**Reset left two controls behind, and the pair still dragged together.**
+`editDefaultsAll` never learned about `g_cornerAdj`, so reset put everything
+else back and left the quest box and the party frame where they had been
+dragged; and the move handler had branches for a skill slot and a potion slot
+but not for a corner icon, so dragging one took the other with it. Both fixed
+and verified on the device.
+
+**And the new vehicle art is not on anyone's phone yet.** Measured against the
+live host: it serves **version 511 / APK V102**, and the new sheet's blob
+(`9b85927c…`) answers **404**. The live manifest still names the old sheet
+`c61c3946…`. Patches 513 onward are built and staged but have not been
+uploaded - `out/upload` is 136 MB and carries them.
 
 **Then the half that was actually asked for: every button sizes on its own.**
 "It should be separate for any button" - size is per CONTROL now, not per
