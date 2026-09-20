@@ -61,11 +61,17 @@ float g_unit = 100.0f;
 //  and its own offset moves it relative to the button.
 enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
        kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCorner, kGrpCount };
-struct HudAdj { float dx, dy, scale, alpha; };
-HudAdj g_adj[kGrpCount] = {
-    { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
-    { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
-};
+//  Defaults live on the members, not in a list beside the array.
+//
+//  The list had eight rows for an array that had grown to eleven, so the last
+//  three groups - menu, potion row, corner icons - started at scale 0 and
+//  opacity 0. A zero scale is a button with no radius: the menu button drew
+//  nothing and could not be hit, and the potion bezels were drawn at zero
+//  alpha. It went unseen because nothing applied those two fields to those
+//  groups until the size fix did. Written this way the array cannot rot again
+//  when a group is added.
+struct HudAdj { float dx = 0.0f, dy = 0.0f, scale = 1.0f, alpha = 1.0f; };
+HudAdj g_adj[kGrpCount];
 //  Multiplies the alpha of every vertex written, so a control drawn under it
 //  comes out at the player's chosen opacity without each shape knowing.
 float g_drawAlpha = 1.0f;
@@ -78,18 +84,35 @@ float g_attackBaseX = 0.0f, g_attackBaseY = 0.0f;
 //  Each skill slot's own offset, in layout modules. The slots are the client's
 //  controls - it places them on the arc and then applies these, so a player can
 //  put one skill where their thumb wants it without moving the rest.
-struct SlotAdj { float dx, dy; };
-SlotAdj g_slotAdj[RANTOUCH_MAX_SKILL_CIRCLES] = { { 0, 0 } };
+//  A slot's own place AND its own size.
+//
+//  The group's scale sizes a whole row at once, which is right for a pair of
+//  page arrows and wrong for six skill slots: the one a thumb reaches for
+//  wants to be bigger than the five beside it. Size follows the same rule the
+//  offset already did - the editor gives it to whatever is selected, and a
+//  selected SLOT is a slot, not its group.
+struct SlotAdj { float dx = 0.0f, dy = 0.0f, scale = 1.0f; };
+SlotAdj g_slotAdj[RANTOUCH_MAX_SKILL_CIRCLES];
 //  The potion slots move one at a time too, for the same reason the skill
 //  slots do: six buttons in a fixed row is a layout, not an arrangement.
 const int kPotMax = 8;
-SlotAdj g_potAdj[kPotMax] = { { 0, 0 } };
+SlotAdj g_potAdj[kPotMax];
 
 //  The quest box and the small party frame, which stay out of the menu grid
 //  and so are placed by the client in the top right corner. It hands over the
 //  box they occupy each frame so the editor can outline and grab them; the
 //  offset goes back the same way the potion row's does.
-struct { float x, y, r; bool has; } g_corner = { 0, 0, 0, false };
+//  The corner icons are TWO things, not one.
+//
+//  The quest box and the small party frame sit side by side and the player
+//  reaches for them separately, so each carries its own offset and its own
+//  size - like a skill slot, not like the page arrows.
+const int kCornerMax = 4;
+struct CornerBox { float x, y, r; bool has; };
+CornerBox g_cornerBox[kCornerMax] = { };
+int       g_cornerCount = 0;
+SlotAdj   g_cornerAdj[kCornerMax];
+SlotAdj   g_cornerBefore[kCornerMax];
 
 //  --- movement stick -----------------------------------------------------
 struct Stick {
@@ -1007,10 +1030,25 @@ bool groupCircle(int g, Vec2 &c, float &r) {
             }
             return true;
         }
-        case kGrpCorner:
-            if (!g_corner.has || g_corner.r <= 0.0f) return false;
-            c.x = g_corner.x; c.y = g_corner.y; r = g_corner.r;
+        case kGrpCorner: {
+            //  Outlined one by one in the editor; this is only their extent.
+            if (g_cornerCount <= 0) return false;
+            float sx = 0, sy = 0; int n = 0;
+            for (int i = 0; i < g_cornerCount; ++i) {
+                if (!g_cornerBox[i].has) continue;
+                sx += g_cornerBox[i].x; sy += g_cornerBox[i].y; ++n;
+            }
+            if (n <= 0) return false;
+            c.x = sx / (float)n; c.y = sy / (float)n;
+            r = 0.0f;
+            for (int i = 0; i < g_cornerCount; ++i) {
+                if (!g_cornerBox[i].has) continue;
+                const float d = len(g_cornerBox[i].x - c.x, g_cornerBox[i].y - c.y)
+                              + g_cornerBox[i].r;
+                if (d > r) r = d;
+            }
             return true;
+        }
         case kGrpSkill: {
             //  Outlined per slot in the editor; this is only its extent.
             if (g_skillCircleCount <= 0) return false;
@@ -1031,7 +1069,7 @@ bool groupCircle(int g, Vec2 &c, float &r) {
 //  The group under a finger. Small buttons first, so one sitting on top of a
 //  bigger group can still be picked; the skill slots before the stick.
 int groupAt(float x, float y) {
-    static const int order[] = { -2, -3, kGrpCorner, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK,
+    static const int order[] = { -2, -3, -4, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK,
                                  kGrpCamera, kGrpMenu, kGrpAttack, kGrpStick };
     g_editSlot = -1;
     for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
@@ -1054,6 +1092,17 @@ int groupAt(float x, float y) {
                 }
             continue;
         }
+        if (g == -4) {
+            //  And each corner icon: the quest box and the party frame are
+            //  reached for separately, so they are picked separately.
+            for (int i = 0; i < g_cornerCount && i < kCornerMax; ++i)
+                if (g_cornerBox[i].has &&
+                    len(x - g_cornerBox[i].x, y - g_cornerBox[i].y) <= g_cornerBox[i].r) {
+                    g_editSlot = i;
+                    return kGrpCorner;
+                }
+            continue;
+        }
         Vec2 c; float r;
         if (groupCircle(g, c, r) && hit(c, r, x, y)) return g;
     }
@@ -1062,8 +1111,12 @@ int groupAt(float x, float y) {
 
 void editDefaultsAll() {
     for (int i = 0; i < kGrpCount; ++i) { g_adj[i].dx = g_adj[i].dy = 0; g_adj[i].scale = 1; g_adj[i].alpha = 1; }
-    for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) g_slotAdj[i].dx = g_slotAdj[i].dy = 0.0f;
-    for (int i = 0; i < kPotMax; ++i) g_potAdj[i].dx = g_potAdj[i].dy = 0.0f;
+    for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
+        g_slotAdj[i].dx = g_slotAdj[i].dy = 0.0f; g_slotAdj[i].scale = 1.0f;
+    }
+    for (int i = 0; i < kPotMax; ++i) {
+        g_potAdj[i].dx = g_potAdj[i].dy = 0.0f; g_potAdj[i].scale = 1.0f;
+    }
     g_toolDX = g_toolDY = 0.0f;
 }
 
@@ -1128,16 +1181,30 @@ int RanTouch_PointerDown(int id, float x, float y) {
             toolCircle(t, c, r);
             if (!hit(c, r * 1.2f, x, y)) continue;
             HudAdj *a = (g_editSel >= 0) ? &g_adj[g_editSel] : NULL;
+
+            //  Size goes to whatever is SELECTED, and a slot is a thing on its
+            //  own - the same rule dragging has always used. With one scale a
+            //  group, growing the skill slot under the thumb grew all six.
+            float *pScale = a ? &a->scale : NULL;
+            if (g_editSlot >= 0) {
+                if (g_editSel == kGrpSkill && g_editSlot < RANTOUCH_MAX_SKILL_CIRCLES)
+                    pScale = &g_slotAdj[g_editSlot].scale;
+                else if (g_editSel == kGrpPotion && g_editSlot < kPotMax)
+                    pScale = &g_potAdj[g_editSlot].scale;
+                else if (g_editSel == kGrpCorner && g_editSlot < kCornerMax)
+                    pScale = &g_cornerAdj[g_editSlot].scale;
+            }
             switch (t) {
                 case kToolCancel:
                     memcpy(g_adj, g_editBefore, sizeof(g_adj));
                     memcpy(g_slotAdj, g_slotBefore, sizeof(g_slotAdj));
                     memcpy(g_potAdj,  g_potBefore,  sizeof(g_potAdj));
+                    memcpy(g_cornerAdj, g_cornerBefore, sizeof(g_cornerAdj));
                     editEnd();
                     break;
                 case kToolReset:  editDefaultsAll(); break;
-                case kToolSizeDn: if (a) { a->scale -= 0.1f; if (a->scale < 0.6f) a->scale = 0.6f; } break;
-                case kToolSizeUp: if (a) { a->scale += 0.1f; if (a->scale > 1.6f) a->scale = 1.6f; } break;
+                case kToolSizeDn: if (pScale) { *pScale -= 0.1f; if (*pScale < 0.6f) *pScale = 0.6f; } break;
+                case kToolSizeUp: if (pScale) { *pScale += 0.1f; if (*pScale > 1.6f) *pScale = 1.6f; } break;
                 case kToolAlphaDn: if (a) { a->alpha -= 0.1f; if (a->alpha < 0.2f) a->alpha = 0.2f; } break;
                 case kToolAlphaUp: if (a) { a->alpha += 0.1f; if (a->alpha > 1.0f) a->alpha = 1.0f; } break;
                 case kToolSave:
@@ -1702,16 +1769,29 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
 
 //  Where the client has put the corner icons - the quest box and the small
 //  party frame - so the editor can outline and grab them. In pixels.
-extern "C" void RanTouch_SetCornerBox(float cx, float cy, float r) {
-    g_corner.x = cx; g_corner.y = cy; g_corner.r = r;
-    g_corner.has = (r > 0.0f);
+extern "C" void RanTouch_SetCornerBox(int i, float cx, float cy, float r) {
+    if (i < 0 || i >= kCornerMax) return;
+    g_cornerBox[i].x = cx; g_cornerBox[i].y = cy; g_cornerBox[i].r = r;
+    g_cornerBox[i].has = (r > 0.0f);
+    if (i + 1 > g_cornerCount) g_cornerCount = i + 1;
 }
 
-//  And what the player did to them, in pixels, for the client to apply.
-extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale) {
-    if (dx)    *dx    = g_adj[kGrpCorner].dx * g_unit;
-    if (dy)    *dy    = g_adj[kGrpCorner].dy * g_unit;
-    if (scale) *scale = g_adj[kGrpCorner].scale;
+//  And what the player did to icon i, in pixels, for the client to apply.
+//
+//  The group's own offset moves the pair; the icon's moves it alone. Both are
+//  added, so dragging the pair and then nudging one of them does what it looks
+//  like it does.
+extern "C" void RanTouch_GetCornerAdjust(int i, float *dx, float *dy, float *scale) {
+    const float gx = g_adj[kGrpCorner].dx * g_unit;
+    const float gy = g_adj[kGrpCorner].dy * g_unit;
+    const float gs = g_adj[kGrpCorner].scale;
+    if (i < 0 || i >= kCornerMax) {
+        if (dx) *dx = gx; if (dy) *dy = gy; if (scale) *scale = gs;
+        return;
+    }
+    if (dx)    *dx    = gx + g_cornerAdj[i].dx * g_unit;
+    if (dy)    *dy    = gy + g_cornerAdj[i].dy * g_unit;
+    if (scale) *scale = gs * g_cornerAdj[i].scale;
 }
 
 //  How big the player has asked the skill slots to be.
@@ -2315,8 +2395,20 @@ void drawEditor() {
             drawRing(g_potX[i], g_potY[i], rr - u * 0.018f, rr, kInk.r, kInk.g, kInk.b, 0.5f);
         }
     }
+    for (int i = 0; i < g_cornerCount && i < kCornerMax; ++i) {
+        if (!g_cornerBox[i].has) continue;
+        const float rr = g_cornerBox[i].r;
+        if (g_editSel == kGrpCorner && g_editSlot == i) {
+            drawRing(g_cornerBox[i].x, g_cornerBox[i].y, rr - u * 0.016f, rr,
+                     kAmber.r, kAmber.g, kAmber.b, 0.95f);
+        } else {
+            drawRing(g_cornerBox[i].x, g_cornerBox[i].y, rr - u * 0.018f, rr,
+                     kInk.r, kInk.g, kInk.b, 0.5f);
+        }
+    }
     for (int g = 0; g < kGrpCount; ++g) {
-        if (g == kGrpSkill || g == kGrpPotion) continue;   //  outlined slot by slot above
+        //  outlined one by one above
+        if (g == kGrpSkill || g == kGrpPotion || g == kGrpCorner) continue;
         Vec2 c; float r;
         if (!groupCircle(g, c, r)) continue;
         if (g == g_editSel) {
@@ -2376,7 +2468,21 @@ void drawEditor() {
         if (pair == 0) drawRing(mx, ly, r * 0.16f, r * 0.26f, kSteel.r, kSteel.g, kSteel.b, 0.9f);
         else           drawDiscBottom(mx, ly, r * 0.26f, 0.5f, kSteel.r, kSteel.g, kSteel.b, 0.9f);
         if (!haveSel) continue;
-        const float v = (pair == 0) ? g_adj[g_editSel].scale : g_adj[g_editSel].alpha;
+        //  The number has to be the one the buttons change.
+        //
+        //  It read the GROUP's size while a selected slot's own size was what
+        //  moved, so pressing + on a skill slot grew the slot and left the
+        //  readout sitting at 100.
+        float vScale = g_adj[g_editSel].scale;
+        if (g_editSlot >= 0) {
+            if (g_editSel == kGrpSkill && g_editSlot < RANTOUCH_MAX_SKILL_CIRCLES)
+                vScale = g_slotAdj[g_editSlot].scale;
+            else if (g_editSel == kGrpPotion && g_editSlot < kPotMax)
+                vScale = g_potAdj[g_editSlot].scale;
+            else if (g_editSel == kGrpCorner && g_editSlot < kCornerMax)
+                vScale = g_cornerAdj[g_editSlot].scale;
+        }
+        const float v = (pair == 0) ? vScale : g_adj[g_editSel].alpha;
         int pct = (int)(v * 100.0f + 0.5f);
         const float dh = r * 0.62f, dw = dh * 0.55f, gap = dw * 0.25f;
         char digits[4]; int nd = 0;
@@ -2940,6 +3046,7 @@ extern "C" void RanTouch_SetEditMode(int on) {
         memcpy(g_editBefore, g_adj, sizeof(g_adj));
         memcpy(g_slotBefore, g_slotAdj, sizeof(g_slotAdj));
         memcpy(g_potBefore,  g_potAdj,  sizeof(g_potAdj));
+        memcpy(g_cornerBefore, g_cornerAdj, sizeof(g_cornerAdj));
         g_stick.pointer = -1; g_stick.held = false; g_stick.magnitude = 0.0f;
         g_stick.knob = g_stick.origin = g_stick.centre;
         for (int i = 0; i < kButtonCount; ++i) { g_buttons[i].pointer = -1; g_buttons[i].down = false; g_buttons[i].pressedEdge = false; }
@@ -2955,22 +3062,25 @@ extern "C" void RanTouch_SetEditMode(int on) {
 extern "C" int RanTouch_IsEditMode(void) { return g_edit ? 1 : 0; }
 
 //  The arrangement as kGrpCount * 4 floats: dx, dy, size, opacity per group.
+//  The arrangement, as floats.
+//
+//  Groups first (dx, dy, size, opacity each), then every slot as a triple
+//  (dx, dy, size): the skill slots, the potion slots and the corner icons.
+//  Appended, never reordered - a shorter file is an older one.
 extern "C" int RanTouch_GetHudLayout(float *out, int max) {
-    const int n = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2 + kPotMax * 2;
+    const int n = kGrpCount * 4
+                + (RANTOUCH_MAX_SKILL_CIRCLES + kPotMax + kCornerMax) * 3;
     if (!out || max < n) return n;
     for (int i = 0; i < kGrpCount; ++i) {
         out[i * 4]     = g_adj[i].dx;    out[i * 4 + 1] = g_adj[i].dy;
         out[i * 4 + 2] = g_adj[i].scale; out[i * 4 + 3] = g_adj[i].alpha;
     }
-    for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
-        out[kGrpCount * 4 + i * 2]     = g_slotAdj[i].dx;
-        out[kGrpCount * 4 + i * 2 + 1] = g_slotAdj[i].dy;
-    }
-    const int base = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
-    for (int i = 0; i < kPotMax; ++i) {
-        out[base + i * 2]     = g_potAdj[i].dx;
-        out[base + i * 2 + 1] = g_potAdj[i].dy;
-    }
+    int w = kGrpCount * 4;
+    #define PUT(A, N) for (int i = 0; i < (N); ++i) {         out[w++] = (A)[i].dx; out[w++] = (A)[i].dy; out[w++] = (A)[i].scale; }
+    PUT(g_slotAdj,   RANTOUCH_MAX_SKILL_CIRCLES)
+    PUT(g_potAdj,    kPotMax)
+    PUT(g_cornerAdj, kCornerMax)
+    #undef PUT
     return n;
 }
 
@@ -2994,28 +3104,31 @@ extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
         if (!(al >= 0.2f && al <= 1.0f)) al = 1.0f;
         g_adj[i].dx = dx; g_adj[i].dy = dy; g_adj[i].scale = sc; g_adj[i].alpha = al;
     }
-    if (nGrp == kGrpCount && n >= kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2) {
-        for (int i = 0; i < RANTOUCH_MAX_SKILL_CIRCLES; ++i) {
-            float dx = in[kGrpCount * 4 + i * 2], dy = in[kGrpCount * 4 + i * 2 + 1];
-            if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
-            if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
-            g_slotAdj[i].dx = dx; g_slotAdj[i].dy = dy;
-        }
-        const int base = kGrpCount * 4 + RANTOUCH_MAX_SKILL_CIRCLES * 2;
-        if (n >= base + kPotMax * 2) {
-            for (int i = 0; i < kPotMax; ++i) {
-                float dx = in[base + i * 2], dy = in[base + i * 2 + 1];
-                if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
-                if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
-                g_potAdj[i].dx = dx; g_potAdj[i].dy = dy;
-            }
-        }
+    if (nGrp == kGrpCount) {
+        int r = kGrpCount * 4;
+        #define TAKE(A, N) for (int i = 0; i < (N); ++i) {             if (r + 2 >= n) break;             float dx = in[r++], dy = in[r++], sc = in[r++];             if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;             if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;             if (!(sc >= 0.6f && sc <= 1.6f))  sc = 1.0f;             (A)[i].dx = dx; (A)[i].dy = dy; (A)[i].scale = sc; }
+        TAKE(g_slotAdj,   RANTOUCH_MAX_SKILL_CIRCLES)
+        TAKE(g_potAdj,    kPotMax)
+        TAKE(g_cornerAdj, kCornerMax)
+        #undef TAKE
     }
     if (g_inited) layout();
 }
 
 //  Where the client should put skill slot i, as a fraction of the surface on
 //  top of the arc it computed. The slots are its controls, not the overlay's.
+//  How big the player has asked skill slot i to be, on top of its group.
+extern "C" float RanTouch_GetSkillSlotScale(int i) {
+    if (i < 0 || i >= RANTOUCH_MAX_SKILL_CIRCLES) return 1.0f;
+    return g_adj[kGrpSkill].scale * g_slotAdj[i].scale;
+}
+
+//  And potion slot i.
+extern "C" float RanTouch_GetPotionSlotScale(int i) {
+    if (i < 0 || i >= kPotMax) return 1.0f;
+    return g_potAdj[i].scale;
+}
+
 extern "C" void RanTouch_GetSkillSlotOffset(int i, float *fx, float *fy) {
     if (fx) *fx = 0.0f;
     if (fy) *fy = 0.0f;

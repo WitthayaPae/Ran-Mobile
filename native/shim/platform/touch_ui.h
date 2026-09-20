@@ -105,11 +105,15 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
 
 //  The corner icons - quest box, small party frame - and what the editor did
 //  to them. Set by the client each frame, read back by it the next.
-extern "C" void RanTouch_SetCornerBox(float cx, float cy, float r);
-extern "C" void RanTouch_GetCornerAdjust(float *dx, float *dy, float *scale);
+extern "C" void RanTouch_SetCornerBox(int i, float cx, float cy, float r);
+extern "C" void RanTouch_GetCornerAdjust(int i, float *dx, float *dy, float *scale);
 
 //  How big the player has asked the skill slots to be.
 extern "C" float RanTouch_GetSkillScale(void);
+
+//  Per-slot size, on top of the group's: every button sizes on its own.
+extern "C" float RanTouch_GetSkillSlotScale(int i);
+extern "C" float RanTouch_GetPotionSlotScale(int i);
 
 //  Where potion slot i has been dragged, in pixels, on top of the row.
 extern "C" void RanTouch_GetPotionSlotOffset(int i, float *dx, float *dy);
