@@ -12,6 +12,42 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (4) — The แข่งขัน cell strobes because the blink covers it
+
+"it still keep flicking! see the real code and do the real analysis!"
+
+**Instrumented, then measured.** A test build forced the alarm on
+(`SetCompetitionButtonAlarm(TRUE)` + `ShowGroupBottom`) so the cell could be
+watched without waiting for a live event, and logged the button every second:
+
+```
+CMPBLINK alarm=1 vis=1 img(vis=1 rc 1047,311 56x56) blink(vis=1 rc 1047,311 56x56)
+CMPBLINK alarm=1 vis=1 img(vis=1 rc 1047,311 56x56) blink(vis=0 rc 1047,311 56x56)
+```
+
+That is the whole story in two lines: **the blink child occupies the same
+56x56 rect as the icon**, and `Update` toggles it every `BLINK_TIME_LOOP`
+(0.2 s). On the PC that button is a 35x59 sliver in the corner and the blink is
+a small highlight on it; in the menu grid it is a full cell, so whatever the
+blink draws replaces the icon five times a second. Re-pointing the blink at the
+lit ring (session 3) stopped it being a *different icon* - screenshots showed
+swords, then swords under a bright ring - and did not stop it strobing.
+
+**Fix:** on mobile the blink never draws. `#ifdef RAN_MOBILE` in both
+`CCompetitionNotifyButton::Update` and `SetButtonAlarm`; the PC path is
+untouched. The event is still announced in chat, and the cell is only in the
+grid while the event is open.
+
+**Verified on the device with the alarm forced on:** `blink(vis=0)` on every
+log line, and eight consecutive frames of the cell are pixel-identical (258
+bright pixels, same bounding box each time). Test hacks reverted before the
+patch build.
+
+**Patch 520 / APK V108 (versionCode 130).** Upload set is now 8 blobs, 319 MB,
+accumulated since 512 - the host still serves 511 / V102.
+
+---
+
 ## 2026-09-20 (3) — The แข่งขัน icon was swapping itself for the alert plate
 
 Asked: "why icon แข่งขัน flick king switch with other?" — then, while I was
