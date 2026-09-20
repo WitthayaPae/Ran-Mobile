@@ -14,7 +14,31 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-20 — Every character name was "inappropriate", and the mark over the gate
 
-**Patch 513 / APK V103 (versionCode 125) / iOS 1.0.125.**
+**Patch 515 / APK V104 (versionCode 126) / iOS 1.0.126.**
+
+**Then the half that was actually asked for: every button sizes on its own.**
+"It should be separate for any button" - size is per CONTROL now, not per
+group. A slot carries its own scale beside its own offset, the editor gives
+size to whatever is selected, and the two corner icons became two things rather
+than one: each picked, outlined, moved and sized alone. The saved arrangement
+carries it - groups first, then every slot as (dx, dy, size), 110 floats.
+
+Three bugs fell out of doing it, each measured on the device:
+
+* `g_adj` had **eight initialisers for an array of eleven**. Menu, potion row
+  and corner icons started at scale 0 and opacity 0 - and a zero scale is a
+  button with no radius, so the menu button drew nothing and could not be hit,
+  and the potion bezels drew at zero alpha. Nothing applied those two fields to
+  those groups until this work did, which is why it had never shown. Defaults
+  live on the members now, so the array cannot rot when a group is added.
+* The scale was applied to the LIVE rect every frame, which compounds: 1.3 a
+  frame is 1.3^n, and a slot ballooned off the screen inside a second and
+  looked deleted. It is applied as the change since last frame.
+* The toolbar's number read the group's size while the buttons changed the
+  slot's, so it sat at 100 while the slot grew.
+
+Verified: selecting skill slot 3 and pressing + three times grew that slot
+alone, the readout showed 130, and cancel put it back.
 
 **New vehicle art, and the three controls the editor could not resize.** The
 vehicle cell was repacked from the delivered PNG (`hud-pack.js`, then
