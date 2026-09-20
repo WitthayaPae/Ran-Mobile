@@ -14,7 +14,25 @@ If anything here disagrees with another file, this file wins.
 
 ## 2026-09-20 — Every character name was "inappropriate", and the mark over the gate
 
-**Patch 511 / APK V102 (versionCode 124) / iOS 1.0.124.**
+**Patch 513 / APK V103 (versionCode 125) / iOS 1.0.125.**
+
+**New vehicle art, and the three controls the editor could not resize.** The
+vehicle cell was repacked from the delivered PNG (`hud-pack.js`, then
+`topdds.js` which now takes its source as an argument rather than hard-coding
+the menu atlas).
+
+"Make it big or small ... some of them did not work" was three separate
+reasons:
+
+| control | why it ignored the size |
+|---|---|
+| menu button | `layout()` walks a six-row table with a loop that ran to five - the menu was the sixth |
+| quest box / party frame | the client read `RanTouch_GetCornerAdjust`'s scale into a variable it never used |
+| skill slots | the scale went to the arc RADIUS, which spreads the slots; the slots kept their authored size |
+
+The menu button is verified on the device - three presses of + grew it, cancel
+put it back. The other two are compile-verified only: this test character has
+no quest box and no skills bound, so neither control is on screen to exercise.
 
 **The name filter refused everything.** `SlangFilter::addSlang` builds its tree
 key with `_snwprintf(buf, n, L"%s", slang.c_str())`. `%s` in a WIDE format
