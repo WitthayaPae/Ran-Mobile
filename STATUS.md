@@ -12,6 +12,44 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (6) — Long press picks it up, tap puts it down
+
+"when I do long press on the item on the skill it should already like pick it up
+in hand like left click". Asked where the action menu should go then: tap opens
+it, long press picks up.
+
+**The final rule** (`CInnerInterface::MobileItemTouch`):
+
+| gesture | empty hand | full hand |
+|---|---|---|
+| long press | LIFT on the DOWN edge - item is in the hand while the finger is still on it, so the same press carries it | - |
+| release after a long press | stays in hand if it never moved | DROP where it let go |
+| tap | SHEET (use, equip, split, drop) | DROP (place, swap, split) |
+
+Two details that are not obvious and both cost a build to find:
+
+- the release of the press that lifted is not a drop, or a long press that did
+  not move would put the item straight back. The helper remembers the cell it
+  lifted from;
+- that same key tells a tap from a short drag. Under the hold's 450 ms a moved
+  finger arrives as a plain left press-and-release, and opening the actions for
+  whatever cell it ended on is not what the player asked for.
+
+**Measured on the device**, instrumented (`ITEMTOUCH ret=...`), then cleaned:
+
+- long press on the bread at (0,2): it greys out in its cell - that is the
+  client's "in hand" - and the next tap on an empty cell puts it there;
+- `ret=2` (DROP) while carrying, `ret=3` (SHEET) with an empty hand, and the
+  sheet is on screen in the screenshot;
+- a drop onto an occupied cell is a SWAP, so the hand stays full - that is the
+  PC's own behaviour (`SNETPC_REQ_INVEN_EX_HOLD`) and it is why a run of taps
+  looked like nothing was clearing.
+
+Skills need no change: `CSkillSlot` already picks on the press and
+`CBasicSkillTray` assigns on the release, including into an empty arc circle.
+
+---
+
 ## 2026-09-20 (5) — Items and skills move on a tap, the way the PC's click does
 
 Asked: on the PC a click picks an item or skill up and another click puts it
