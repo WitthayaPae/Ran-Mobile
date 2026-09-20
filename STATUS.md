@@ -12,6 +12,41 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-21 — A costume IS a material: that is how EP9 wears one
+
+Asked: "why the costume item can be the material for upgrade item? also how do I
+do the costume with the item?"
+
+**Not a bug - it is the mechanism.** There is no costume slot in this client:
+`EMSLOT` has no avatar slots, and `INVENTORY_PAGEWEAR_EX` is the extra
+accessory row, not costumes. A costume is *applied onto* a real piece of gear:
+`GLCharacter::ReqDisguise` stamps the costume's id into the target's
+`SITEMCUSTOM::nidDISGUISE`, so the item keeps every stat and takes the
+costume's look. `ReqCleanser` takes it off again. On the PC that is done by
+carrying the costume and right-clicking the gear - `ReqInvenDrug`'s held-item
+branch dispatches a DISGUISE item straight to `ReqDisguise`.
+
+A finger cannot right-click while carrying something, which is why every
+"apply this onto that" action lives in the อัพเกรดไอเทม window on mobile, and
+why a costume shows up in its วัตถุดิบ (material) slot.
+
+**How to do it on the phone:** tap the gear (or the costume) → **อัพเกรด** →
+the window opens with that item already in the right slot (a costume lands in
+วัตถุดิบ, gear lands in ไอเทม) → tap the empty slot to pick the other half →
+อัพเกรด.
+
+**Fixed while reading it:** `CMobileEnhanceWindow::CanTake` offered a costume
+for any suit. ReqDisguise is stricter, so the window now asks what the server
+asks: the same kind of gear (`emSuit`), a class both admit, not onto another
+costume, and not onto something already wearing one. A row that can only fail
+is worse than no row.
+
+Verified at the code level against `ReqDisguise` - the new test is a strict
+subset of its rules, so nothing the server accepts is hidden. Not device-proven:
+the test account has no costume-and-matching-gear pair.
+
+---
+
 ## 2026-09-20 (7) — Skills pick up on a long press too, and the drop no longer clears the slot
 
 "what about skill?" - the same gesture, on the skill window and the arc.
