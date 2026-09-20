@@ -12,6 +12,32 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (7) — Skills pick up on a long press too, and the drop no longer clears the slot
+
+"what about skill?" - the same gesture, on the skill window and the arc.
+
+**Two changes, both `#ifdef RAN_MOBILE`:**
+
+- `CSkillSlot`: a skill is taken on RB_DOWN as well as LB_DOWN, so a long press
+  lifts it while the finger is still on it and the icon can be dragged onto the
+  arc. The tap already worked - that is the PC's own LB_DOWN - but a player who
+  learned "hold to pick up" in the bag holds here too.
+- `CBasicSkillTray`: RB_UP on a quick slot **assigns** whatever is carried
+  instead of clearing. A long press is the touch build's right button, so a
+  finger that lifted a skill and let go over a slot arrived as RB_UP - and that
+  threw the skill away at the exact moment it was being assigned. With nothing
+  in hand RB_UP still clears the slot, which is how a slot is emptied.
+
+**Verified on the device, three gestures, one screenshot each:**
+
+| what | result |
+|---|---|
+| long press Moon Strike, tap circle 1 | circle 1 draws Moon Strike |
+| long press Shadow Peirce, drag to circle 1, release (`input motionevent`) | circle 1 draws Shadow Peirce - no clear |
+| long press circle 1 with an empty hand | circle 1 is empty again |
+
+---
+
 ## 2026-09-20 (6) — Long press picks it up, tap puts it down
 
 "when I do long press on the item on the skill it should already like pick it up
