@@ -12,6 +12,60 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (2) — Reset gave back the outline, not the picture
+
+Asked: "I try on the qbox upscale and reset it not really reset. can you stop
+guessing?"
+
+**Measured, not eyeballed.** On LDPlayer, in the HUD editor: quest box selected,
+size+ three times, then reset. The overlay's outline came back to its exact
+baseline (ring 94 px tall both times) while the icon's own art stayed big -
+49x47 authored, 38x38 at the old baseline, and still oversized after reset. The
+drawn art and the control's rect had parted company.
+
+**Why.** The size buttons were applied as *the change since last frame*
+(`fSTEP = want / last`), because the layout pass runs every frame on live rects
+and multiplying by the scale each time is scale^n. Stepping up works; stepping
+back down does not undo it:
+
+- `CUIGroup::SetGlobalPos(UIRECT)` rewrites every child from its **local** rect,
+  so a child's size is silently restored to the authored one mid-pass;
+- `CheckProtectSize()` refuses to shrink a control past its protected size.
+
+So a step of 0.75 lands on some pieces and not others, and no sequence of steps
+gets back to where it started.
+
+**The fix is to stop accumulating.** `CUIControl::MobileScaleTree(pRoot, scale)`
+(`UIControlEx.cpp`) remembers what each piece of a control tree was authored at
+- offset from the root and size - and sizes it to `authored * scale` every
+frame. Scale 1 is the authored size exactly, whatever happened in between. It
+re-learns a control's authored rect when the size it finds is not the size it
+last handed out, which is what a rebuilt or re-laid-out control looks like;
+learning on *every* scale-1 frame was tried first and was wrong - it re-learned
+offsets that had already been scaled, and the quest box's picture walked 51 px
+out of its own outline.
+
+Both call sites now use it: the corner icons in `DxGameStage.cpp` and the skill
+slots in `SkillTrayTab.cpp`, each sized before the move (so the arc places the
+slot by how big it really is) and again after it (the group move re-anchors
+children from their unscaled local offsets).
+
+**Verified on the device, by pixel measurement, for all three kinds:**
+
+| | baseline | +3 sizes | after reset |
+|---|---|---|---|
+| quest box art | 49x47 at (2104,99) | grown, art inside its ring | **49x47 at (2104,99)** |
+| skill slot 3 | authored | grown | back to authored size and place |
+| potion slot 1 | ring 442..605 | grown | ring 442..605 |
+
+The editor toolbar's own position resets with it.
+
+**Not shipped yet.** The live host still serves **511 / APK V102** and the new
+vehicle sheet's blob still answers 404; `native/out/upload` carries 513 onward
+plus this fix and has to be uploaded before any of it reaches a phone.
+
+---
+
 ## 2026-09-20 — Every character name was "inappropriate", and the mark over the gate
 
 **Patch 517 / APK V105 (versionCode 127) / iOS 1.0.127.**
