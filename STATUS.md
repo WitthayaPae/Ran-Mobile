@@ -12,6 +12,40 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-20 (3) — The แข่งขัน icon was swapping itself for the alert plate
+
+Asked: "why icon แข่งขัน flick king switch with other?" — then, while I was
+looking: "it switch with other icon!"
+
+**Cause, read from the data.** `_inner_competitionui.xml` gives the competition
+notify button two children pointing at *different* pictures in
+`mobile_icons.dds`:
+
+- `COMPETITION_NOTIFY_BUTTON_IMAGE` -> cell (768,128), the crossed swords
+- `COMPETITION_NOTIFY_BUTTON_BLINK` -> cell (768,256), the **alert plate**
+
+`CCompetitionNotifyButton::Update` toggles the blink child every
+`BLINK_TIME_LOOP` (0.2 s) while an event is open, so five times a second the
+icon was replaced by a different icon. It only happens during a live event,
+which is why it reads as random.
+
+**Fix.** The blink now points at cell (640,256) - the lit ring, transparent in
+the middle - so the icon stays itself and lights up. Both cells were cropped
+out of `atlas.png` to confirm which art each coordinate holds before editing.
+`Gui.rcc` repacked (108 entries, verified on read-back) and pushed.
+
+**Verification is partial and this says so.** The blink could not be caught on
+screen: the icon only enters the menu grid when the server says an event is
+open, and a test build that forced the blink and forced the icon "wanted" still
+did not bring it into the grid. Cause and data change are measured; the live
+blink is not. Both test hacks were reverted before the patch build.
+
+**Shipped as patch 519 / APK V107 (versionCode 129)**, staged in
+`native/out/upload` (7 blobs, 275 MB, accumulated since 512). The live host is
+still at 511 / V102 - nothing here has reached a phone yet.
+
+---
+
 ## 2026-09-20 (2) — Reset gave back the outline, not the picture
 
 Asked: "I try on the qbox upscale and reset it not really reset. can you stop
