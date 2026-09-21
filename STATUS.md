@@ -12,6 +12,66 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-21 (5) — The skill slots use skillframe.png, and the icon is square again
+
+"NOW FOR THE SKILL FRAME CAN WE USE THE skillframe.png"
+
+`skillframe.png` has been cell 2 of the sheet since the set was packed and
+nothing ever drew it. The slots borrowed `stick_base.png` — the joystick's
+round seat — and the icon was cropped to a disc to fit it, which threw away the
+corners of every skill picture. The frame is square and so is the picture.
+
+**What changed** (all in the painted path; the vector fallback is untouched):
+
+- the bezel is `kCellSkillFrame`, at the same 1.62 of the slot half-width, and
+  an empty slot keeps it at a third strength instead of being drawn as a dim
+  vector disc;
+- `drawIconQuad()` draws the picture as a square. Its size comes from the
+  frame's window, measured off the art: the hole reaches 0.61 of the half-width
+  across and 0.53 down, so 0.53 is what an icon may fill without sliding under
+  the frame — `1.62 * 0.53` of the slot half-width;
+- the crop into the icon's own baked border stays at 0.84. At 0.90 a grey line
+  from that border showed down the right and bottom edges;
+- the recharge wipe is a rectangle over the window; `drawDiscBottom` was
+  wiping a disc that no longer exists.
+
+The potion row still draws the round seat with a disc-cropped icon — it was not
+part of the ask, and its slots are round.
+
+**Measured on LDPlayer:** `out/shots/frame2.png` (the whole arc: square frames,
+empty ones dimmed, key numbers still readable) and `out/shots/slot1b.png` (slot
+1 at 3x: square icon inside the window, no grey border, frame gold).
+
+---
+
+## 2026-09-21 (5) — The potion row uses skillframe.png
+
+"NOW FOR THE SKILL FRAME CAN WE USE THE skillframe.png" — then, once it was on
+the skill arc: "MY fault. can you revert the skill frame back? I mean the
+potion slot use the skillframe.png".
+
+`skillframe.png` has been cell 2 of the sheet since the set was packed and
+nothing ever drew it. Both rows borrowed `stick_base.png`, the joystick's round
+seat, and their pictures were cropped to a disc to fit it. Now the potion row
+draws the square frame with a square picture; the skill arc keeps the round
+seat and the disc crop, which is what it had.
+
+**What was added**
+
+- `drawIconQuad()` — the picture as a square. Its size comes from the frame's
+  window, measured off the art: the hole reaches 0.61 of the half-width across
+  and 0.53 down, so 0.53 is what may be filled without sliding under the
+  frame — `1.62 * kFrameWindow` of the slot half-width.
+- The crop into the icon's own baked border stays at 0.84, as the disc used. At
+  0.90 a grey line from that border showed down the right and bottom edges.
+
+**Measured on LDPlayer:** `out/shots/pot.png` — the potion row in square frames,
+pictures square inside the window, empty slots showing the world through the
+frame; `out/shots/arc_rev.png` — the skill arc round again, disc icons, key
+numbers unchanged.
+
+---
+
 ## 2026-09-21 (4) — The white halo round the joystick knob was a packing bug
 
 "in the joy stick I dot like the white outline in the knob and the yellow

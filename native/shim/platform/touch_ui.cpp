@@ -1791,6 +1791,60 @@ int hudCellFor(int slot, bool on) {
     return -1;
 }
 
+//  How much of the skillframe cell is its window.
+//
+//  Measured off the art: the hole reaches 0.61 of the half-width across and
+//  0.53 down, so the narrower of the two is what an icon may fill without
+//  sliding under the frame.
+const float kFrameWindow = 0.53f;
+
+//  The icon as a square, which is what it is.
+//
+//  drawIconDisc crops it to a circle, which is what the round bezel needed:
+//  a square picture in a round face leaves a ring of dead space, and there is
+//  no clipping in this pipeline to crop with. A square frame wants the whole
+//  picture instead.
+void drawIconQuad(const SkillIcon &ic) {
+    if (!ic.tex) return;
+    float sharpen = 1.0f;
+    if (ic.texW > 1.0f) {
+        const float texels = (ic.u1 - ic.u0) * ic.texW;
+        if (texels > 0.5f) sharpen = (2.0f * ic.r) / texels;
+        if (sharpen < 1.0f) sharpen = 1.0f;
+        if (sharpen > 8.0f) sharpen = 8.0f;
+    }
+    glUniform2f(uTexTexSize, ic.texW, ic.texH);
+    glUniform1f(uTexSharpen, sharpen);
+
+    //  Inside the icon's own baked border, the same crop the disc used and for
+    //  the same reason: the client's icons carry a thin frame in the texture,
+    //  and ours is the one that should show. At 0.90 a grey line from that
+    //  border still showed down the right and bottom edges of the square.
+    const float kInset = 0.84f;
+    const float uc = (ic.u0 + ic.u1) * 0.5f, vc = (ic.v0 + ic.v1) * 0.5f;
+    const float uh = (ic.u1 - ic.u0) * 0.5f * kInset, vh = (ic.v1 - ic.v0) * 0.5f * kInset;
+    const float x0 = ic.x - ic.r, x1 = ic.x + ic.r;
+    const float y0 = ic.y - ic.r, y1 = ic.y + ic.r;
+    const float v[] = {
+        x0, y0, uc - uh, vc - vh,
+        x1, y0, uc + uh, vc - vh,
+        x1, y1, uc + uh, vc + vh,
+        x0, y0, uc - uh, vc - vh,
+        x1, y1, uc + uh, vc + vh,
+        x0, y1, uc - uh, vc + vh,
+    };
+    glBindVertexArray(g_texVao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof(v), v);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ic.tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
 void drawIcons(float w, float h) {
     if (g_iconCount <= 0) return;
     ensureTexProg();
@@ -2862,7 +2916,10 @@ void RanTouch_Render(void) {
     if (hudSheet() && g_potCount > 0) {
         const float pa = g_adj[kGrpPotion].alpha;
         for (int i = 0; i < g_potCount; ++i)
-            drawHudCell(kCellStickBase, g_potX[i], g_potY[i], g_potRad[i] * 1.62f, pa);
+            //  skillframe.png, which had been packed since the set arrived and
+            //  drawn by nothing. A potion picture is square, and the frame is
+            //  the square one in the sheet.
+            drawHudCell(kCellSkillFrame, g_potX[i], g_potY[i], g_potRad[i] * 1.62f, pa);
         ensureTexProg();
         if (g_texProg) {
             glUseProgram(g_texProg);
@@ -2886,7 +2943,10 @@ void RanTouch_Render(void) {
                 ic.u0 = g_potU0[i]; ic.v0 = g_potV0[i];
                 ic.u1 = g_potU1[i]; ic.v1 = g_potV1[i];
                 ic.texW = g_potTW[i]; ic.texH = g_potTH[i];
-                drawIconDisc(ic);
+                //  Sized to the frame's window: the frame is drawn at 1.62 of
+                //  the slot half-width and its hole is 0.53 of that.
+                ic.r *= 1.62f * kFrameWindow;
+                drawIconQuad(ic);
             }
             glBindVertexArray(0);
         }
