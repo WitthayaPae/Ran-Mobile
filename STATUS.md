@@ -72,6 +72,37 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (7) — Patch 532 checked, and the iOS build caught up
+
+"can you check the patch?" — then "what about ios?".
+
+**The patch verifies.** `manifest.sig` checks out against the P-256 key
+compiled into the APK; all 23,370 entries resolve to a blob; the 22 staged
+blobs each hash to their own filename; the APK's sha256 and size in the
+manifest match `out/RanMobile.apk`; no entry path is absolute or contains
+`..`. Version 532, minApk 1, minIos 142, APK versionCode 142 "V120".
+
+**Only 101 MB of the 824 MB has to go up.** Diffed against the live manifest
+(the host was still serving 511 / V102 / minIos 124): the server lacks exactly
+three of this manifest's blobs — `data/gui/Gui.rcc` (50.3 MB),
+`textures/gui/mobile_hud.dds` (6.3 MB) and the APK (44.2 MB, fetched from
+`blobs/<sha256>` like everything else). The other 19 blobs in `out/upload` are
+intermediate builds from today's repeated publishes — 16 old APKs and two older
+HUD sheets — which were never on the server and which no client will ever ask
+for. `out/upload` accumulates them because the tool assumes anything staged may
+already be up. Sending all of it is only slow, not wrong.
+
+**iOS was a build behind, and now is not.** The staged `.ipa` was 1.0.127 from
+yesterday, because CI builds it from the pushed SOURCE and MOBILE repos and
+neither had been pushed since. Both are pushed now (SOURCE `3cc0788`, MOBILE
+`d20f6a7`); the push filter on `native/shim/**` fired the workflow by itself,
+it went green in 3m02s, and `make-ios-source.js` published the artifact as
+**1.0.142**, the same build number as the Android APK. Republishing then raised
+`minIos` to 142 on its own — it follows the build in `ios/source.json`. The APK
+was not rebuilt, so its versionCode did not move.
+
+---
+
 ## 2026-09-21 (6) — The item shop cell is out of the menu grid
 
 "now the ไอเท็มช็อป icon in the menu we do not need this it's stale."
