@@ -72,6 +72,32 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (11) — The mall's เติมเงิน button carries the account
+
+"in the topup btn in the mall page. I think we already done something like pass
+the id to the topup page... I wanted the mobile do the same."
+
+They were right, and it is in the PC client. Two places already append the
+logged-in account to the top-up address as **`ref1`**:
+
+- `CWebLinkWindow::CreateWeb` — the embedded browser,
+- `CInnerInterface`'s external-browser fallback.
+
+Both build it the same way: `RANPARAM::GETUSERID_DEC()`, separator `&` if the
+address already carries a query and `?` if it does not, id appended as it is,
+http URLs only.
+
+The mobile `ITEM_SHOP_TOPUP_BUTTON` opened the bare
+`https://ran-legacy-m.com/topup/`, so the page had no idea who was topping up.
+It now builds the URL character for character the way those two do, so one page
+serves both clients.
+
+**Verified on the device:** tapped เติมเงิน in ร้านค้าไอเทม and read the intent the
+browser was handed - `ran-legacy-m.com/topup/?ref1=<account>`. Read back
+redacted; the id itself was never printed.
+
+---
+
 ## 2026-09-21 (10) — Opening a window stalled for a third of a second: a whole font atlas per letter
 
 "when I open the menu it's lacking a bit... or even when I open the mall or
