@@ -1534,7 +1534,37 @@ int       g_iconCount = 0;
 
 GLuint g_texProg = 0;
 GLint  uTexViewport = -1, uTexAlpha = -1, uTexTexSize = -1, uTexSharpen = -1;
-GLuint g_texVbo = 0, g_texVao = 0;
+GLint  uTexSampler = -1;
+
+//  A RING of buffers, not one.
+//
+//  Every painted control - each button cell, each slot bezel, each icon - wrote
+//  its handful of vertices into one buffer and drew from it immediately: about
+//  45 write-then-draw pairs into the same object every frame. On Apple that
+//  write lands on a buffer the GPU is still reading, and the driver stalls
+//  until it is free; the stall was measured at ~450us here once before, and it
+//  is charged to the draw that follows.
+//
+//  Measured on an iPhone 15, standing in a field with nine mobs and no other
+//  players: 31 fps with the overlay drawn, 60 fps with `nohud` set - the whole
+//  frame budget twice over, 12-14 ms, in a HUD that issues five draws.
+//
+//  Round-robining through 128 buffers means a buffer is not written again for
+//  about three frames, by which time the GPU has long finished with it. The
+//  attribute pointers are part of VAO state and name the buffer they were set
+//  against, so each buffer carries its own VAO.
+const int kTexRing = 128;
+GLuint g_texVbo[kTexRing] = { 0 }, g_texVao[kTexRing] = { 0 };
+int    g_texAt = 0;
+
+//  The next free slot, bound and ready to be written.
+int texSlot() {
+    const int i = g_texAt;
+    g_texAt = (g_texAt + 1) % kTexRing;
+    glBindVertexArray(g_texVao[i]);
+    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo[i]);
+    return i;
+}
 
 const char *kTexVS =
     "#version 300 es\n"
@@ -1603,16 +1633,23 @@ void ensureTexProg() {
     uTexTexSize  = glGetUniformLocation(g_texProg, "uTexSize");
     uTexSharpen  = glGetUniformLocation(g_texProg, "uSharpen");
 
-    glGenVertexArrays(1, &g_texVao);
-    glBindVertexArray(g_texVao);
-    glGenBuffers(1, &g_texVbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
-    //  Centre plus a ring of segments, four floats each.
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((42 + 2) * 4 * sizeof(float)), NULL, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void *)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void *)(2 * sizeof(float)));
+    //  Looked up once. It was asked for by name on every painted control, and
+    //  glGetUniformLocation is a driver-side string lookup.
+    uTexSampler  = glGetUniformLocation(g_texProg, "uTex");
+
+    glGenVertexArrays(kTexRing, g_texVao);
+    glGenBuffers(kTexRing, g_texVbo);
+    for (int i = 0; i < kTexRing; ++i) {
+        glBindVertexArray(g_texVao[i]);
+        glBindBuffer(GL_ARRAY_BUFFER, g_texVbo[i]);
+        //  Centre plus a ring of segments, four floats each - the largest
+        //  write any of the three painted paths makes.
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)((42 + 2) * 4 * sizeof(float)), NULL, GL_STREAM_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void *)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void *)(2 * sizeof(float)));
+    }
     glBindVertexArray(0);
 }
 
@@ -1652,8 +1689,7 @@ void drawIconDisc(const SkillIcon &ic) {
         v[n++] = ic.x + c * ic.r; v[n++] = ic.y + si * ic.r;
         v[n++] = uc + c * uh;     v[n++] = vc + si * vh;
     }
-    glBindVertexArray(g_texVao);
-    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
+    texSlot();
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(n * sizeof(float)), v);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ic.tex);
@@ -1739,7 +1775,7 @@ void drawHudCell(int cell, float cx, float cy, float half, float alpha) {
     glDisable(GL_CULL_FACE);
     glUniform2f(uTexViewport, (float)g_width, (float)g_height);
     glUniform1f(uTexAlpha, alpha);
-    glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
+    glUniform1i(uTexSampler, 0);
     glUniform2f(uTexTexSize, g_hudTexW, g_hudTexH);
     //  One output pixel per texel is the honest ratio here: the cell is square
     //  and drawn square, unlike the skill discs which crop a rectangle.
@@ -1753,8 +1789,7 @@ void drawHudCell(int cell, float cx, float cy, float half, float alpha) {
         cx + half, cy + half, u0 + cw, v0 + ch,
         cx - half, cy + half, u0,      v0 + ch,
     };
-    glBindVertexArray(g_texVao);
-    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
+    texSlot();
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof(v), v);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_hudTex);
@@ -1848,8 +1883,7 @@ void drawIconQuad(const SkillIcon &ic, float hw, float hh) {
         x1, y1, uc + uh, vc + vh,
         x0, y1, uc - uh, vc + vh,
     };
-    glBindVertexArray(g_texVao);
-    glBindBuffer(GL_ARRAY_BUFFER, g_texVbo);
+    texSlot();
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)sizeof(v), v);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ic.tex);
@@ -1867,7 +1901,7 @@ void drawIcons(float w, float h) {
     glUseProgram(g_texProg);
     glUniform2f(uTexViewport, w, h);
     glUniform1f(uTexAlpha, g_adj[kGrpSkill].alpha);
-    glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
+    glUniform1i(uTexSampler, 0);
     for (int i = 0; i < g_iconCount; ++i) {
         SkillIcon ic = g_icons[i];
         //  Fill the seat's hole, not the icon's authored size.
@@ -2956,7 +2990,7 @@ void RanTouch_Render(void) {
             glUseProgram(g_texProg);
             glUniform2f(uTexViewport, (float)g_width, (float)g_height);
             glUniform1f(uTexAlpha, pa);
-            glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
+            glUniform1i(uTexSampler, 0);
             for (int i = 0; i < g_potCount; ++i) {
                 //  An empty slot is a bezel and nothing else - the row keeps
                 //  its full length so a potion dropped into slot 5 does not
