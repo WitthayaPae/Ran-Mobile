@@ -3,12 +3,57 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-20
+- **Last updated:** 2026-09-21
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-21 (2) — Zoom died in a crowd for the same reason rotation did
+
+"since we fix the rotate camera in the crowd and the problem now is happend
+same as zoom in zoom out."
+
+**Same bug, other half of the code.** `RanTouch_PointerDown` opens with a guard
+so that an open window keeps its press instead of the pad eating it:
+
+```
+if (RanUI_PointInControl && RanUI_PointInControl((int)x, (int)y)) return 0;
+```
+
+It returns **before `addTouch`**, so a finger that lands on a control is never
+recorded in `g_touch` at all. A name plate is a control. In town there is a
+plate under almost every pixel, so neither finger was ever recorded,
+`unclaimedCount()` never reached 2, `g_pinch` never started, no wheel event was
+ever sent, and the camera could not be zoomed — exactly the shape of the
+rotation bug, which was fixed by `RanUI_PointInDragControl` leaving
+NAME_DISPLAY_MAN out of the drag decision.
+
+**Fix:** the guard now asks the drag question (plates excluded), falling back to
+the plain one only where the client does not export it. Windows still keep their
+press; plates no longer swallow the finger before it is recorded.
+
+**Measured on LDPlayer, Sacred Gate with the fake crowd, a two-finger
+`sendevent` pinch (protocol B on /dev/input/event4 — `input` cannot do two
+fingers):**
+
+```
+RANTEST guard x=580 y=350 plain=1 drag=0
+RANTEST guard x=700 y=350 plain=1 drag=0
+```
+
+Both fingers landed on plates and on nothing else, so the old guard dropped
+both. The camera then zoomed: the same lamp glow measured 694 bright pixels
+before the pinch and 393 after (`out/shots/zoom_before.png`,
+`out/shots/zoom_after.png`) — 0.75 linear. Instrumentation removed afterwards.
+
+**Noted, not changed:** spreading the fingers zooms *out*. `CameraZoom` takes a
+zoom-OUT amount and `fZoom += m_fVELOZOOM*dz/1000`, so this is what a PC wheel
+does; it was not part of the report and is one line to flip if it feels
+backwards on a phone.
 
 ---
 

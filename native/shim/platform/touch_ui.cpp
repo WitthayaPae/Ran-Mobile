@@ -28,6 +28,14 @@ extern "C" void RanInput_PointerWheel(int dz);
 //  ask, and a pad with no windows over it behaves exactly as it did before.
 extern "C" int RanUI_PointInControl(int x, int y) __attribute__((weak));
 
+//  The same question with the world's name plates left out.
+//
+//  A plate is a control like any other, and in a crowd they cover most of the
+//  middle of the screen. Asking the plain question there answers "a control is
+//  here" almost everywhere, which is not what this guard is for - it exists so
+//  an open WINDOW keeps its press.
+extern "C" int RanUI_PointInDragControl(int x, int y) __attribute__((weak));
+
 #define LOGI(...) RanPlat_Log(RANLOG_INFO,  "RanTouch", __VA_ARGS__)
 #define LOGE(...) RanPlat_Log(RANLOG_ERROR, "RanTouch", __VA_ARGS__)
 
@@ -1249,7 +1257,17 @@ int RanTouch_PointerDown(int id, float x, float y) {
     //  so their buttons sit under the pad and every press on them was eaten:
     //  the options could be ticked but never applied, and the window could not
     //  be dragged clear because the drag was eaten too.
-    if (RanUI_PointInControl && RanUI_PointInControl((int)x, (int)y)) return 0;
+    //  Name plates do not count. Returning here also skips addTouch, so a
+    //  finger that landed on a plate was never recorded at all - and a pinch
+    //  needs two recorded fingers. In town, where there is a plate under
+    //  almost every pixel, that meant no second finger, no pinch, and no zoom:
+    //  the crowd bug that killed camera rotation, in its other half.
+    {
+        const int inControl = RanUI_PointInDragControl
+                                ? RanUI_PointInDragControl((int)x, (int)y)
+                                : (RanUI_PointInControl ? RanUI_PointInControl((int)x, (int)y) : 0);
+        if (inControl) return 0;
+    }
 
     Touch *t = addTouch(id, x, y);
 
