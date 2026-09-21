@@ -72,6 +72,48 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (9) — The iPhone lost half its frames to the on-screen controls
+
+"now I plug in the iPhone even I did not close the crowd but it's with 32 fps...
+can you check why?"
+
+**It is not the crowd and it is not the world.** Read off the phone over USB,
+standing in a field: `mi:pc-drawn 0.0/frame` — no other players drawn at all —
+nine mobs, ten name plates. 31 fps, 26-30 ms a frame, of which **engine cpu
+23-27 ms**, submit 2.7 ms, present 0.0, swap 0.2.
+
+**The overlay was the whole gap.** A/B with the `nohud` diagnostic, same spot,
+same second:
+
+| | fps | engine cpu |
+|---|---|---|
+| overlay drawn | 31.0 | 23-27 ms |
+| `nohud` set | 60.1 | 13 ms |
+
+Set and cleared twice, both transitions measured. A HUD that issues five draws
+a frame was costing 12-14 ms.
+
+**Why: 45 write-then-draw pairs into one buffer.** Every painted control - each
+button cell, each slot bezel, each icon - wrote its handful of vertices into
+`g_texVbo` and drew from it immediately. On Apple that write lands on a buffer
+the GPU is still reading and the driver stalls until it is free; the stall was
+measured at ~450us in this codebase once before ([[ios-buffer-updates-stall]]),
+and 45 of them is exactly the missing 12-14 ms. It is invisible to every shim
+instrument because the overlay has its own GL path - submit stayed at 2.7 ms
+throughout.
+
+**Fix:** a ring of 128 buffers, so one is not written again for about three
+frames. Attribute pointers are VAO state and name the buffer they were set
+against, so each buffer carries its own VAO. Also `uTex` was fetched by name
+with `glGetUniformLocation` on every painted control; it is looked up once now.
+
+Android regression-checked on LDPlayer: the overlay draws exactly as before,
+60 fps. **Not yet verified on the iPhone** - the fix is in iOS build 1.0.143,
+published in patch 534, and cannot be measured until the phone updates through
+SideStore.
+
+---
+
 ## 2026-09-21 (8) — The upload set is what the SERVER lacks, not what the run added
 
 "check the blob file it's too much. maybe update the script check from the
