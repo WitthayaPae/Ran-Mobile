@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-21
+- **Last updated:** 2026-09-22
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -69,6 +69,56 @@ seat and the disc crop, which is what it had.
 pictures square inside the window, empty slots showing the world through the
 frame; `out/shots/arc_rev.png` — the skill arc round again, disc icons, key
 numbers unchanged.
+
+---
+
+## 2026-09-22 — The load-test crowd has guilds now, and a .cps that crashed the client
+
+"in the load test character we only generate the character without the guild. I
+have concern that if normal player have guild and it will be more lagging."
+
+Right concern. A guild costs a second line of text on every name plate and an
+emblem beside it, and the fakes had neither, so a field that ran at 60 said
+nothing about a real town.
+
+**What each fake gets now:** one of six guilds at random, two in eight none.
+`dwGuild`, `dwGuildMarkVer` and `szNick` are all set - `CROWREN::INIT` reads
+them and `CNameDisplayMan` draws `szNick` as the club line once `dwGuild` is
+not `CLUB_NULL`. Six shared out rather than one each, because that is what a
+field looks like and it exercises the mark cache the way a real crowd does; a
+different emblem per plate would measure a cache miss no real crowd has.
+
+The emblems are generated locally (a colour per guild, a mirrored shape, a
+border) and installed with `DxClubMan::SetClubData` - the same call the
+server's reply would make - so six invented club ids never reach the live
+server's wire.
+
+**Measured on the emulator:** 60 fakes, `mi:pc-drawn 20.0/frame`,
+`ui:names 39.1/frame`, 56-60 fps against 59-60 on the empty field. The emulator
+is vsync-capped at 60, so the real number is the iPhone's; the plates are what
+changed, and they are now the plates a town has.
+
+**Guild names verified on device** (`out/shots/guild2_c.png`): Legion01, 03, 04
+and 06 above the character names, and a `Load028` with none.
+
+**The emblem does not draw, and that is not about the fakes.** Instrumented
+`CNameDisplay::Render`: the texture is non-null, the control is visible and its
+rect is a sane 16x11 on screen, and nothing appears. The plate even reserves
+the space - the school mark moves down a line, which only happens when
+`m_bClub` is set. So a real guild member's emblem is missing on mobile too.
+Left as a separate job rather than chased mid-task.
+
+**A crash the load test walked into, worth more than the load test.**
+`SMATERIAL_PIECE::LoadFile` reads a texture-name length off the stream and
+`_alloca`s that many bytes. When the stream has desynced - and
+`m_gznhc_earl_body.cps` reads its version as 7, which is not a version this
+ever wrote - that length is whatever those four bytes happen to be, and an
+`_alloca` of a few hundred megabytes does not fail, it walks off the stack:
+SIGSEGV inside `LoadFile` with nothing to say why. A real player wearing that
+piece would take down every client that could see them. The length is now
+checked against a believable maximum (260, a file name) and the piece dropped
+instead, and the unknown-version branch no longer falls through to
+`LoadTexture` with nothing read.
 
 ---
 
