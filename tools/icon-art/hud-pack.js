@@ -13,14 +13,20 @@ const SRC = process.argv[2] || 'C:/Users/tapnu/Downloads/RanIcon/';
 
 //  Cell order. The overlay indexes this by name, so it must not be shuffled
 //  without changing kCell* in touch_ui.cpp to match.
+//
+//  Five across since the page arrows became four F-key buttons with a lit
+//  state each: that is 22 controls, and sixteen cells no longer hold them.
+//  The sheet stays square because the overlay derives a cell's height from its
+//  width.
 const CELLS = [
-  'atk.png',      'atk_ring.png',  'skillframe.png', 'auto.png',
-  'auto_on.png',  'pk.png',        'pk_on.png',      'camlock.png',
-  'camlock_on.png','pickup.png',   'vehicle.png',    'menu.png',
-  'page_up.png',  'page_down.png', 'stick_base.png', 'stick_knob.png',
+  'atk.png',      'atk_ring.png',  'skillframe.png', 'auto.png',    'auto_on.png',
+  'pk.png',       'pk_on.png',     'camlock.png',    'camlock_on.png','pickup.png',
+  'vehicle.png',  'menu.png',      'f1.png',         'f2.png',      'f3.png',
+  'f4.png',       'f1_on.png',     'f2_on.png',      'f3_on.png',   'f4_on.png',
+  'stick_base.png','stick_knob.png',
 ];
 
-const N = 256, COLS = 4, AW = 1024, AH = 1024;
+const N = 256, COLS = 5, AW = 1280, AH = 1280;
 
 //  A round mask taken from the controls that came back with alpha.
 //

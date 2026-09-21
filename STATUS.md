@@ -12,6 +12,51 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-21 (3) — The skill page is four buttons now, not two arrows
+
+"now for the hub btn skill page up and down. we change it to btn F1 F2 F3 F4
+better." Then: "the position of the btn skill page it should be under the skill
+slot 1. linier f1 f2 f3 f4".
+
+**Why it is a simplification, not a rewrite.** The two arrows already sent
+`DIK_F1 + nPage` — `CSkillTrayTab::Update` watches F1..F4 and swaps the visible
+tray itself. The arrows had to read the tray's index, step it and wrap it. A
+button per page names the page it wants and there is no counter to keep.
+
+**What changed**
+
+- `touch_ui.h`: `RANTOUCH_SLOT_PAGE_PREV/NEXT` → `RANTOUCH_SLOT_F1..F4`
+  (-2, -3, -10, -11). F3/F4 are appended to `g_buttons` rather than inserted,
+  because the indices below them are written out in the group table, the
+  outline table and the layout; their order on screen comes from the layout.
+- `DxGameStage.cpp`: the slot names its own page, `nKey = DIK_F1 + nPage`.
+- `placePageRow()` puts the four in a row under skill slot 1 — the thing a page
+  turn replaces is that row of skills, so the control belongs against it. The
+  arc is the client's and is handed over every frame, so the row is placed from
+  `RanTouch_SetSkillCircles` as well as from `layout()`; calling `layout()`
+  there would recentre the stick under a thumb that is holding it.
+- The amber readout plate that sat between the arrows is gone. The lit button
+  is the readout: `RanTouch_SetSkillPage` lights the one that matches.
+
+**The sheet grew.** `mobile_hud.dds` was 4x4 at 256 and exactly full. Four
+buttons with a lit state each is 22 controls, so it is now 5x5 (1280x1280,
+6.25 MB) with `kHudCols = 5`; `tools/icon-art/hud-pack.js` holds the same
+order and the two must not drift. `page_up.png` / `page_down.png` are out of
+the sheet, still in `RanIcon/`.
+
+**Measured on LDPlayer, in the world:**
+
+| what | result |
+|---|---|
+| fresh login on page 1 | F1 lit, F2-F4 dark (`out/shots/row.png`) |
+| tap F2 | F2 lit, F1 dark |
+| tap F4 | F4 lit, and the arc goes empty — page 4 holds no skills (`out/shots/arc4.png`, mean diff 12.6 against page 1) |
+| tap F3 after the move under slot 1 | F3 lit at the new position (`out/shots/row3_c.png`) |
+| HUD editor: select the group | one outline round all four |
+| HUD editor: drag | the row moves as one and the outline follows |
+
+---
+
 ## 2026-09-21 (2) — Zoom died in a crowd for the same reason rotation did
 
 "since we fix the rotate camera in the crowd and the problem now is happend

@@ -152,8 +152,10 @@ struct Button {
 
 //  Codes come from the header: the client hook switches on the same values.
 const int kSlotAttack   = RANTOUCH_SLOT_ATTACK;
-const int kSlotPagePrev = RANTOUCH_SLOT_PAGE_PREV;
-const int kSlotPageNext = RANTOUCH_SLOT_PAGE_NEXT;
+const int kSlotF1       = RANTOUCH_SLOT_F1;
+const int kSlotF2       = RANTOUCH_SLOT_F2;
+const int kSlotF3       = RANTOUCH_SLOT_F3;
+const int kSlotF4       = RANTOUCH_SLOT_F4;
 const int kSlotAuto     = RANTOUCH_SLOT_AUTO;
 const int kSlotPK       = RANTOUCH_SLOT_PK;
 const int kSlotPickup   = RANTOUCH_SLOT_PICKUP;
@@ -161,9 +163,15 @@ const int kSlotCamLock  = RANTOUCH_SLOT_CAMLOCK;
 const int kSlotVehicle  = RANTOUCH_SLOT_VEHICLE;
 const int kSlotMenu     = RANTOUCH_SLOT_MENU;
 
-//  Attack, two page arrows, the auto-target and PK toggles, pick-up, camera
-//  lock, the ride button, and the menu.
-const int kButtonCount = 9;
+//  Attack, four skill-page buttons, the auto-target and PK toggles, pick-up,
+//  camera lock, the ride button, and the menu.
+//
+//  F3 and F4 are appended rather than slotted in beside F1 and F2, because the
+//  indices of the buttons below them are written out in half a dozen places -
+//  the group table, the outline table, the layout. Their ORDER on screen comes
+//  from layout(), not from their position here.
+const int kButtonCount = 11;
+const int kBtnF1 = 1, kBtnF2 = 2, kBtnF3 = 9, kBtnF4 = 10;
 
 //  The ride button is placed by the client, not by layout(): it lives beside
 //  the chat window, which the player drags. Hidden until the client says where.
@@ -755,6 +763,8 @@ void drawHalo(float cx, float cy, float r, Col c, float spread) {
 }
 
 // ------------------------------------------------------------------ layout
+void placePageRow();
+
 void layout() {
     const float shortEdge = (float)(g_width < g_height ? g_width : g_height);
     g_unit = shortEdge * 0.14f;             // the layout module
@@ -816,18 +826,10 @@ void layout() {
     //  0.34), so the plate is what reached back and overlapped the attack
     //  ring by 5 device pixels. Anchoring here lets the action buttons move
     //  without the column following them.
-    const float arrowR = g_unit * 0.17f;
+    //  The page row is placed by placePageRow(), at the end of this function
+    //  and again whenever the client moves the skill arc: it hangs off the
+    //  first skill slot, which the client owns.
     const float arrowX = (float)g_width - g_unit * 0.42f;
-
-    g_buttons[1].centre.x = arrowX;
-    g_buttons[1].centre.y = attackY - g_unit * 0.40f;
-    g_buttons[1].radius   = arrowR;
-    g_buttons[1].slot     = kSlotPagePrev;
-
-    g_buttons[2].centre.x = arrowX;
-    g_buttons[2].centre.y = attackY + g_unit * 0.40f;
-    g_buttons[2].radius   = arrowR;
-    g_buttons[2].slot     = kSlotPageNext;
 
     //  The two mode toggles go above the arrows, up the same edge. They are set
     //  once and then left alone, so being the furthest from the resting thumb
@@ -906,20 +908,55 @@ void layout() {
         Clamp::to(b.centre, b.radius, W, H);
     }
 
-    //  The page arrows move and scale as one pair about their midpoint.
-    {
-        const HudAdj &a = g_adj[kGrpPage];
-        Vec2 mid = { (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f,
-                     (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f };
-        const float half = (g_buttons[2].centre.y - g_buttons[1].centre.y) * 0.5f * a.scale;
-        mid.x += a.dx * g_unit;
-        mid.y += a.dy * g_unit;
-        Clamp::to(mid, half + g_buttons[1].radius * a.scale, W, H);
-        g_buttons[1].radius *= a.scale;
-        g_buttons[2].radius *= a.scale;
-        g_buttons[1].centre.x = g_buttons[2].centre.x = mid.x;
-        g_buttons[1].centre.y = mid.y - half;
-        g_buttons[2].centre.y = mid.y + half;
+    placePageRow();
+}
+
+//  F1..F4, in a row under the first skill slot.
+//
+//  Under slot 1 and not up the right edge, because that is where the thing
+//  they change is: the row of skills is what a page turn replaces, so the
+//  control for it belongs against that row rather than beside the attack
+//  button. The arc is the client's, handed over every frame, so this runs
+//  again whenever it moves - it cannot live in layout() alone.
+//
+//  A row and not a column: four buttons reading left to right are read as four
+//  places. Stacked, they read as an order to step through.
+void placePageRow() {
+    const float W = (float)g_width, H = (float)g_height;
+    const HudAdj &a = g_adj[kGrpPage];
+
+    const float r    = g_unit * 0.19f * a.scale;
+    const float step = r * 2.15f;
+
+    //  Where the row sits before the player moves it: centred under slot 1.
+    //  Without an arc - out of the world, or the tray not laid out yet - it
+    //  falls back to the bottom right, where it used to be.
+    float cx, cy;
+    if (g_skillCircleCount > 0) {
+        const SkillCircle &c = g_skillCircles[0];
+        cx = c.x;
+        cy = c.y + c.r * 1.32f + r * 1.15f;
+    } else {
+        cx = W - g_unit * 0.42f - step * 1.5f;
+        cy = H - g_unit * 0.40f;
+    }
+
+    cx += a.dx * g_unit;
+    cy += a.dy * g_unit;
+    //  The row moves as one, so it is clamped as one.
+    if (cx < step * 1.5f + r)     cx = step * 1.5f + r;
+    if (cx > W - step * 1.5f - r) cx = W - step * 1.5f - r;
+    if (cy < r)                   cy = r;
+    if (cy > H - r)               cy = H - r;
+
+    const int col[4]  = { kBtnF1, kBtnF2, kBtnF3, kBtnF4 };
+    const int slot[4] = { kSlotF1, kSlotF2, kSlotF3, kSlotF4 };
+    for (int k = 0; k < 4; ++k) {
+        Button &b  = g_buttons[col[k]];
+        b.slot     = slot[k];
+        b.radius   = r;
+        b.centre.x = cx + ((float)k - 1.5f) * step;
+        b.centre.y = cy;
     }
 }
 
@@ -927,7 +964,7 @@ void layout() {
 int groupOfButton(int i) {
     switch (i) {
         case 0: return kGrpAttack;
-        case 1: case 2: return kGrpPage;
+        case kBtnF1: case kBtnF2: case kBtnF3: case kBtnF4: return kGrpPage;
         case 3: return kGrpAuto;
         case 4: return kGrpPK;
         case 5: return kGrpPickup;
@@ -1021,9 +1058,10 @@ bool groupCircle(int g, Vec2 &c, float &r) {
         case kGrpCamera: c = g_buttons[6].centre; r = g_buttons[6].radius * 1.35f; return true;
         case kGrpMenu:   c = g_buttons[8].centre; r = g_buttons[8].radius * 1.35f; return true;
         case kGrpPage: {
-            c.x = (g_buttons[1].centre.x + g_buttons[2].centre.x) * 0.5f;
-            c.y = (g_buttons[1].centre.y + g_buttons[2].centre.y) * 0.5f;
-            r = (g_buttons[2].centre.y - g_buttons[1].centre.y) * 0.5f + g_buttons[1].radius * 1.3f;
+            c.x = (g_buttons[kBtnF1].centre.x + g_buttons[kBtnF4].centre.x) * 0.5f;
+            c.y = g_buttons[kBtnF1].centre.y;
+            r = (g_buttons[kBtnF4].centre.x - g_buttons[kBtnF1].centre.x) * 0.5f
+              + g_buttons[kBtnF1].radius * 1.3f;
             return true;
         }
         case kGrpPotion: {
@@ -1665,13 +1703,17 @@ float iconPressScale(const SkillIcon &ic) {
 //  the old shapes still draw, so a missing file costs the look and nothing else.
 unsigned g_hudTex = 0;
 float    g_hudTexW = 0.0f, g_hudTexH = 0.0f;
-const int kHudCols = 4;
+//  Five across, 22 controls in a 25-cell square sheet. It was four across and
+//  exactly full, which is why adding the F-key buttons moved it: the order here
+//  IS the order in tools/icon-art/hud-pack.js and the two cannot drift apart.
+const int kHudCols = 5;
 
 enum {
-    kCellAtk = 0, kCellAtkRing, kCellSkillFrame, kCellAuto,
-    kCellAutoOn,  kCellPK,      kCellPKOn,       kCellCamLock,
-    kCellCamLockOn, kCellPickup, kCellVehicle,   kCellMenu,
-    kCellPageUp,  kCellPageDown, kCellStickBase, kCellStickKnob,
+    kCellAtk = 0, kCellAtkRing, kCellSkillFrame, kCellAuto,     kCellAutoOn,
+    kCellPK,      kCellPKOn,    kCellCamLock,    kCellCamLockOn,kCellPickup,
+    kCellVehicle, kCellMenu,    kCellF1,         kCellF2,       kCellF3,
+    kCellF4,      kCellF1On,    kCellF2On,       kCellF3On,     kCellF4On,
+    kCellStickBase, kCellStickKnob,
 };
 
 bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
@@ -1683,7 +1725,7 @@ void drawHudCell(int cell, float cx, float cy, float half, float alpha) {
     if (!g_texProg) return;
 
     const float cw = 1.0f / (float)kHudCols;
-    const float ch = cw;                       //  the sheet is square, 4 x 4
+    const float ch = cw;                       //  the sheet is square, 5 x 5
     const float u0 = (float)(cell % kHudCols) * cw;
     const float v0 = (float)(cell / kHudCols) * ch;
 
@@ -1741,8 +1783,10 @@ int hudCellFor(int slot, bool on) {
         case kSlotPickup:  return kCellPickup;
         case kSlotVehicle: return kCellVehicle;
         case kSlotMenu:    return kCellMenu;
-        case kSlotPagePrev:return kCellPageUp;
-        case kSlotPageNext:return kCellPageDown;
+        case kSlotF1:      return on ? kCellF1On : kCellF1;
+        case kSlotF2:      return on ? kCellF2On : kCellF2;
+        case kSlotF3:      return on ? kCellF3On : kCellF3;
+        case kSlotF4:      return on ? kCellF4On : kCellF4;
     }
     return -1;
 }
@@ -2210,15 +2254,30 @@ void artChest(float ox, float oy, float r, float a, bool chev) {
     artPoly(ox, oy, r, si, co, slot, 4, rgba(0.165f,0.106f,0.020f,1.0f), a);
 }
 
+//  1..4 for the page buttons, 0 for anything else.
+int pageOfSlot(int slot) {
+    switch (slot) {
+        case kSlotF1: return 1;
+        case kSlotF2: return 2;
+        case kSlotF3: return 3;
+        case kSlotF4: return 4;
+    }
+    return 0;
+}
+
 //  The marks that are still marks rather than pictures: the reticle for
 //  auto-target and the eye for camera lock.
 void glyphMark(const Button &b, float a) {
     const float R = b.radius;
     const Col c = alpha(kInk, a);
-    if (b.slot == kSlotPagePrev)
-        drawTri(b.centre.x, b.centre.y, R * 0.46f, -1.0f, c.r, c.g, c.b, c.a);
-    else if (b.slot == kSlotPageNext)
-        drawTri(b.centre.x, b.centre.y, R * 0.46f, +1.0f, c.r, c.g, c.b, c.a);
+    const int nPage = pageOfSlot(b.slot);
+    if (nPage > 0) {
+        //  The sheet paints these as "F1".."F4"; without it, the figure alone.
+        //  An arrow would be wrong now - these are four places, not two steps.
+        const float dh = R * 0.90f, dw = dh * 0.62f;
+        drawDigit(b.centre.x - dw * 0.5f, b.centre.y - dh * 0.5f, dw, dh, nPage,
+                  c.r, c.g, c.b, c.a);
+    }
     else if (b.slot == kSlotAuto) {
         drawRing(b.centre.x, b.centre.y, R * 0.26f, R * 0.34f, c.r, c.g, c.b, c.a);
         const float t = R * 0.09f;
@@ -2250,59 +2309,6 @@ void glyphMark(const Button &b, float a) {
 //  Which skill page the tray is showing, 1..4. Set from the client, which owns
 //  the tab index; 0 means "not known yet" and the plate stays off.
 int g_skillPage = 0;
-
-//  The page readout, in the client's own idiom.
-//
-//  RAN builds every readout the same way: a light bevelled chamfered frame
-//  around a sunken near-black well, with the figure sitting in the well. The
-//  MENU button and the chat tabs are both that construction, so matching it is
-//  what makes this look like part of the game rather than part of the overlay.
-//
-//  It deliberately does not follow the style of the round controls around it.
-//  It is a readout, not a button, and the game already has a house style for
-//  readouts.
-void drawPageLabel(float cx, float cy, float w, float h) {
-    if (g_skillPage < 1) return;
-
-    const float cut = w * 0.055f;
-    const float x = cx - w * 0.5f, y = cy - h * 0.5f;
-
-    //  Gunmetal, like everything else on the pad.
-    //
-    //  This was the client's own cream readout, which was the right call while
-    //  the overlay was cream too - beside dark steel buttons it was the one
-    //  bright rectangle on the screen.
-    drawChamfer(x - 2.0f, y - 2.0f, w + 4.0f, h + 4.0f, cut,
-                kDark.r, kDark.g, kDark.b, 0.75f);
-    drawChamfer(x, y, w, h, cut, kSteel.r, kSteel.g, kSteel.b, 0.85f);
-    drawRamp(x + cut, y + 1.0f, w - cut * 2.0f, h - 2.0f,
-             kFace.r, kFace.g, kFace.b, kFaceE.r, kFaceE.g, kFaceE.b, 1.0f);
-
-    //  The sunken well.
-    const float wx = x + w * 0.10f, wy = y + h * 0.11f;
-    const float ww = w * 0.80f,     wh = h * 0.78f;
-    drawChamfer(wx - 1.5f, wy - 1.5f, ww + 3.0f, wh + 3.0f, cut * 0.7f,
-                kDark.r, kDark.g, kDark.b, 1.0f);
-    drawRamp(wx, wy, ww, wh, 0.055f, 0.070f, 0.082f, 0.020f, 0.027f, 0.033f, 1.0f);
-
-    //  The page, alone.
-    //
-    //  The "/ 4" went: the total never changes, so it was a constant taking up
-    //  a third of the plate to say nothing, and it left the figure itself small.
-    //  Which page you are on is the whole content, so it gets the whole well.
-    //
-    //  Centred on its ink, not on its cell. A seven-segment 1 is only its two
-    //  right-hand bars, so centring the cell leaves the figure sitting well
-    //  right of the middle of the plate.
-    const float dh = wh * 0.68f, dw = dh * 0.62f;
-    //  The 1 lives in the cell's right-hand bars, so the cell moves LEFT by half
-    //  its width less half a stroke to bring that ink onto the centre line.
-    const float bias = (g_skillPage == 1) ? -(dw * 0.5f - dw * 0.11f) : 0.0f;
-    //  Amber, because the page you are on is a state, and amber is what state
-    //  is drawn in everywhere else on the pad.
-    drawDigit(cx - dw * 0.5f + bias, wy + (wh - dh) * 0.5f, dw, dh, g_skillPage,
-              kAmber.r, kAmber.g, kAmber.b, 1.0f);
-}
 
 //  Everything the cached geometry is built from, in one number.
 //
@@ -2747,7 +2753,9 @@ void RanTouch_Render(void) {
         //  being two near-identical dark discs.
         const bool pk  = (b.slot == kSlotPK);
         const bool loot = (b.slot == kSlotPickup);
-        const Col state = pk ? kCrim : kCyan;
+        //  A lit page button is amber: it is saying where you ARE, which is
+        //  what amber means everywhere else here. Cyan would read as a mode.
+        const Col state = pk ? kCrim : (pageOfSlot(b.slot) > 0 ? kAmber : kCyan);
 
         //  Painted: nothing to build here.
         //
@@ -2919,19 +2927,6 @@ void RanTouch_Render(void) {
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
-    //  The page readout sits in the gap between the two page arrows, so nothing
-    //  else has to move to make room for it.
-    {
-        const Button &bUp = g_buttons[1], &bDn = g_buttons[2];
-        const float gap = (bDn.centre.y - bUp.centre.y) - (bUp.radius + bDn.radius);
-        emit();
-        g_drawAlpha = g_adj[kGrpPage].alpha;
-        if (gap > 8.0f)
-            drawPageLabel((bUp.centre.x + bDn.centre.x) * 0.5f,
-                          (bUp.centre.y + bDn.centre.y) * 0.5f,
-                          g_unit * 0.46f * g_adj[kGrpPage].scale, gap - 6.0f);
-    }
-
     emit();
     g_drawAlpha = 1.0f;
 
@@ -3018,6 +3013,11 @@ extern "C" void RanTouch_SetSkillCircles(int count, const float *cx,
         g_skillCircles[i].cool = cool ? cool[i] : 0.0f;
     }
     g_skillCircleCount = count;
+
+    //  The page row hangs off slot 1, which just moved. Only the row is
+    //  replaced - calling layout() here would also recentre the stick, which
+    //  is held by a thumb while this runs.
+    placePageRow();
 }
 
 extern "C" void RanTouch_GetAttackCircle(float *cx, float *cy, float *r) {
@@ -3051,6 +3051,13 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show) {
 
 extern "C" void RanTouch_SetSkillPage(int page) {
     g_skillPage = (page >= 1 && page <= 9) ? page : 0;
+    //  The page is a state, and a state on this pad is a lit button. It used to
+    //  be a separate readout plate between the two arrows; with a button per
+    //  page there is nothing left for a plate to say.
+    for (int i = 0; i < kButtonCount; ++i) {
+        const int n = pageOfSlot(g_buttons[i].slot);
+        if (n > 0) g_buttons[i].toggled = (n == g_skillPage);
+    }
 }
 
 extern "C" int RanTouch_IsPinching(void) {

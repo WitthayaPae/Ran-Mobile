@@ -49,14 +49,19 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot);
 //  the special buttons take negative codes and the caller can switch on one
 //  field.
 #define RANTOUCH_SLOT_ATTACK      (-1)
-#define RANTOUCH_SLOT_PAGE_PREV   (-2)
-#define RANTOUCH_SLOT_PAGE_NEXT   (-3)
+//  The skill pages, one button each. They were two arrows that stepped a
+//  counter; F1..F4 is what the tray itself listens for, so a button per page
+//  says where you are as well as where you are going.
+#define RANTOUCH_SLOT_F1          (-2)
+#define RANTOUCH_SLOT_F2          (-3)
 #define RANTOUCH_SLOT_AUTO        (-4)
 #define RANTOUCH_SLOT_PK          (-5)
 #define RANTOUCH_SLOT_PICKUP      (-6)
 #define RANTOUCH_SLOT_CAMLOCK     (-7)
 #define RANTOUCH_SLOT_VEHICLE     (-8)
 #define RANTOUCH_SLOT_MENU        (-9)
+#define RANTOUCH_SLOT_F3          (-10)
+#define RANTOUCH_SLOT_F4          (-11)
 
 //  Where the client put its quick-skill slots, as fractions of the surface, so
 //  the overlay can draw a round rim over each one.
