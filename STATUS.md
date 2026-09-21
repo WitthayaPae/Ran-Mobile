@@ -72,6 +72,44 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (5) — skillframe.png on the potion row, and no gap on either row
+
+"NOW FOR THE SKILL FRAME CAN WE USE THE skillframe.png" — then "MY fault. can
+you revert the skill frame back? I mean the potion slot use the skillframe.png"
+— then "now fix both for the skill and potion slot they both have gap between
+the frame and the icon".
+
+`skillframe.png` had been cell 2 of the sheet since the set was packed and
+nothing ever drew it; both rows borrowed `stick_base.png`, the joystick's round
+seat. Now the potion row draws the square frame with a square picture
+(`drawIconQuad`), and the skill arc keeps the round seat and the disc crop.
+
+**The gap was one number doing four jobs.** Neither frame is centred on its own
+canvas and neither hole is square. Walking out from the centre of each cell
+until the alpha comes up:
+
+```
+skillframe.png   L 0.619  R 0.614  T 0.589  B 0.534
+stick_base.png   L 0.641  R 0.638  T 0.641  B 0.576
+```
+
+So each window has a half-size (the mean of the opposite pair) and an upward
+offset (half their difference). Sizing a picture to the smallest of the four
+left it short of the frame on the other three sides. `kFrameWin*` and
+`kSeatWin/Up` now carry both numbers, `drawIconQuad` takes a half-width and a
+half-height rather than one radius, and the skill icon is sized from the SLOT
+(found by position, the way `iconPressScale` finds it) instead of from the
+size the client authored it at — which was about four fifths of the slot and
+left a dark ring of bezel showing all round it. The recharge wipe follows the
+picture for the same reason.
+
+**Measured on LDPlayer, 3x crops:** `out/shots/s2.png` — the skill picture
+meets the seat's inner bevel; `out/shots/p2.png` — the potion picture reaches
+the frame on all four sides. Before: `out/shots/s1.png`, `out/shots/p1.png`,
+which show the ring of dead space this closed.
+
+---
+
 ## 2026-09-21 (4) — The white halo round the joystick knob was a packing bug
 
 "in the joy stick I dot like the white outline in the knob and the yellow

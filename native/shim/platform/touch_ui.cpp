@@ -1791,12 +1791,27 @@ int hudCellFor(int slot, bool on) {
     return -1;
 }
 
-//  How much of the skillframe cell is its window.
+//  Where each bezel's window is, as a fraction of the cell's half-width.
 //
-//  Measured off the art: the hole reaches 0.61 of the half-width across and
-//  0.53 down, so the narrower of the two is what an icon may fill without
-//  sliding under the frame.
-const float kFrameWindow = 0.53f;
+//  Measured off the art by walking out from the centre of the cell until the
+//  alpha comes up - all four ways, because neither frame is centred on its own
+//  canvas and neither hole is square:
+//
+//      skillframe.png   L 0.619  R 0.614  T 0.589  B 0.534
+//      stick_base.png   L 0.641  R 0.638  T 0.641  B 0.576
+//
+//  So each has a half-size (the mean of the opposite pair) and an upward
+//  offset (half their difference). Sizing a picture to the SMALLEST of the
+//  four - which is what one number did - left it short of the frame on the
+//  other three sides: the gap between the frame and the icon on both rows.
+const float kFrameWinX  = 0.616f;   //  skillframe.png
+const float kFrameWinY  = 0.561f;
+const float kFrameWinUp = 0.027f;
+const float kSeatWin    = 0.620f;   //  stick_base.png, a circle
+const float kSeatUp     = 0.032f;
+
+//  Both bezels are drawn at this much of the slot's half-width.
+const float kBezelSize  = 1.62f;
 
 //  The icon as a square, which is what it is.
 //
@@ -1804,12 +1819,12 @@ const float kFrameWindow = 0.53f;
 //  a square picture in a round face leaves a ring of dead space, and there is
 //  no clipping in this pipeline to crop with. A square frame wants the whole
 //  picture instead.
-void drawIconQuad(const SkillIcon &ic) {
+void drawIconQuad(const SkillIcon &ic, float hw, float hh) {
     if (!ic.tex) return;
     float sharpen = 1.0f;
     if (ic.texW > 1.0f) {
         const float texels = (ic.u1 - ic.u0) * ic.texW;
-        if (texels > 0.5f) sharpen = (2.0f * ic.r) / texels;
+        if (texels > 0.5f) sharpen = (2.0f * hw) / texels;
         if (sharpen < 1.0f) sharpen = 1.0f;
         if (sharpen > 8.0f) sharpen = 8.0f;
     }
@@ -1823,8 +1838,8 @@ void drawIconQuad(const SkillIcon &ic) {
     const float kInset = 0.84f;
     const float uc = (ic.u0 + ic.u1) * 0.5f, vc = (ic.v0 + ic.v1) * 0.5f;
     const float uh = (ic.u1 - ic.u0) * 0.5f * kInset, vh = (ic.v1 - ic.v0) * 0.5f * kInset;
-    const float x0 = ic.x - ic.r, x1 = ic.x + ic.r;
-    const float y0 = ic.y - ic.r, y1 = ic.y + ic.r;
+    const float x0 = ic.x - hw, x1 = ic.x + hw;
+    const float y0 = ic.y - hh, y1 = ic.y + hh;
     const float v[] = {
         x0, y0, uc - uh, vc - vh,
         x1, y0, uc + uh, vc - vh,
@@ -1855,6 +1870,22 @@ void drawIcons(float w, float h) {
     glUniform1i(glGetUniformLocation(g_texProg, "uTex"), 0);
     for (int i = 0; i < g_iconCount; ++i) {
         SkillIcon ic = g_icons[i];
+        //  Fill the seat's hole, not the icon's authored size.
+        //
+        //  The client hands the picture over at about four fifths of the slot,
+        //  which left a dark ring of bezel showing all round it. The slot the
+        //  icon belongs to is found the same way iconPressScale finds it - by
+        //  position, since the circles and the icons arrive in two calls and
+        //  nothing promises the indices line up.
+        if (hudSheet()) {
+            for (int k = 0; k < g_skillCircleCount; ++k) {
+                const SkillCircle &c = g_skillCircles[k];
+                if (len(ic.x - c.x, ic.y - c.y) > ic.r * 0.5f) continue;
+                ic.r  = c.r * kBezelSize * kSeatWin;
+                ic.y -= c.r * kBezelSize * kSeatUp;
+                break;
+            }
+        }
         ic.r *= iconPressScale(ic);
         drawIconDisc(ic);
     }
@@ -2943,10 +2974,11 @@ void RanTouch_Render(void) {
                 ic.u0 = g_potU0[i]; ic.v0 = g_potV0[i];
                 ic.u1 = g_potU1[i]; ic.v1 = g_potV1[i];
                 ic.texW = g_potTW[i]; ic.texH = g_potTH[i];
-                //  Sized to the frame's window: the frame is drawn at 1.62 of
-                //  the slot half-width and its hole is 0.53 of that.
-                ic.r *= 1.62f * kFrameWindow;
-                drawIconQuad(ic);
+                //  The frame's window, which is wider than it is tall and sits
+                //  a little above the middle of the cell.
+                const float F = g_potRad[i] * kBezelSize;
+                ic.y -= F * kFrameWinUp;
+                drawIconQuad(ic, F * kFrameWinX, F * kFrameWinY);
             }
             glBindVertexArray(0);
         }
@@ -2969,7 +3001,11 @@ void RanTouch_Render(void) {
         const SkillCircle &c = g_skillCircles[i];
         if (!c.filled || c.cool <= 0.0f) continue;
         //  ARGB(150,0,0,0), the colour the client tints its own recharge bar.
-        drawDiscBottom(c.x, c.y, c.r * 1.30f * kRimIn, c.cool,
+        //  Over the picture, which now fills the seat's hole - a wipe sized to
+        //  anything else spills onto the bezel or stops short of the icon.
+        const float ir = hudSheet() ? c.r * kBezelSize * kSeatWin : c.r * 1.30f * kRimIn;
+        const float iy = hudSheet() ? c.y - c.r * kBezelSize * kSeatUp : c.y;
+        drawDiscBottom(c.x, iy, ir, c.cool,
                        0.0f, 0.0f, 0.0f, 150.0f / 255.0f);
     }
     //  Back to the flat-colour program for anything after this.
