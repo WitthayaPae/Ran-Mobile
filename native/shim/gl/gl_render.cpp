@@ -4365,9 +4365,71 @@ extern "C" void RanGLR_SampleAsWhiteAlpha(unsigned tex) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_RED);
 }
 
+//  What texture upload cost, since it was last asked.
+//
+//  A window opening for the first time draws art nothing has drawn yet, and
+//  every one of those pictures is read, decoded and handed to the driver in
+//  that one frame. The once-a-second averages cannot see it and the section
+//  timers do not name it, so it is counted here and reported by the slow-frame
+//  line that does.
+static double        g_upSeconds = 0.0;
+static unsigned long g_upCount   = 0;
+
+extern "C" void RanGLR_TakeUploadStats(double *pSeconds, unsigned long *pCount) {
+    if (pSeconds) *pSeconds = g_upSeconds;
+    if (pCount)   *pCount   = g_upCount;
+    g_upSeconds = 0.0; g_upCount = 0;
+}
+
+struct UploadTimer {
+    struct timespec t0;
+    int w, h, fmt, level;
+    UploadTimer(int W, int H, int F, int L) : w(W), h(H), fmt(F), level(L) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    }
+    ~UploadTimer() {
+        struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+        const double d = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
+        g_upSeconds += d;
+        ++g_upCount;
+        //  Name the expensive ones. A single upload has no business taking
+        //  longer than a frame, and when one does the only useful question is
+        //  which format and how big.
+        if (d > 0.005)
+            LOGI("SLOW upload %.1f ms: %dx%d level %d format %d", d * 1000.0, w, h, level, fmt);
+    }
+};
+
+//  Let the sampler do the byte swap, instead of the CPU.
+//
+//  D3D's A8R8G8B8 is B,G,R,A in memory and GLES has no BGRA upload format, so
+//  every one of these textures was walked pixel by pixel into a fresh heap
+//  buffer and uploaded from that. A 2048x2048 sheet is 4.2 million iterations
+//  and a 16 MB allocation, and the interface is made of those sheets: opening
+//  the menu for the first time uploaded eleven of them in a single frame and
+//  cost 290 ms of a 328 ms frame, measured on the emulator.
+//
+//  GLES 3.0 can swap the channels at sample time instead, which is free -
+//  texture swizzle is texture-object state, set once here. The bytes go up
+//  exactly as they came off the disk.
+//
+//  Every uncompressed path sets the swizzle explicitly, including the ones that
+//  need no swap: a texture object is reused across uploads, and a stale swizzle
+//  from a previous format would tint everything drawn with it.
+//
+//  Note for anyone reading pixels back: a readback of one of these now returns
+//  the bytes in D3D order, not in sample order.
+static void texSwizzle(bool bSwapRB, bool bForceOpaque) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, bSwapRB ? GL_BLUE : GL_RED);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, bSwapRB ? GL_RED : GL_BLUE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, bForceOpaque ? GL_ONE : GL_ALPHA);
+}
+
 extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int width, int height,
                                               int d3dFormat, const void *bits, unsigned dataSize) {
     if (!g_inited || !bits || width <= 0 || height <= 0) return existing;
+    UploadTimer upTime(width, height, d3dFormat, level);
     GLuint tex = existing;
     if (!tex) {
         glGenTextures(1, &tex);
@@ -4425,35 +4487,18 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
     switch (d3dFormat) {
         case D3DFMT_A8R8G8B8:
         case D3DFMT_X8R8G8B8: {
-            GLubyte *rgba = new GLubyte[n * 4];
-            const GLubyte *src = (const GLubyte *)bits;
-            const bool opaque = (d3dFormat == D3DFMT_X8R8G8B8);
-            for (int i = 0; i < n; ++i) {
-                rgba[i * 4 + 0] = src[i * 4 + 2];   // B -> R
-                rgba[i * 4 + 1] = src[i * 4 + 1];   // G
-                rgba[i * 4 + 2] = src[i * 4 + 0];   // R -> B
-                rgba[i * 4 + 3] = opaque ? 255 : src[i * 4 + 3];
-            }
             glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
-                         GL_UNSIGNED_BYTE, rgba);
-            delete[] rgba;
+                         GL_UNSIGNED_BYTE, bits);
+            texSwizzle(true, d3dFormat == D3DFMT_X8R8G8B8);
             break;
         }
         //  Already in RGBA byte order, so it goes straight up. X8B8G8R8 carries
         //  no alpha and is forced opaque.
         case D3DFMT_A8B8G8R8:
         case D3DFMT_X8B8G8R8: {
-            if (d3dFormat == D3DFMT_A8B8G8R8) {
-                glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, bits);
-            } else {
-                GLubyte *rgba = new GLubyte[n * 4];
-                memcpy(rgba, bits, (size_t)n * 4);
-                for (int i = 0; i < n; ++i) rgba[i * 4 + 3] = 255;
-                glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, rgba);
-                delete[] rgba;
-            }
+            glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, bits);
+            texSwizzle(false, d3dFormat == D3DFMT_X8B8G8R8);
             break;
         }
         //  24-bit uncompressed, stored B,G,R per pixel like the 32-bit form
@@ -4462,17 +4507,14 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
         //  texture object existed, had no image, and GLES samples an incomplete
         //  texture as opaque black. That is every black item icon.
         case D3DFMT_R8G8B8: {
-            GLubyte *rgba = new GLubyte[n * 4];
-            const GLubyte *src = (const GLubyte *)bits;
-            for (int i = 0; i < n; ++i) {
-                rgba[i * 4 + 0] = src[i * 3 + 2];   // B -> R
-                rgba[i * 4 + 1] = src[i * 3 + 1];   // G
-                rgba[i * 4 + 2] = src[i * 3 + 0];   // R -> B
-                rgba[i * 4 + 3] = 255;
-            }
-            glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, width, height, 0, GL_RGBA,
-                         GL_UNSIGNED_BYTE, rgba);
-            delete[] rgba;
+            //  Three bytes a pixel, B,G,R - straight up as GL_RGB with the
+            //  same sampler swap. A row of an odd width is not a multiple of
+            //  four, so the unpack alignment has to say so.
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, level, GL_RGB, width, height, 0, GL_RGB,
+                         GL_UNSIGNED_BYTE, bits);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            texSwizzle(true, true);
             break;
         }
         case D3DFMT_R5G6B5:
@@ -4529,6 +4571,90 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
 //  full upload does. No mip regeneration: this runs many times a frame for the
 //  font atlas, and rebuilding a chain each time is what made a glyph cost more
 //  than the frame it appeared in.
+//  Storage for a texture the client has barely written, cleared on the GPU.
+//
+//  A glyph atlas is 2048x2048 of A8 that starts empty; the client memsets it to
+//  zero and writes one small rectangle per glyph. The first time it is sampled
+//  the whole 4 MB went up, even though almost all of it was zeros - and every
+//  font has its own atlas, so opening the menu for the first time uploaded
+//  eleven of them in one frame: 285 ms of a 311 ms frame, measured.
+//
+//  Allocating the level with no data and clearing it through a framebuffer
+//  costs a GPU clear instead of a 4 MB transfer, and the rectangle that was
+//  actually written follows as a sub-upload. R8 and RGBA8 are both required to
+//  be colour-renderable in GLES 3.0, so the attachment is legal for the formats
+//  this is used for; if a driver disagrees, the caller is told and falls back
+//  to the full upload.
+extern "C" int RanGLR_AllocClearTextureLevel(unsigned *pTex, int width, int height, int d3dFormat) {
+    if (!g_inited || !pTex || width <= 0 || height <= 0) return 0;
+
+    GLenum internal = 0, fmt = 0;
+    switch (d3dFormat) {
+        case D3DFMT_A8:        internal = GL_R8;   fmt = GL_RED;  break;
+        case D3DFMT_A8R8G8B8:
+        case D3DFMT_X8R8G8B8:
+        case D3DFMT_A8B8G8R8:
+        case D3DFMT_X8B8G8R8:  internal = GL_RGBA8; fmt = GL_RGBA; break;
+        default: return 0;
+    }
+
+    GLuint tex = *pTex;
+    if (!tex) {
+        glGenTextures(1, &tex);
+        bindTex2D(tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    } else {
+        bindTex2D(tex);
+    }
+    while (glGetError() != GL_NO_ERROR) {}
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal, width, height, 0, fmt, GL_UNSIGNED_BYTE, NULL);
+    if (glGetError() != GL_NO_ERROR) {
+        if (!*pTex) glDeleteTextures(1, &tex);
+        return 0;
+    }
+    g_texDims[tex] = std::make_pair(width, height);
+    noteTexGpu(tex, 0, (size_t)width * (size_t)height * (fmt == GL_RED ? 1 : 4));
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    GLint wasFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &wasFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    int ok = 0;
+    if (st == GL_FRAMEBUFFER_COMPLETE) {
+        //  The scissor and the colour mask belong to whatever was drawing, and
+        //  a clear obeys both.
+        GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+        if (scissor) glDisable(GL_SCISSOR_TEST);
+        GLboolean mask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
+        glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(mask[0], mask[1], mask[2], mask[3]);
+        if (scissor) glEnable(GL_SCISSOR_TEST);
+        ok = 1;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)wasFbo);
+    glDeleteFramebuffers(1, &fbo);
+    RanGLR_InvalidateStateCache();
+
+    if (!ok) {
+        if (!*pTex) glDeleteTextures(1, &tex);
+        return 0;
+    }
+    *pTex = tex;
+    //  Same convention the full upload uses, so a later sub-rect matches.
+    texSwizzle(d3dFormat == D3DFMT_A8R8G8B8 || d3dFormat == D3DFMT_X8R8G8B8,
+               d3dFormat == D3DFMT_X8R8G8B8 || d3dFormat == D3DFMT_X8B8G8R8);
+    return 1;
+}
+
 extern "C" void RanGLR_UpdateTextureRect(unsigned tex, int x, int y, int w, int h,
                                          int d3dFormat, const void *bits, unsigned pitchBytes) {
     if (!g_inited || !tex || !bits || w <= 0 || h <= 0) return;
@@ -4536,22 +4662,19 @@ extern "C" void RanGLR_UpdateTextureRect(unsigned tex, int x, int y, int w, int 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     const int n = w * h;
     switch (d3dFormat) {
+        //  Raw, because the full upload above is raw too: the texture carries
+        //  a swizzle that does the swap, and converting here as well would
+        //  invert the rectangle against the rest of the sheet.
         case D3DFMT_A8R8G8B8:
         case D3DFMT_X8R8G8B8: {
-            const bool opaque = (d3dFormat == D3DFMT_X8R8G8B8);
-            GLubyte *rgba = new GLubyte[(size_t)n * 4];
-            for (int row = 0; row < h; ++row) {
-                const GLubyte *src = (const GLubyte *)bits + (size_t)row * pitchBytes;
-                GLubyte *dst = rgba + (size_t)row * w * 4;
-                for (int i = 0; i < w; ++i) {
-                    dst[i * 4 + 0] = src[i * 4 + 2];
-                    dst[i * 4 + 1] = src[i * 4 + 1];
-                    dst[i * 4 + 2] = src[i * 4 + 0];
-                    dst[i * 4 + 3] = opaque ? 255 : src[i * 4 + 3];
-                }
+            const GLubyte *rows = (const GLubyte *)bits;
+            if ((int)pitchBytes == w * 4) {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rows);
+            } else {
+                for (int row = 0; row < h; ++row)
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + row, w, 1, GL_RGBA,
+                                    GL_UNSIGNED_BYTE, rows + (size_t)row * pitchBytes);
             }
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-            delete[] rgba;
             break;
         }
         case D3DFMT_R5G6B5: {

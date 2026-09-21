@@ -398,12 +398,63 @@ extern "C" void RanProf_Section(const char *szName, double fSeconds) {
 //  of the port is slow: the client's own update, the draw submission, or the
 //  swap - and on a tiled GPU the swap is where the frame is actually drawn, so
 //  a big Present with a small Render means the GPU is the limit, not the shim.
+extern "C" void RanGLR_TakeUploadStats(double *pSeconds, unsigned long *pCount);
 extern "C" void RanD3D_LiveMemLine(char *out, int cap);
 extern "C" void RanD3D_HeldMemLine(char *out, int cap);
+
+//  One line for a frame that took too long.
+//
+//  The report below is a one-second average, which is exactly the wrong shape
+//  for a hitch: a single 200 ms frame inside a second of 16 ms frames moves the
+//  average by a tenth and says nothing about what it was doing. Opening a
+//  window is one frame's work, so it can only be caught one frame at a time.
+//
+//  The sections are accumulated across the whole second, so what this wants is
+//  the DIFFERENCE since the last frame - that is this frame's own share.
+static void reportSlowFrame(double fUpdate, double fRender, double fPresent) {
+    static double s_prev[48] = { 0.0 };
+    static bool   s_primed = false;
+
+    //  Taken every frame, slow or not: it resets as it reads, so asking only
+    //  on a slow frame would report everything uploaded since the last one.
+    double upSec = 0.0; unsigned long upCount = 0;
+    RanGLR_TakeUploadStats(&upSec, &upCount);
+
+    double worstSec[4] = { 0, 0, 0, 0 };
+    const char *worstName[4] = { NULL, NULL, NULL, NULL };
+    const double total = fUpdate + fRender + fPresent;
+    //  Two frames at 60, which is a visible stutter and nothing less is.
+    const bool slow = s_primed && total > 0.033;
+
+    for (unsigned i = 0; i < g_sectionCount && i < 48; ++i) {
+        const double d = g_sections[i].seconds - s_prev[i];
+        s_prev[i] = g_sections[i].seconds;
+        if (!slow || d <= 0.0005) continue;
+        for (int k = 0; k < 4; ++k) {
+            if (d <= worstSec[k]) continue;
+            for (int j = 3; j > k; --j) { worstSec[j] = worstSec[j-1]; worstName[j] = worstName[j-1]; }
+            worstSec[k] = d; worstName[k] = g_sections[i].name;
+            break;
+        }
+    }
+    s_primed = true;
+    if (!slow) return;
+
+    char parts[256]; int n = 0;
+    for (int k = 0; k < 4 && worstName[k]; ++k)
+        n += snprintf(parts + n, (int)sizeof(parts) - n, "%s%s %.1fms",
+                      n ? " " : "", worstName[k], worstSec[k] * 1000.0);
+    LOGI("SLOW frame %.1f ms = update %.1f + render %.1f + present %.1f | "
+         "texture upload %.1f ms (%lu) | %s",
+         total * 1000.0, fUpdate * 1000.0, fRender * 1000.0, fPresent * 1000.0,
+         upSec * 1000.0, upCount, n ? parts : "no section named it");
+}
 
 extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
     static double s_update = 0.0, s_render = 0.0, s_present = 0.0, s_last = 0.0;
     static unsigned s_frames = 0;
+
+    reportSlowFrame(fUpdate, fRender, fPresent);
 
     s_update += fUpdate; s_render += fRender; s_present += fPresent;
     ++s_frames;

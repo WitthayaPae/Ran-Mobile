@@ -474,11 +474,15 @@ void RanD3DXFont::ensureAtlas() {
         m_atlas = NULL;
     if (!m_atlas) return;
     RanD3D_MarkGlyphAtlas(m_atlas);
-    D3DLOCKED_RECT lr;
-    if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
-        memset(lr.pBits, 0, (size_t)m_atlasW * m_atlasH);
-        m_atlas->UnlockRect(0);
-    }
+    //  Not zeroed here, deliberately.
+    //
+    //  The surface is already zero - its bytes are a vector that was resized,
+    //  not malloc'd - so the memset only ever wrote zeros over zeros. What it
+    //  did do was lock the whole surface, which marks the whole surface dirty,
+    //  and that is what the first sample uploaded: 4 MB of nothing per font,
+    //  eleven fonts in the frame that opens the menu. Left alone, the first
+    //  dirty rectangle is the first glyph, and the shim gives GL the storage
+    //  with a GPU clear and sends only that rectangle.
 }
 
 //  Resolve a codepoint to a face and glyph id, preferring the primary face and
@@ -632,11 +636,23 @@ const Glyph *RanD3DXFont::glyphFor(TtfFace *face, int gid) {
             return NULL;
         }
 
+        //  Lock the glyph's own rectangle, not the atlas.
+        //
+        //  A lock with no rectangle says the whole surface was rewritten, and
+        //  the shim believes it: the next sample re-uploaded all 4 MB of a
+        //  2048x2048 atlas for the sake of one letter. Every font owns an
+        //  atlas, so the frame that opens the menu for the first time did that
+        //  eleven times - 285 ms of a 311 ms frame, measured on the emulator.
+        //  With a rectangle, pBits lands on its top-left corner and Pitch is
+        //  still the surface's, so only those rows move.
         D3DLOCKED_RECT lr;
-        if (SUCCEEDED(m_atlas->LockRect(0, &lr, NULL, 0)) && lr.pBits) {
+        RECT rcGlyph;
+        rcGlyph.left = m_penX; rcGlyph.top = m_penY;
+        rcGlyph.right = m_penX + gb.width; rcGlyph.bottom = m_penY + gb.height;
+        if (SUCCEEDED(m_atlas->LockRect(0, &lr, &rcGlyph, 0)) && lr.pBits) {
             BYTE *base = (BYTE *)lr.pBits;
             for (int y = 0; y < gb.height; ++y) {
-                BYTE *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
+                BYTE *row = base + (size_t)y * (size_t)lr.Pitch;
                 const unsigned char *src = &gb.coverage[(size_t)y * gb.width];
                 //  Coverage only; sampled as white with this alpha.
                 memcpy(row, src, (size_t)gb.width);
@@ -703,11 +719,16 @@ const Glyph *RanD3DXFont::outlineFor(const Glyph *g, int r) {
     }
     if (m_penY + H + 1 > m_atlasH) return NULL;   // full: the caller falls back
 
+    //  The outline's own rectangle, for the reason the plain glyph above
+    //  locks one: a whole-surface lock re-uploads the whole atlas.
     D3DLOCKED_RECT lr;
-    if (FAILED(m_atlas->LockRect(0, &lr, NULL, 0)) || !lr.pBits) return NULL;
+    RECT rcOut;
+    rcOut.left = m_penX; rcOut.top = m_penY;
+    rcOut.right = m_penX + W; rcOut.bottom = m_penY + H;
+    if (FAILED(m_atlas->LockRect(0, &lr, &rcOut, 0)) || !lr.pBits) return NULL;
     BYTE *base = (BYTE *)lr.pBits;
     for (int y = 0; y < H; ++y) {
-        BYTE *row = base + (size_t)(m_penY + y) * m_atlasW + m_penX;
+        BYTE *row = base + (size_t)y * (size_t)lr.Pitch;
         for (int x = 0; x < W; ++x) {
             float keep = 1.0f;                     // prod(1 - a_i)
             for (int oy = -r; oy <= r; ++oy) {

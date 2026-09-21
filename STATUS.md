@@ -72,6 +72,64 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (10) — Opening a window stalled for a third of a second: a whole font atlas per letter
+
+"when I open the menu it's lacking a bit... or even when I open the mall or
+inventory."
+
+**Measured, not guessed.** The once-a-second FRAME average is the wrong shape
+for a hitch, so `ran_app.cpp` now prints a line for any frame over 33 ms: the
+split, the four sections that grew most in that frame, and what texture upload
+cost. `gl_render.cpp` counts upload time per frame and names any single upload
+over 5 ms.
+
+First open of the menu, on the emulator:
+
+```
+SLOW frame 311.5 ms = update 1.0 + render 310.5 + present 0.0
+                    | texture upload 285.6 ms (11) | world 1.6ms ...
+SLOW upload 25.6 ms: 2048x2048 level 0 format 28     (x11)
+```
+
+Eleven 2048x2048 A8 textures in one frame. Format 28 is `D3DFMT_A8` and those
+are the **font atlases** - one per font, 4 MB each.
+
+**Why the whole atlas moved.** `RanD3DXFont` wrote each glyph through
+`LockRect(0, &lr, NULL, 0)`. A lock with no rectangle says the whole surface
+was rewritten and the shim believes it, so the next sample re-uploaded all
+4 MB for the sake of one letter. The frame that opens the menu touches eleven
+fonts for the first time, so it did that eleven times. `ensureAtlas` made it
+worse by locking the whole surface to memset it to zero - over a vector that
+was already zero.
+
+**Three changes:**
+
+- both glyph writers lock the glyph's own rectangle. `pBits` lands on its
+  top-left corner and `Pitch` is still the surface's, so only those rows move.
+- `ensureAtlas` no longer locks and memsets what was already zero.
+- `RanGLR_AllocClearTextureLevel`: a texture never uploaded whose dirty
+  rectangle is a sub-rect gets its storage allocated with no data and cleared
+  through a framebuffer - a GPU clear instead of a 4 MB transfer - and then
+  only the written rectangle is sent.
+
+**And the swizzle.** `D3DFMT_A8R8G8B8` is B,G,R,A in memory and GLES has no
+BGRA upload, so every one of those textures was walked pixel by pixel into a
+fresh heap buffer first: 4.2 million iterations and a 16 MB allocation for a
+2048 sheet. GLES 3.0 swaps channels at sample time for free, so the bytes now
+go up untouched with `GL_TEXTURE_SWIZZLE_R/B` set. Same for X8R8G8B8, X8B8G8R8
+and R8G8B8, which also uploads as GL_RGB instead of being expanded to four
+bytes. The partial-rect path uploads raw for the same reason - it has to match
+the swizzle, or a rewritten rectangle would come out inverted against the sheet
+around it.
+
+**After, same tap:** no 300 ms frame at all. The worst frame opening the menu is
+36 ms with **zero** texture uploads, and it is the client's own `update`, not
+the port. Text verified on the device: `out/shots/menutext_c.png` (the whole
+menu grid, Thai labels, title, world name plates) and `out/shots/inv_c.png`
+(the inventory, อุปกรณ์สวมใส่, item icons, the money row).
+
+---
+
 ## 2026-09-21 (9) — The iPhone lost half its frames to the on-screen controls
 
 "now I plug in the iPhone even I did not close the crowd but it's with 32 fps...

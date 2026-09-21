@@ -196,6 +196,10 @@ unsigned RanGLR_UploadCubeFaceLevel(unsigned existing, int face, int level,
 void RanGLR_FinishCubeTexture(unsigned tex, int levels);
 //  Replace one rectangle of a texture GL already holds, with no mip rebuild:
 //  the dynamic-texture path (the font atlas gains a glyph, not an atlas).
+//  Allocate a level with no data and clear it on the GPU. Returns 0 if the
+//  format cannot be a colour attachment, in which case upload it the long way.
+int  RanGLR_AllocClearTextureLevel(unsigned *pTex, int width, int height, int d3dFormat);
+
 void RanGLR_UpdateTextureRect(unsigned tex, int x, int y, int w, int h,
                               int d3dFormat, const void *bits, unsigned pitchBytes);
 // (the single-level upload is gone; RanGLR_UploadTextureLevel takes its place)

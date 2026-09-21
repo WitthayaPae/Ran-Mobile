@@ -365,6 +365,39 @@ public:
                 return m_glTex;
             }
         }
+        //  Never uploaded, and the client has written only part of it: give GL
+        //  the storage and a GPU clear, then send just that part.
+        //
+        //  This is the glyph atlas's first sample. Every font owns a 2048x2048
+        //  A8 atlas that starts zeroed, and the first draw pushed all 4 MB of
+        //  it - eleven fonts in the frame that opens the menu, 285 ms of a
+        //  311 ms frame, measured. The rectangle that carries actual glyphs is
+        //  a few hundred pixels across.
+        if (m_dirty && !m_isRenderTarget && !m_glTex && m_surfaces.size() == 1 &&
+            !isCompressed(m_format)) {
+            RanSurface *s = m_surfaces[0];
+            if (!s->m_bits.empty() && !s->dirtyIsWholeSurface()) {
+                unsigned tex = 0;
+                if (RanGLR_AllocClearTextureLevel(&tex, (int)s->m_width, (int)s->m_height,
+                                                  (int)m_format)) {
+                    m_glTex = tex;
+                    const UINT bpp = bytesPerPixel(m_format);
+                    const UINT pitch = s->m_width * bpp;
+                    const BYTE *origin = s->m_bits.data() +
+                                         (size_t)s->m_dirtyY0 * pitch + (size_t)s->m_dirtyX0 * bpp;
+                    if (s->m_dirtyX1 > s->m_dirtyX0)
+                        RanGLR_UpdateTextureRect(m_glTex, s->m_dirtyX0, s->m_dirtyY0,
+                                                 s->m_dirtyX1 - s->m_dirtyX0,
+                                                 s->m_dirtyY1 - s->m_dirtyY0,
+                                                 (int)m_format, origin, pitch);
+                    if (m_glyphAtlas) RanGLR_SampleAsWhiteAlpha(m_glTex);
+                    s->clearDirty();
+                    m_dirty = false;
+                    return m_glTex;
+                }
+            }
+        }
+
         if (m_dirty && !m_isRenderTarget && !m_surfaces.empty()) {
             //  The whole chain, not just level 0: the shipped DDS files carry
             //  their mips and the map shimmers without them.
