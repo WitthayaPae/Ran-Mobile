@@ -23,7 +23,7 @@ const CELLS = [
   'pk.png',       'pk_on.png',     'camlock.png',    'camlock_on.png','pickup.png',
   'vehicle.png',  'menu.png',      'f1.png',         'f2.png',      'f3.png',
   'f4.png',       'f1_on.png',     'f2_on.png',      'f3_on.png',   'f4_on.png',
-  'stick_base.png','stick_knob.png', '@steel:stick_base.png',
+  'stick_base.png','stick_knob.png',
 ];
 
 const N = 256, COLS = 5, AW = 1280, AH = 1280;
@@ -146,27 +146,7 @@ function bleed(px, size, passes) {
 const atlas = Buffer.alloc(AW * AH * 4);
 let filled = 0;
 
-//  A cell asked for as '@steel:<file>' is that file with the gold taken out.
-//
-//  The joystick's seat is the one bezel in the sheet, and the skill slots and
-//  the potion row borrow it. Desaturating the shared cell would have taken the
-//  gold off those too, so the stick gets a copy of its own and they keep the
-//  art as painted.
-function steelise(px, size) {
-  for (let k = 0; k < size * size; k++) {
-    const i = k * 4;
-    //  Rec.601 luma, then a cool cast, so it reads as steel rather than as a
-    //  grey photograph of something gold.
-    const y = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-    px[i]     = Math.min(255, Math.round(y * 0.95));
-    px[i + 1] = Math.min(255, Math.round(y * 0.98));
-    px[i + 2] = Math.min(255, Math.round(y * 1.05));
-  }
-}
-
 CELLS.forEach((name, n) => {
-  const steel = name.startsWith('@steel:');
-  if (steel) name = name.slice(7);
   const file = SRC + name;
   if (!fs.existsSync(file)) { console.log(String(n).padStart(2) + '  MISSING ' + name); return; }
   const img = decode(file);
@@ -178,8 +158,6 @@ CELLS.forEach((name, n) => {
     for (let k = 0; k < N * N; k++) px[k * 4 + 3] = m[k];
     masked = own ? '  [own background cut]' : '  [disc mask applied]';
   }
-  if (steel) masked += '  [gold removed]';
-  if (steel) steelise(px, N);
   bleed(px, N, 5);
   const ox = (n % COLS) * N, oy = Math.floor(n / COLS) * N;
   for (let y = 0; y < N; y++)

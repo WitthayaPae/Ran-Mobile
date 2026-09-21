@@ -12,40 +12,40 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
-## 2026-09-21 (4) — The joystick loses its white halo and all of its gold
+## 2026-09-21 (4) — The white halo round the joystick knob was a packing bug
 
 "in the joy stick I dot like the white outline in the knob and the yellow
 outline on the joy stick can you remove?"
 
-**The white ring was a packing bug, not art.** `stick_knob.png` arrives as flat
-RGB on a white ground (corner 254,254,254, no alpha channel at all), and
-`hud-pack.js` handled an alpha-less control by borrowing a silhouette from the
-round BUTTONS - a full disc with four diamond studs. The sphere does not fill
-that silhouette, so the white background between the two survived into the
-sheet: a white ring with four points, drawn round the knob on every device.
+**The white ring was never art.** `stick_knob.png` arrives as flat RGB on a
+white ground (corner 254,254,254, no alpha channel at all), and `hud-pack.js`
+handled an alpha-less control by borrowing a silhouette from the round BUTTONS
+- a full disc with four diamond studs. The sphere does not fill that
+silhouette, so the white background between the two survived into the sheet:
+a white ring with four points, drawn round the knob on every device.
 
 `bgMask()` now cuts a flat-RGB control from its own background first - a flood
 from the border, seeded from the median border colour rather than a corner
 (one corner of this canvas sits at 211 where the sphere's shadow reaches it,
-which rejected the whole image), with a tolerance loose enough for a dark
-sphere on white and a sanity check that the fill covers between a tenth and
-four fifths of the canvas. The borrowed mask stays as the fallback for the
-gradient-ground case it was written for.
+which rejected the whole image), tolerance loose enough for a dark sphere on
+white, and a check that the fill covers between a tenth and four fifths of the
+canvas. The borrowed mask stays as the fallback for the gradient-ground case it
+was written for.
 
-**The gold went two ways.**
+**The code-drawn amber went; the painted gold stayed.** Removed from
+`drawStickShapes`: the amber rim at full deflection, the heading wedge below
+it, and the amber ring drawn over the knob while held.
 
-- The ring art: the seat is the one round bezel in the sheet and the skill
-  slots and the potion row borrow it, so desaturating it would have stripped
-  those too. The packer now also writes a steel copy - `'@steel:stick_base.png'`
-  in the cell list, luma with a cool cast - and only the stick draws it. 23
-  cells, still inside the 5x5 sheet.
-- The amber rim at full deflection, the heading wedge below it, and the amber
-  ring drawn over the knob while held: all removed from `drawStickShapes`.
+The ring's own gold is `stick_base.png` and it stays exactly as painted - as
+does every other bezel, since that cell is also what the skill slots and the
+potion row draw. A steel copy of the seat was packed and wired to the stick for
+one build and taken straight back out: "NOT THE GOLD AMBER FROM THE GUI OUT
+LINE". The overlays were the complaint, not the art.
 
-**Measured on LDPlayer, both states:** at rest the ring is steel and the knob
-has no halo (`out/shots/stick2.png`); held at full deflection through a
-protocol-B `sendevent` drag, the ring is still steel with no rim and no wedge
-(`out/shots/held_c.png`). The warm glow on the sphere itself is the knob art.
+**Measured on LDPlayer:** gold ring, no white halo round the knob
+(`out/shots/stick3.png`); held at full deflection through a protocol-B
+`sendevent` drag, no rim and no wedge. The skill slots, attack button, pick-up,
+PK, auto and F1-F4 are gold as before (`out/shots/arc_now.png`).
 
 ---
 

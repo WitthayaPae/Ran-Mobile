@@ -1713,7 +1713,7 @@ enum {
     kCellPK,      kCellPKOn,    kCellCamLock,    kCellCamLockOn,kCellPickup,
     kCellVehicle, kCellMenu,    kCellF1,         kCellF2,       kCellF3,
     kCellF4,      kCellF1On,    kCellF2On,       kCellF3On,     kCellF4On,
-    kCellStickBase, kCellStickKnob, kCellStickBaseSteel,
+    kCellStickBase, kCellStickKnob,
 };
 
 bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
@@ -2834,10 +2834,7 @@ void RanTouch_Render(void) {
             //  finger landed while it is held, its resting place otherwise.
             const Vec2 sbase = g_stick.held ? g_stick.origin : g_stick.centre;
             const float sa = g_adj[kGrpStick].alpha;
-            //  The steel copy, not the gold one the slots use: the stick is
-            //  under a thumb the whole time you are moving, and a gold ring
-            //  there was the brightest thing on the screen.
-            drawHudCell(kCellStickBaseSteel, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
+            drawHudCell(kCellStickBase, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
             drawHudCell(kCellStickKnob, g_stick.knob.x, g_stick.knob.y,
                         g_stick.radius * 0.47f, sa);
         }
