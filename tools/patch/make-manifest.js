@@ -683,7 +683,16 @@ const UP = path.join(path.dirname(OUT), 'upload');
    *  server cannot be reached the set is kept: re-sending is safe, dropping
    *  unsent blobs is not. --uploaded still forces the old behaviour.         */
   const LIVE = arg('live-base', 'https://ran-legacy-m.com/launcher_mobile/');
+  //  Memoised: the manifest is 3.6 MB and is asked for twice - once to see
+  //  whether the last set landed, once to see what the server already holds.
+  const liveCache = new Map();
   const liveGet = rel => {
+    if (liveCache.has(rel)) return liveCache.get(rel);
+    const v = liveFetch(rel);
+    liveCache.set(rel, v);
+    return v;
+  };
+  const liveFetch = rel => {
     const r = spawnSync(process.execPath, ['-e',
       'fetch(process.argv[1] + "?cb=" + Date.now(), { cache: "no-store" })' +
       '.then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))' +
@@ -723,6 +732,55 @@ const UP = path.join(path.dirname(OUT), 'upload');
     if (v > 0) since = v;
   }
 
+  /*  What THIS manifest needs, and what the server already holds.
+   *
+   *  Accumulating every blob added since the last confirmed upload is safe but
+   *  wasteful, and after a few publishes in one sitting it is mostly waste: a
+   *  session that republished seventeen times staged seventeen APKs, 824 MB, of
+   *  which 101 MB was reachable from the current manifest. A blob the current
+   *  manifest does not name cannot be asked for by a client reading it, so it
+   *  has no business in the set whatever produced it.
+   *
+   *  The rule is therefore the honest one: stage a blob when this manifest
+   *  names it AND the server does not already have it. The server is asked -
+   *  its manifest lists what it holds, and blobs are uploaded before the
+   *  manifest that names them, so anything an older manifest names is up.
+   *
+   *  Two guards, because being wrong here means a client failing on a file that
+   *  looks perfectly fine locally:
+   *
+   *    - if the server cannot be reached, or its manifest cannot be read, none
+   *      of this runs and the old accumulate-everything behaviour stands;
+   *    - a blob this manifest needs that the live manifest claims is up is
+   *      still HEADed before it is dropped, so an upload that died halfway is
+   *      caught rather than trusted. Only blobs already staged or added this
+   *      run are checked, which is a handful - not the whole manifest.        */
+  const NEEDED = new Set(files.map(f => f.sha256));
+  if (apk) NEEDED.add(apk.sha256);
+
+  let liveHave = null;
+  {
+    const body = liveGet('manifest.json');
+    let live = null;
+    try { live = body ? JSON.parse(body.toString('utf8')) : null; } catch (e) {}
+    if (live && live.files) {
+      liveHave = new Set();
+      const ents = Array.isArray(live.files)
+                 ? live.files
+                 : Object.entries(live.files).map(([p, v]) => (typeof v === 'string' ? { sha256: v } : v));
+      for (const e of ents) if (e && e.sha256) liveHave.add(e.sha256);
+      if (live.apk && live.apk.sha256) liveHave.add(live.apk.sha256);
+    }
+  }
+
+  const headOk = h => {
+    const r = spawnSync(process.execPath, ['-e',
+      'fetch(process.argv[1] + "?cb=" + Date.now(), { method: "HEAD", cache: "no-store" })' +
+      '.then(r => process.exit(r.ok ? 0 : 2)).catch(() => process.exit(2))',
+      LIVE + 'blobs/' + h], { timeout: 60000 });
+    return r.status === 0;
+  };
+
   const lines = [];
   let staged = 0, stagedBytes = 0;
 
@@ -738,6 +796,29 @@ const UP = path.join(path.dirname(OUT), 'upload');
       const src = path.join(OUT, 'blobs', h);
       if (!fs.existsSync(src)) continue;
       fs.copyFileSync(src, path.join(UP, 'blobs', h));
+    }
+
+    if (liveHave) {
+      let dropped = 0, droppedBytes = 0, kept = 0;
+      for (const h of fs.readdirSync(path.join(UP, 'blobs'))) {
+        const staged = path.join(UP, 'blobs', h);
+        //  Not named by this manifest: nothing can ask for it.
+        let drop = !NEEDED.has(h);
+        //  Named, and the server says it has it - confirm before believing it.
+        if (!drop && liveHave.has(h)) {
+          if (headOk(h)) drop = true;
+          else           kept++;
+        }
+        if (!drop) continue;
+        droppedBytes += fs.statSync(staged).size;
+        fs.rmSync(staged, { force: true });
+        dropped++;
+      }
+      if (dropped)
+        console.log('upload   : dropped ' + dropped + ' blob(s), ' + mb(droppedBytes) +
+                    ' - this manifest does not name them, or the server already has them');
+      if (kept)
+        console.log('upload   : ' + kept + ' blob(s) the live manifest claims are up are NOT on the server - kept');
     }
     //  Only the newest manifest matters - it is the one the client reads.
     for (const n of ['manifest.json', 'manifest.sig']) {

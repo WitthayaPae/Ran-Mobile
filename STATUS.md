@@ -72,6 +72,46 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (8) — The upload set is what the SERVER lacks, not what the run added
+
+"check the blob file it's too much. maybe update the script check from the
+server too?"
+
+It was too much: 824 MB staged, of which 101 MB was reachable from the current
+manifest. Seventeen publishes in one sitting had staged seventeen APKs.
+
+**The old rule** was "accumulate every blob added since the last confirmed
+upload". That is safe - re-sending a blob is a no-op, because the name is the
+hash - but it keeps blobs that no manifest names any more, and after a few
+publishes that is most of the set.
+
+**The new rule** is the honest one: stage a blob when THIS manifest names it
+and the server does not already have it. A blob the current manifest does not
+name cannot be asked for by a client reading it, whatever produced it.
+`make-manifest.js` already fetched the live manifest to see whether the last
+set had landed; it now reads its file list too (memoised - it is 3.6 MB and was
+about to be fetched twice).
+
+**Two guards, because being wrong here means a client failing on a file that
+looks perfectly fine locally:**
+
+- the server unreachable, or its manifest unreadable, and none of it runs: the
+  old behaviour stands. Proved by publishing against `--live-base
+  http://127.0.0.1:9/` — "server is at (unreachable) ... keeping the set", no
+  drop line.
+- a blob this manifest needs that the live manifest claims is up is still
+  HEADed before it is dropped, so an upload that died halfway is caught rather
+  than trusted. Only blobs already staged or added this run are checked — a
+  handful, not the whole manifest.
+
+**Result:** `dropped 19 blob(s), 723.0 MB`, leaving `data/gui/Gui.rcc`,
+`textures/gui/mobile_hud.dds` and the APK. Re-verified afterwards: the
+signature still verifies, the three blobs hash to their names, nothing needed
+by 532 is missing from both the server and the set, and nothing staged is
+unneeded.
+
+---
+
 ## 2026-09-21 (7) — Patch 532 checked, and the iOS build caught up
 
 "can you check the patch?" — then "what about ios?".
