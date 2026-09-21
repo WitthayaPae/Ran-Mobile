@@ -1713,7 +1713,7 @@ enum {
     kCellPK,      kCellPKOn,    kCellCamLock,    kCellCamLockOn,kCellPickup,
     kCellVehicle, kCellMenu,    kCellF1,         kCellF2,       kCellF3,
     kCellF4,      kCellF1On,    kCellF2On,       kCellF3On,     kCellF4On,
-    kCellStickBase, kCellStickKnob,
+    kCellStickBase, kCellStickKnob, kCellStickBaseSteel,
 };
 
 bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
@@ -2348,31 +2348,21 @@ static void drawStickShapes(const Vec2 &base) {
             rimLight(base.x, base.y, R, a);
         }
 
-        //  A heading wedge on the rim, which the old stick gave no sign of at
-        //  all, and the whole rim goes amber at full deflection - which is how
-        //  you see you are running without having to look for it.
-        const float mag = g_stick.magnitude;
-        if (g_stick.held && mag > 0.02f) {
-            const float ang = atan2f(g_stick.dir.y, g_stick.dir.x);
-            if (mag > 0.94f) {
-                drawRing(base.x, base.y, R * 0.92f, R, kAmber.r, kAmber.g, kAmber.b, 0.95f);
-                bloom(base.x, base.y, R, kAmber, 0.24f);
-            } else {
-                drawArc(base.x, base.y, R * 0.92f, R, ang - 0.26f, ang + 0.26f,
-                        kAmber.r, kAmber.g, kAmber.b, 0.40f + 0.55f * mag);
-            }
-        }
+        //  No amber rim and no heading wedge.
+        //
+        //  They were there to say "you are running" and "this way" without
+        //  being looked for, but the thing they marked is already under the
+        //  thumb that made it happen, and the ring is the one control on the
+        //  screen that is never out of the corner of your eye.
 
         //  The knob: the solid part, the thing the thumb is actually holding.
         const float kr = R * 0.42f;
-        if (g_stick.held) bloom(g_stick.knob.x, g_stick.knob.y, kr, kAmber, 0.20f);
         if (!hudSheet())
         chromeDisc(g_stick.knob.x, g_stick.knob.y, kr, 1.0f,
                    g_stick.held ? rgba(0.659f, 0.486f, 0.227f, 1.0f) : kFace,
                    g_stick.held ? rgba(0.204f, 0.102f, 0.016f, 1.0f) : kFaceE);
-        if (g_stick.held)
-            drawRing(g_stick.knob.x, g_stick.knob.y, kr * kRimIn, kr,
-                     kAmberH.r, kAmberH.g, kAmberH.b, 0.90f);
+        //  Nothing drawn over the painted knob: it moves, which is the only
+        //  feedback it needs.
 }
 
 //  Everything the resting joystick's geometry depends on.
@@ -2844,7 +2834,10 @@ void RanTouch_Render(void) {
             //  finger landed while it is held, its resting place otherwise.
             const Vec2 sbase = g_stick.held ? g_stick.origin : g_stick.centre;
             const float sa = g_adj[kGrpStick].alpha;
-            drawHudCell(kCellStickBase, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
+            //  The steel copy, not the gold one the slots use: the stick is
+            //  under a thumb the whole time you are moving, and a gold ring
+            //  there was the brightest thing on the screen.
+            drawHudCell(kCellStickBaseSteel, sbase.x, sbase.y, g_stick.radius * 1.06f, sa);
             drawHudCell(kCellStickKnob, g_stick.knob.x, g_stick.knob.y,
                         g_stick.radius * 0.47f, sa);
         }

@@ -12,6 +12,43 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-21 (4) — The joystick loses its white halo and all of its gold
+
+"in the joy stick I dot like the white outline in the knob and the yellow
+outline on the joy stick can you remove?"
+
+**The white ring was a packing bug, not art.** `stick_knob.png` arrives as flat
+RGB on a white ground (corner 254,254,254, no alpha channel at all), and
+`hud-pack.js` handled an alpha-less control by borrowing a silhouette from the
+round BUTTONS - a full disc with four diamond studs. The sphere does not fill
+that silhouette, so the white background between the two survived into the
+sheet: a white ring with four points, drawn round the knob on every device.
+
+`bgMask()` now cuts a flat-RGB control from its own background first - a flood
+from the border, seeded from the median border colour rather than a corner
+(one corner of this canvas sits at 211 where the sphere's shadow reaches it,
+which rejected the whole image), with a tolerance loose enough for a dark
+sphere on white and a sanity check that the fill covers between a tenth and
+four fifths of the canvas. The borrowed mask stays as the fallback for the
+gradient-ground case it was written for.
+
+**The gold went two ways.**
+
+- The ring art: the seat is the one round bezel in the sheet and the skill
+  slots and the potion row borrow it, so desaturating it would have stripped
+  those too. The packer now also writes a steel copy - `'@steel:stick_base.png'`
+  in the cell list, luma with a cool cast - and only the stick draws it. 23
+  cells, still inside the 5x5 sheet.
+- The amber rim at full deflection, the heading wedge below it, and the amber
+  ring drawn over the knob while held: all removed from `drawStickShapes`.
+
+**Measured on LDPlayer, both states:** at rest the ring is steel and the knob
+has no halo (`out/shots/stick2.png`); held at full deflection through a
+protocol-B `sendevent` drag, the ring is still steel with no rim and no wedge
+(`out/shots/held_c.png`). The warm glow on the sphere itself is the knob art.
+
+---
+
 ## 2026-09-21 (3) — The skill page is four buttons now, not two arrows
 
 "now for the hub btn skill page up and down. we change it to btn F1 F2 F3 F4
