@@ -72,6 +72,26 @@ numbers unchanged.
 
 ---
 
+## 2026-09-21 (6) — The item shop cell is out of the menu grid
+
+"now the ไอเท็มช็อป icon in the menu we do not need this it's stale."
+
+`MENU_ITEMSHOP_BUTTON` (label index 10 of `MOBILE_MENULABEL`) is out of
+`nORDER` in `CBasicGameMenu::MobileArrangeMenu` and hidden explicitly, beside
+the walk/run toggle and the collapse arrow — without that it would still draw
+at its authored strip position, since the grid only shows what it places.
+
+The button and its handler stay: the id is still switched on in
+`TranslateUIMessage` and `ITEMSHOP_WINDOW` can be opened from elsewhere, so
+nothing was removed that something else might reach for. The cash shop on this
+server is the web page เติมเงิน opens.
+
+**Measured on LDPlayer** (`out/shots/menu2_c.png`): 16 cells, 5/5/5/1, no gap
+and no icon left behind — กระเป๋า ตัวละคร สกิล ปาร์ตี้ คลับ / ภารกิจ เพื่อน แผนที่
+คำพูด ของจากเว็บ / ร้านค้า หาปาร์ตี้ อันดับ แข่งขัน บอส / ระบบ.
+
+---
+
 ## 2026-09-21 (5) — skillframe.png on the potion row, and no gap on either row
 
 "NOW FOR THE SKILL FRAME CAN WE USE THE skillframe.png" — then "MY fault. can
