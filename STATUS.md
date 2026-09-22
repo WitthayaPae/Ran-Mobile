@@ -12,6 +12,53 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-22 (1) — The NPC shop drew through the inventory's equipment column
+
+"I found the bug for mobile when I buy from the npc then it pop up the page sell
+next to the inventory but we build the new layout... it's overlaping", then
+"maybe you can hide the equipment section like the trading view".
+
+**The cause, measured.** Windows anchored with `UI_FLAG_RIGHT` are placed at
+`X_RES - 800 + <authored X>` (`CUIControl::AlignMainControl`), so the authored
+layout decides what sits where. `MARKET_WINDOW` and `STORAGE_WINDOW` are at
+X=287 and the inventory at X=526: on PC they are exactly adjacent, 239 wide
+each. On mobile `CInventoryWindow::MobileSideBySide` puts the equipment doll
+*outside* the window to the left, at local X=-231 with a 5-unit plate, and
+stretches the title bar over the pair — straight through the 236 units the shop
+occupies. At the device's 1280-wide UI that is the shop's whole right half.
+
+**The fix.** The doll column comes off while a window that opens at the
+inventory's left is up, which is the shape the trade view already has:
+
+- `CInventoryWindow::MobileShowWear(bool)` hides the doll page, its plate bands
+  and its edges, and re-spans the title. Hiding the page is enough for the whole
+  subtree: `CUIGroup::Render` returns at an invisible group and `IsNoUpdate()`
+  is true for one, so it stops taking taps at the same time.
+- The title layout moved out of `MobileSideBySide` into `MobileSpanTitle(left)`,
+  which keeps the authored rect on its first pass — each later pass would
+  otherwise be measuring the pass before it.
+- `CInnerInterface::MobileInventoryWearFrame()` reads the five windows that open
+  beside the inventory (`MARKET`, `STORAGE`, `CLUB_STORAGE`, `ITEMBANK`,
+  `PRIVATE_MARKET`) every frame from `DxGameStage`, rather than setting on open
+  and unsetting on close: each of those has several ways out and one of them
+  would always be the one that forgot.
+
+**The trap it cost a build to find.** Re-anchoring the tree with
+`SetGlobalPos(D3DXVECTOR2)` carries every child to a new place *at the size its
+global rect already had*. The title's local rect said 239 wide, its global rect
+still said 475, and `CheckBoundary` then pushed it back inside the screen —
+`left = X_RES - 475` — so the bar stayed 410px left of the window it belongs to
+while the doll under it was already gone. The rect form of `SetGlobalPos` takes
+each child's local size with it; `MobileReanchor()` is now that call, in both
+paths.
+
+**Verified on the emulator** as test01: shop open — shop window clear from 1535
+to 2010 px, inventory from 2020, title bar over the inventory alone; shop
+closed and the inventory reopened — doll, plate and the wide title all back.
+PC solution rebuilds with 0 errors (Release/Win32, 562 warnings, unchanged).
+
+---
+
 ## 2026-09-21 (5) — The skill slots use skillframe.png, and the icon is square again
 
 "NOW FOR THE SKILL FRAME CAN WE USE THE skillframe.png"
