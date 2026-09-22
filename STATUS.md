@@ -52,6 +52,16 @@ while the doll under it was already gone. The rect form of `SetGlobalPos` takes
 each child's local size with it; `MobileReanchor()` is now that call, in both
 paths.
 
+**The flick, and where the decision belongs.** First cut read the five windows
+at the top of `DxGameStage::FrameMove` (`MobileTouchControls`, line 1882) - and
+the interface's own `FrameMove`, which is where the tap that opens the shop is
+read, is line 1959. So the decision was always one frame behind the tap: the
+window came up with the column still on it and dropped it on the next frame,
+which the player sees as the inventory flicking open wide and then narrowing.
+The call now sits at the end of the mobile block in `Render`, the last moment
+before `CInnerInterface::Render`, so within the frame the tap is handled the
+column is already off - and on the way out, already back.
+
 **Verified on the emulator** as test01: shop open — shop window clear from 1535
 to 2010 px, inventory from 2020, title bar over the inventory alone; shop
 closed and the inventory reopened — doll, plate and the wide title all back.
