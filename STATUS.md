@@ -72,6 +72,43 @@ numbers unchanged.
 
 ---
 
+## 2026-09-22 (3) — The + buttons ask how many, instead of being pressed twenty times
+
+"in the window ตัวละคร the btn + to update the status it's too small for mobile and
+hard to click" — then "when user click the btn, show new window / อัพ status
+{status}: {number} / then confirm. this will be more easy and precise?"
+
+**First, the size.** They are authored 15 x 10, a mouse's target: about thirty
+device pixels across on a phone, in a column of six, so a miss raises the wrong
+stat rather than nothing. They cannot simply be made big — the rows are 18
+units apart (POW at Y=71, DEX at Y=89), so anything taller overlaps its
+neighbour. 16 is the most that fits and 24 x 16 is the authored 3:2 exactly, so
+the glyph grows without stretching: 2.5x the area, through `ReSizeControl`,
+because a flip button's pictures are children. Verified by tapping the strip
+that only exists because of the enlargement — Pow 54(+4) → 55(+5).
+
+**Then the real fix, which was their idea.** Twenty points is still twenty taps
+on a target a finger covers entirely. So the tap asks instead: the client's own
+number modal — the one a stack split already uses — opens with
+
+> อัพ สเตตัส Pow : ใส่จำนวนที่ต้องการ (มี 447 แต้ม)
+
+and ตกลง sends `ReqStatsUp(SCHARSTATS)` — the PC's own bulk path, one packet,
+nothing new on the wire. The amount is clamped to the pool on this side,
+because that overload drops the whole request when the total is too high, which
+would look like the button doing nothing at all.
+
+Which stat waits on the window between the tap and the OK, the way
+`CInventoryWindow` parks a split's slot: the modal answers with a string and a
+caller id and has no room for a payload of its own. Text lives in
+`gameintext.xml` as `MOBILE_STATSUP_ASK`, so it translates with the rest, which
+means `Gui.rcc` was repacked.
+
+**Verified on the device:** typed 10, confirmed, Pow 55(+5) → 65(+15) and the
+pool 447 → 437 (`out/shots/typed.png`, `out/shots/after.png`).
+
+---
+
 ## 2026-09-22 (2) — The attack button loses its drawn ring too
 
 "we remove the out line of the joy stick but can you do as well in the attack
