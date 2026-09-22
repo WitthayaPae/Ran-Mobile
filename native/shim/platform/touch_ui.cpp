@@ -2832,16 +2832,19 @@ void RanTouch_Render(void) {
             //  thing the thumb lives on has to look charged.
             const bool dead = !b.toggled && false;      //  reserved: no-target dimming
             const float a = 1.0f;
+
+            //  Nothing drawn around the painted button.
+            //
+            //  It carried an amber bloom and a twelve-segment ring - the swing
+            //  timer, full until the client fed a fraction in, which it never
+            //  does - over art that already has a ring of its own. Two rings,
+            //  and the drawn one was the brighter. The joystick lost the same
+            //  pair for the same reason.
+            if (hudSheet()) continue;
+
             bloom(b.centre.x, b.centre.y, R, kAmber, b.down ? 0.42f : 0.20f);
             //  Twelve segments: the swing timer. Full until the client feeds a
             //  fraction in, so it reads as ready rather than as broken.
-            if (hudSheet()) {
-                //  Painted, in the pass below. The swing timer stays here: it
-                //  is live and it is flat colour, so the cache suits it.
-                segRing(b.centre.x, b.centre.y, R * 1.00f, R * 1.09f, 12, 1.0f,
-                        kAmber, kSteel, 0.62f, 0.22f);
-                continue;
-            }
 
             segRing(b.centre.x, b.centre.y, R * 1.00f, R * 1.09f, 12, 1.0f,
                     kAmber, kSteel, 0.62f, 0.22f);

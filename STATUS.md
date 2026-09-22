@@ -72,6 +72,24 @@ numbers unchanged.
 
 ---
 
+## 2026-09-22 (2) — The attack button loses its drawn ring too
+
+"we remove the out line of the joy stick but can you do as well in the attack
+btn?"
+
+The attack button carried an amber bloom and a twelve-segment ring - the swing
+timer, drawn full because the client never feeds a fraction in - over art that
+already has a ring of its own (`atk_ring.png`, drawn at 1.18 of the button).
+Two rings, and the drawn one was the brighter. Both are gone on the painted
+path; the vector fallback keeps them, since without the sheet there is no other
+ring.
+
+**Measured:** the band just outside the painted art, mean brightness 94.2
+before and 52.4 after - the background's own level (`out/shots/atk_c.png`,
+`out/shots/atk2.png`). What is left is the art as painted.
+
+---
+
 ## 2026-09-22 — The load-test crowd has guilds now, and a .cps that crashed the client
 
 "in the load test character we only generate the character without the guild. I
