@@ -43,11 +43,34 @@ lesson stuck anyway: the hash is computed by the SERVER (RanPassHash), not by
 SQL, so the login does not depend on the database's version at all. On 2012 and
 up the bytes are identical, which is what the table above proves.
 
-**Built so far:** the hash primitive, the three wire messages, the client half,
-DB/FIX_06 (user_challenge_fetch, user_verify_hashed) and the ODBC layer
-(ChallengeFetch, SetPassHash, UserCheckHashed). Still to come: the two handlers
-in the agent server, the client's login flow with a fallback to the old message,
-and an end-to-end test.
+**Built:** the hash primitive, the three wire messages, DB/FIX_06
+(user_challenge_fetch, user_verify_hashed), the ODBC layer (ChallengeFetch,
+SetPassHash, UserCheckHashed), both agent handlers (nonce per connection,
+constant-time compare, one answer per nonce, no account-existence tell), and the
+client's login flow. Solution builds clean, all targets; mobile builds clean.
+
+**The fallback is what makes this shippable, and it is tested.** A server that
+does not know NET_MSG_LOGIN_SALT drops it without a word, so silence is the
+answer that means "not this one": the client waits three seconds and sends the
+old login. Against the live server, which has not been updated:
+
+    RanChal : salt asked (channel 0)
+    RanChal : no salt answer in 3000 ms - falling back to the old login
+    RanLogin: result=0                      <- EM_LOGIN_FB_SUB_OK, in world as Test01
+
+So the client can ship before the server does, and the password only stops
+crossing the wire once the agent is updated. PC is untouched - the only call
+into any of this sits inside RAN_MOBILE.
+
+**One thing that test nearly blamed on the wrong change.** The first run failed
+with "wrong id or password", which looks exactly like a broken login flow. It
+was not: the account in `native/.login` does not exist. `RanUser.dbo.UserInfo`
+holds one row, `test01`, and that is what the rig should use.
+
+**Still open:** the challenge path itself has never run end to end, because no
+server is running the new agent. It needs DB/FIX_06 applied and the new
+ServerAgent deployed - both are your call, and nothing breaks if neither
+happens, because of the fallback above.
 
 ## 2026-09-23 (9) — End-to-end pass on the shipping build, and the one thing it caught
 
