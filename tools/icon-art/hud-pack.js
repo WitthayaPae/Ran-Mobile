@@ -23,7 +23,7 @@ const CELLS = [
   'pk.png',       'pk_on.png',     'camlock.png',    'camlock_on.png','pickup.png',
   'vehicle.png',  'menu.png',      'f1.png',         'f2.png',      'f3.png',
   'f4.png',       'f1_on.png',     'f2_on.png',      'f3_on.png',   'f4_on.png',
-  'stick_base.png','stick_knob.png',
+  'stick_base.png','stick_knob.png', 'chat.png',    'chat_close.png',
 ];
 
 const N = 256, COLS = 5, AW = 1280, AH = 1280;

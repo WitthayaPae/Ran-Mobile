@@ -1813,6 +1813,10 @@ enum {
     kCellVehicle, kCellMenu,    kCellF1,         kCellF2,       kCellF3,
     kCellF4,      kCellF1On,    kCellF2On,       kCellF3On,     kCellF4On,
     kCellStickBase, kCellStickKnob,
+    //  The chat pair: the round icon that brings the chat back, and the plate
+    //  on its frame that folds it away. The plate is the one cell that is not
+    //  round art - see the draw below.
+    kCellChat,      kCellChatClose,
 };
 
 bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
@@ -1881,6 +1885,7 @@ int hudCellFor(int slot, bool on) {
         case kSlotPickup:  return kCellPickup;
         case kSlotVehicle: return kCellVehicle;
         case kSlotMenu:    return kCellMenu;
+        case kSlotChat:    return ( g_chatMode == 1 ) ? kCellChatClose : kCellChat;
         case kSlotF1:      return on ? kCellF1On : kCellF1;
         case kSlotF2:      return on ? kCellF2On : kCellF2;
         case kSlotF3:      return on ? kCellF3On : kCellF3;
@@ -3052,8 +3057,19 @@ void RanTouch_Render(void) {
                 continue;
             }
             const int cell = hudCellFor(b.slot, b.toggled);
-            if (cell >= 0)
-                drawHudCell(cell, b.centre.x, b.centre.y, R * 1.06f, ga);
+            if (cell < 0) continue;
+
+            //  The fold plate is a wide bar painted inside a square cell: 178
+            //  of the cell's 256 across, 144 down. Drawn at this half-size its
+            //  height comes out 2R and its width 2R * ASPECT, which is the
+            //  rectangle the press is tested against.
+            if (b.slot == kSlotChat && g_chatMode == 1) {
+                drawHudCell(cell, b.centre.x, b.centre.y,
+                            R * (256.0f / 144.0f), ga);
+                continue;
+            }
+
+            drawHudCell(cell, b.centre.x, b.centre.y, R * 1.06f, ga);
         }
         if (g_stick.radius > 0.0f) {
             //  The seat follows the thumb the way the drawn one did: where the

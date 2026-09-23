@@ -107,7 +107,9 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
 //  the client passes in `r`. Shared because the client places it by its RIGHT
 //  edge - 5 units in from the chat's - and only the overlay knows how wide it
 //  draws.
-#define RANTOUCH_CHATBAR_ASPECT 1.75f
+//  Measured off the painted plate in the sheet - it is 178 x 144 inside its
+//  256 cell - so the button the finger gets is exactly the plate that is drawn.
+#define RANTOUCH_CHATBAR_ASPECT 1.236f
 
 extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode);
 

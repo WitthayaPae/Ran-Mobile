@@ -12,6 +12,31 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (2) — The quick-potion row was half again the size of the PC's
+
+"the potion slot I see that it's bigger then the original one and too much space
+between slot."
+
+**Measured, both sides.** The authored tray (`uiinnercfg03.xml`) is six slots of
+37 x 41 at a step of exactly 37 - contiguous, no gap. On the device the row was
+52 units across on a 65 step: half again as big, and nearly twice the daylight.
+
+**Why.** `MobileArrangeRound` sized the slots off the ATTACK RING
+(`fSlotR = fAR * 0.36`). The ring is a thumb control and is sized for a thumb;
+the potion row is a readout you tap, sits under the status bars, and has its own
+authored size. Anchoring one to the other made it grow with a control it has
+nothing to do with.
+
+**Now** the row takes its size from the authored slot, captured once with the
+anchor: `fSlotR = width * 0.37`, which puts the drawn bezel at ~44 and the art
+painted inside it at the authored 37. The step is measured against that PAINTED
+frame rather than the quad - at 3.38 radii the quads touched and the frames
+still had nine units between them, which is the gap that was complained about -
+so it is `fSlotR * 2.92`, and the frames sit against one another the way the
+PC's do. The HUD editor's per-row and per-slot scales still multiply on top.
+
+Verified at 1:1 against the same crop before and after.
+
 ## 2026-09-23 (1) — A drag never let go of the item, and the chat could not be folded away
 
 "I see the bug here when I drag the skill or item to the slot then I release.
@@ -97,8 +122,16 @@ to hang anything on, and that row is where the thumb already goes. The overlay
 places it there itself, off the ride button's own centre, because the player can
 move that button and only the overlay knows where it ended up.
 
-The mark is drawn as vector art for now: the bar while the chat is open, a
-speech bubble while it is folded. `MOBILE/ICON-BRIEF.md` carries the prompt for
+**The painted pair landed the same day.** `chat.png` and `chat_close.png` are
+cells 22 and 23 of `mobile_hud.dds` (the sheet is 5x5 and had three spare). The
+plate cell is the one piece of art in that sheet that is not round: measured off
+the file it paints 178 x 144 inside its 256 cell, so `RANTOUCH_CHATBAR_ASPECT`
+is 1.236 and the cell is drawn at `R * 256/144` - which puts the painted plate
+exactly on the rectangle the press is tested against. The vector bar and bubble
+are still there for a build without the sheet.
+
+The plate sits a little ABOVE the frame rather than centred on it: on the line,
+its lower half covered the chat's own scroll arrow, which lives in that corner. `MOBILE/ICON-BRIEF.md` carries the prompt for
 the painted `chat.png`, which drops into `mobile_hud.dds` beside the other round
 controls when it exists.
 
