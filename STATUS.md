@@ -12,6 +12,72 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (8) — Security review of the mobile client, and the one finding that was ours to fix
+
+Asked for a client-side security review. Four things worth acting on; one of them
+was a bug in this port and is fixed here, the rest are decisions or inherited
+design and are written down so they are not rediscovered.
+
+### Fixed: the diagnostic switches were read from shared storage
+
+`ran_plat.cpp:13` defaults the diagnostic root to `/sdcard/ran`, and
+`RanPlat_SetDiagRoot` (line 141) had **no caller on Android** - iOS sets it
+(`ran_ios_plat.mm:132`), Android never did. Every switch is looked up by name in
+that directory, which any app with a storage permission can write, as can the
+player with a file manager.
+
+Demonstrated on the shipped build before the fix: `echo x > /sdcard/ran/nohud`,
+relaunch, and the whole touch pad was gone. The one that matters is not `nohud`
+though - `drawlimit` (`gl_render.cpp:1220`) reads a number from that file and
+stops the frame after N draws, which takes geometry out of the scene and leaves
+whatever it was hiding in plain sight. `effskip`, `sectionskip`, `nooutline`,
+`renderscale` and `worldscale` are reachable the same way, and `ran.log` was
+written there too.
+
+`android_main.cpp` now calls `RanPlat_SetDiagRoot(root)` at boot, with the data
+root - the app's own external files directory, which no other app can reach on
+Android 11 and up. Verified both ways: with `/sdcard/ran/nohud` present the HUD
+draws normally, and with the same file in the private root it still disappears,
+so the development tooling keeps working over adb. **Diagnostic files now live
+in `/sdcard/Android/data/com.ran.native/files/`, not `/sdcard/ran/`.**
+
+### Not ours to fix, and the reasoning
+
+* **Credentials on the wire.** `LoginPage.cpp:237` -> `CNetClient::SndLogin`
+  (`s_NetClientMsgLogin.cpp:28`) sends id and password over plain TCP, each field
+  passed through XXTEA; `minTea m_Tea;` (`s_NetClient.h:117`) is default
+  constructed, so the key is the literal at `minTea.cpp:20` - the same in every
+  copy of the client. Anyone on the same network with a copy of the APK recovers
+  the account. Inherited EP9 design; the fix is TLS in front of the login server
+  with a pinned certificate, which is a server change.
+* **The release APK is signed with the debug keystore.** `build-apk.sh:163-173`:
+  alias `androiddebugkey`, store and key password `android`, generated if
+  missing; `KEYSTORE-BACKUP/ran-signing.keystore` is byte-identical to it. It is
+  NOT in git (`git ls-files`, and `.gitignore:51`). It matters because the app
+  updates itself through PackageInstaller and the signature is the only check on
+  an update. Treat the file as a secret; rotating it forces every player to
+  reinstall, so that is a version-boundary decision.
+* **Permissions.** `MANAGE_EXTERNAL_STORAGE` plus read/write external storage are
+  held only to migrate a pre-private-root install. All-files access kept forever
+  for a one-off; drop it when the migration window closes.
+
+### Checked and sound
+
+Manifest ECDSA-verified before it is parsed; blobs content-addressed and
+SHA-256 checked before rename; `safeDest` blocks absolute paths, backslashes,
+`..` and anything whose canonical path escapes the root; bodies have a size
+ceiling; an older manifest version is refused; the APK is streamed into the
+installer and hashed in flight. No custom `TrustManager` or `HostnameVerifier`;
+cleartext off except loopback. `allowBackup=false`, no `android:debuggable`,
+`NativeActivity` not exported. The payload is built from `CLIENT/` only, so the
+server cfg with its DB credentials cannot ride along - the device tree confirms
+it. No credential is written to disk: `GETUSERID_ENC` has no caller and the
+account name appears nowhere under the data root.
+
+Not examined: server-side authority for item, skill and movement actions - where
+most cheating is actually decided, and server code - the wider EP9 packet
+parsing surface, and the iOS distribution chain beyond what ships in the patch.
+
 ## 2026-09-23 (7) — The patch page: one bar that both measures and moves, in Thai, and no way past it
 
 "when it loading the loading bar load it should be something like loading

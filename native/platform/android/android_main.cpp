@@ -906,6 +906,21 @@ extern "C" void android_main(android_app *app) {
         if (state.ready && !state.booted) {
             const char *root = pickDataRoot(app);
 
+            //  The diagnostic switches move with the data.
+            //
+            //  RanPlat's default root is /sdcard/ran - shared storage, which any
+            //  app holding a storage permission can write, and so can the player
+            //  with a file manager. Every switch is read from there by name, and
+            //  they are not all harmless: `drawlimit` stops the frame after N
+            //  draws, which takes geometry out of the scene and leaves whatever
+            //  it was hiding in plain view, and `nohud` was measured taking the
+            //  whole touch pad off a shipped build. The log went there too.
+            //
+            //  The data root is the app's own external files directory, which no
+            //  other app can reach on Android 11 and up. adb can still drop a
+            //  switch in for a development device, which is all these were for.
+            RanPlat_SetDiagRoot(root);
+
             //  Put something on screen before the client boots. RanApp_Boot
             //  loads for many seconds with no device of its own yet, so without
             //  this the window is black for the whole of it.
