@@ -3445,6 +3445,35 @@ extern "C" void RanTouch_RenderChatTop(void) {
     const float R = b.radius * (b.down ? 0.94f : 1.0f);
     const int cell = hudSheet() ? hudCellFor(kSlotChat, false) : -1;
 
+    //  The drawn shapes first, ALWAYS, with the painted cell over them.
+    //
+    //  Code and art ship separately - the .so rides the APK, the sheet rides
+    //  the patch - so a player can have a build that asks for cell 23 and a
+    //  mobile_hud.dds that only has 22. Measured exactly that on the test
+    //  device after a patch restored the server's older sheet: the button was
+    //  live, placed correctly, and drew nothing at all, because an empty cell
+    //  is transparent and there is no way to ask the sheet how many it has.
+    //  Two dozen vertices under the cell makes that impossible: worst case the
+    //  drawn shape shows, best case the painting covers it.
+    {
+        if (g_chatMode == 1) {
+            const float hw = R * RANTOUCH_CHATBAR_ASPECT, hh = R;
+            const float x0 = b.centre.x - hw, y0 = b.centre.y - hh;
+            const float cut = hh * 0.45f;
+            const float a = b.down ? 1.0f : 0.92f;
+            drawChamfer(x0, y0, hw * 2.0f, hh * 2.0f, cut, kFaceE.r, kFaceE.g, kFaceE.b, a);
+            drawChamfer(x0 + 1.5f, y0 + 1.5f, hw * 2.0f - 3.0f, hh * 2.0f - 3.0f, cut,
+                        kFace.r, kFace.g, kFace.b, a);
+            const float bw = hw * 0.92f, bh = hh * 0.17f;
+            drawRect(b.centre.x - bw, b.centre.y - bh, bw * 2.0f, bh * 2.0f,
+                     kInk.r, kInk.g, kInk.b, a);
+        } else {
+            chromeDisc(b.centre.x, b.centre.y, R, b.down ? 1.0f : 0.94f, kFace, kFaceE);
+            glyphMark(b, 0.88f);
+        }
+        emit();
+    }
+
     if (cell >= 0) {
         //  The fold plate is a wide bar painted inside a square cell: 178 of the
         //  cell's 256 across, 144 down. Drawn at this half-size its height comes
@@ -3454,27 +3483,6 @@ extern "C" void RanTouch_RenderChatTop(void) {
             drawHudCell(cell, b.centre.x, b.centre.y, R * (256.0f / 144.0f), 1.0f);
         else
             drawHudCell(cell, b.centre.x, b.centre.y, R * 1.06f, 1.0f);
-    }
-    else if (g_chatMode == 1) {
-        //  No sheet: the plate, drawn. A steel disc with an arrow on it read as
-        //  one more thumb button sitting on the chat, so this is a window
-        //  control - a chamfered plate with a minimise bar across it.
-        const float hw = R * RANTOUCH_CHATBAR_ASPECT, hh = R;
-        const float x0 = b.centre.x - hw, y0 = b.centre.y - hh;
-        const float cut = hh * 0.45f;
-        const float a = b.down ? 1.0f : 0.92f;
-        drawChamfer(x0, y0, hw * 2.0f, hh * 2.0f, cut, kFaceE.r, kFaceE.g, kFaceE.b, a);
-        drawChamfer(x0 + 1.5f, y0 + 1.5f, hw * 2.0f - 3.0f, hh * 2.0f - 3.0f, cut,
-                    kFace.r, kFace.g, kFace.b, a);
-        const float bw = hw * 0.92f, bh = hh * 0.17f;
-        drawRect(b.centre.x - bw, b.centre.y - bh, bw * 2.0f, bh * 2.0f,
-                 kInk.r, kInk.g, kInk.b, a);
-        emit();
-    }
-    else {
-        chromeDisc(b.centre.x, b.centre.y, R, b.down ? 1.0f : 0.94f, kFace, kFaceE);
-        glyphMark(b, 0.88f);
-        emit();
     }
 
     glBindVertexArray(0);

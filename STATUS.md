@@ -12,6 +12,41 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (9) — End-to-end pass on the shipping build, and the one thing it caught
+
+Everything today had been verified one change at a time. One pass over the build
+that would actually go out, on the emulator as `test01`, found one real problem -
+which is the argument for doing it.
+
+**The chat fold button was live, correctly placed, and drew nothing.** Not a
+regression in the code: the patch test earlier in the day deleted
+`textures/gui/*.dds` to force a download, and the patch restored the SERVER's
+copy - version 540, which predates the repack that added the chat cells. Device
+md5 `c9be1cd6...`, local `ce03bd31...`. The build asks for cell 23; that sheet
+has 22; an empty cell is transparent, and there is no way to ask a sheet how many
+cells it holds.
+
+That is the shape of every code-and-data split in this port: the .so rides the
+APK, the sheet rides the patch, and a player can have one without the other. So
+`RanTouch_RenderChatTop` now draws the vector plate or bubble FIRST and lays the
+painted cell over it. Worst case the drawn shape shows, best case the painting
+covers it; two dozen vertices a frame. Verified both ways - the old sheet on the
+device draws the plain plate, and pushing the correct sheet puts the painted one
+back over it.
+
+**The rest of the pass, all on the final build:** plain drag inside the bag; tap
+opens the action sheet; long-press drag back; drag a potion onto a quick slot;
+unequip and re-equip the amulet by dragging to and from the doll; the quick slots
+bound to a held item fade while the other two stay lit; chat folds to the painted
+icon beside the ride button and comes back; a tap on bare ground clears the
+target (`tap cleared 531`); the video page ends at "แสดงNPCที่เลือก" with both
+item-FX rows gone and ตกลง applying without a crash.
+
+One thing the pass proved that was not a bug: tapping an NPC opens its dialogue,
+and while that window is up a tap on the world does nothing at all - including
+clearing the target. That is `IsCharMoveBlock` doing its job, the same guard that
+stops a tap on a window walking the character.
+
 ## 2026-09-23 (8) — Security review of the mobile client, and the one finding that was ours to fix
 
 Asked for a client-side security review. Four things worth acting on; one of them
