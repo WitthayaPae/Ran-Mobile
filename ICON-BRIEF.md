@@ -188,7 +188,41 @@ canvas, transparent outside the circle.
 |---|---|---|
 | `chat.png` | 128 × 128 | Steel disc, a parchment speech bubble with three short ruled lines of writing inside it, tail pointing down-left. |
 
-Until the painted version lands the overlay draws its own bubble, so the button
-works today and only gets better-looking when `chat.png` is packed into
-`mobile_hud.dds` (append it to `CELLS` in `tools/icon-art/hud-pack.js` and add
-`kCellChat` to the enum in `touch_ui.cpp`, in the same order).
+The fold control that puts the chat away is the other half of the pair, and it
+is **not** round: it is a plate that straddles the chat's top edge, so it is
+drawn as a wide bar centred in a square cell.
+
+| File | Canvas | Subject |
+|---|---|---|
+| `chat_close.png` | 256 × 256 | A horizontal steel plate, 224 × 128 px, centred in the canvas, with a single engraved gold bar across the middle of it - the "put this away" mark. Everything outside the plate fully transparent. |
+
+```
+Game UI control for a 2000s Korean fantasy MMORPG (RAN Online), painted in the
+style of that era's interface art: soft airbrushed gradients, polished metal,
+antique gold, a warm inner glow, a heavy readable silhouette. Hand-painted
+digital illustration, NOT flat vector, NOT material design, NOT a line icon.
+
+FORMAT
+- Exactly 256 x 256 pixels, square.
+- PNG with a real transparent background (straight, un-premultiplied alpha).
+- The art is a HORIZONTAL PLATE 224 x 128 px, centred in the canvas. Everything
+  outside that plate is fully transparent - no glow, no shadow, no stray pixels.
+- The plate has chamfered corners (about 20 px off each corner), a 3 px rim of
+  lighter steel all the way round, a vertical face gradient from #515963 at the
+  top to #242930 at the bottom, and a soft gloss across the upper third.
+- No text, no letters, no numbers anywhere in the image.
+
+THE MARK
+- One horizontal bar across the middle of the plate, about 150 x 16 px, centred:
+  worn gold (#C9962B) with a warm highlight along its top edge and a thin dark
+  groove under it, as if cut into the steel.
+- Nothing else on the plate. It must still read at 60 px wide.
+```
+
+Until the painted versions land the overlay draws its own shapes - a bubble
+folded, a bar open - so the button works today. Packing either one: append it to
+`CELLS` in `tools/icon-art/hud-pack.js` and add the matching `kCellChat` /
+`kCellChatClose` to the enum in `touch_ui.cpp`, in the same order, then draw it
+from `hudCellFor`. The plate cell is drawn at half-width
+`R * RANTOUCH_CHATBAR_ASPECT`, which is why the art's 224 × 128 proportions have
+to stay as given.

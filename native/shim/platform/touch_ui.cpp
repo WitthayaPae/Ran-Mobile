@@ -774,6 +774,30 @@ void drawHalo(float cx, float cy, float r, Col c, float spread) {
 // ------------------------------------------------------------------ layout
 void placePageRow();
 
+//  Where the chat button goes.
+//
+//  Open it is the chat's corner control and the client owns the spot. FOLDED
+//  there is no chat to hang it on, so it parks against the ride button - which
+//  is the overlay's own, and only the overlay knows where that ended up once
+//  the player has moved it. Straight to its left, one gap away, so the two read
+//  as a pair on the same line.
+void placeChatButton() {
+    g_buttons[kBtnChat].slot = kSlotChat;
+
+    if (g_chatMode == 2) {
+        const Button &veh = g_buttons[7];
+        const float R = g_buttons[kBtnChat].radius;
+        if (veh.radius > 0.0f) {
+            g_buttons[kBtnChat].centre.x = veh.centre.x - (veh.radius + R + R * 0.30f);
+            g_buttons[kBtnChat].centre.y = veh.centre.y;
+            return;
+        }
+    }
+
+    g_buttons[kBtnChat].centre.x = g_chatFracX * (float) g_width;
+    g_buttons[kBtnChat].centre.y = g_chatFracY * (float) g_height;
+}
+
 void layout() {
     const float shortEdge = (float)(g_width < g_height ? g_width : g_height);
     g_unit = shortEdge * 0.14f;             // the layout module
@@ -884,17 +908,12 @@ void layout() {
     g_buttons[7].centre.x = g_vehFracX * (float) g_width;
     g_buttons[7].centre.y = g_vehFracY * (float) g_height;
 
-    //  The chat fold button, also placed by the client: on the chat's top right
-    //  corner, and smaller than a thumb control because it sits on the window
-    //  frame rather than out on the glass.
-    g_buttons[kBtnChat].slot     = kSlotChat;
-    //  Folded, it is a round control the size of the ride button beside it;
-    //  open, it is the plate on the chat's frame and the client sizes it.
-    g_buttons[kBtnChat].radius   = ( g_chatMode == 2 || g_chatFracR <= 0.0f )
-                                 ? modeR
-                                 : g_chatFracR * (float) g_height;
-    g_buttons[kBtnChat].centre.x = g_chatFracX * (float) g_width;
-    g_buttons[kBtnChat].centre.y = g_chatFracY * (float) g_height;
+    //  The chat fold button. Open, the client places it on the chat's top right
+    //  corner and sizes it, because it is that window's own frame control.
+    g_buttons[kBtnChat].radius = ( g_chatMode == 2 || g_chatFracR <= 0.0f )
+                               ? modeR
+                               : g_chatFracR * (float) g_height;
+    placeChatButton();
 
     //  The player's arrangement, on top of the designed positions.
     const float W = (float)g_width, H = (float)g_height;
@@ -3253,12 +3272,10 @@ extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode) {
     g_chatFracY = cy;
     g_chatFracR = r;
     if (g_inited) {
-        g_buttons[kBtnChat].slot     = kSlotChat;
-        g_buttons[kBtnChat].centre.x = cx * (float) g_width;
-        g_buttons[kBtnChat].centre.y = cy * (float) g_height;
         g_buttons[kBtnChat].radius = ( mode == 2 || r <= 0.0f )
                                    ? g_buttons[3].radius       //  a mode toggle
                                    : r * (float) g_height;
+        placeChatButton();
     }
 }
 

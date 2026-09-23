@@ -91,9 +91,11 @@ rule - the first and only overlay button that is.
 **Shaped by review.** A steel disc with an arrow on it read as one more thumb
 button parked on the chat, so open it is now the window's own corner control: a
 chamfered plate straddling the top edge with a minimise bar across it, its right
-edge 5 units in from the window's. Folded, it moves down beside the ride button
-and level with it - the chat is not on screen any more to hang anything on, and
-that row is where the thumb already goes.
+edge 5 units in from the window's. Folded, it parks directly against the ride
+button, one gap to its left and on its line - the chat is not on screen any more
+to hang anything on, and that row is where the thumb already goes. The overlay
+places it there itself, off the ride button's own centre, because the player can
+move that button and only the overlay knows where it ended up.
 
 The mark is drawn as vector art for now: the bar while the chat is open, a
 speech bubble while it is folded. `MOBILE/ICON-BRIEF.md` carries the prompt for
