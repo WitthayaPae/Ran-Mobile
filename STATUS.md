@@ -67,6 +67,15 @@ with "wrong id or password", which looks exactly like a broken login flow. It
 was not: the account in `native/.login` does not exist. `RanUser.dbo.UserInfo`
 holds one row, `test01`, and that is what the rig should use.
 
+**Two things hardened after the first pass.** The stand-in salt for an unknown
+id was derived under a secret each process invented at startup - fine within one
+sitting, the opposite across a restart, because a real account's salt never
+changes and a made-up one's changed every time. It now comes from FIX_06's
+ServerSecret, read once per run. And the three message structs assert their own
+sizes (32, 40, 68), compiled on both the 32-bit MSVC server and the 64-bit clang
+client: both ends check dwSize before reading, so a drifted layout would not
+crash, it would silently fall back forever.
+
 **Still open:** the challenge path itself has never run end to end, because no
 server is running the new agent. It needs DB/FIX_06 applied and the new
 ServerAgent deployed - both are your call, and nothing breaks if neither
