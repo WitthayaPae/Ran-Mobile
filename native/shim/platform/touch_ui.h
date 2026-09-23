@@ -102,6 +102,13 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
 //  2 the chat icon that brings it back. One button in two states rather than
 //  two buttons, so it stays in the same place across the fold: the icon comes
 //  up under the thumb that just put the chat away.
+//  In mode 1 the button is a small plate on the window frame rather than a
+//  round control, and this is its half-width as a multiple of the half-height
+//  the client passes in `r`. Shared because the client places it by its RIGHT
+//  edge - 5 units in from the chat's - and only the overlay knows how wide it
+//  draws.
+#define RANTOUCH_CHATBAR_ASPECT 1.75f
+
 extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode);
 
 //  Which skill page the tray is showing, 1..4, for the page readout.

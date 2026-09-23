@@ -88,7 +88,14 @@ lands on a client control straight to the client, so windows are not eaten by th
 pad. This button sits ON the chat's frame on purpose, so it is tested before that
 rule - the first and only overlay button that is.
 
-The mark is drawn as vector art for now: a chevron while the chat is open, a
+**Shaped by review.** A steel disc with an arrow on it read as one more thumb
+button parked on the chat, so open it is now the window's own corner control: a
+chamfered plate straddling the top edge with a minimise bar across it, its right
+edge 5 units in from the window's. Folded, it moves down beside the ride button
+and level with it - the chat is not on screen any more to hang anything on, and
+that row is where the thumb already goes.
+
+The mark is drawn as vector art for now: the bar while the chat is open, a
 speech bubble while it is folded. `MOBILE/ICON-BRIEF.md` carries the prompt for
 the painted `chat.png`, which drops into `mobile_hud.dds` beside the other round
 controls when it exists.

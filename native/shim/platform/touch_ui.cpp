@@ -888,9 +888,11 @@ void layout() {
     //  corner, and smaller than a thumb control because it sits on the window
     //  frame rather than out on the glass.
     g_buttons[kBtnChat].slot     = kSlotChat;
-    g_buttons[kBtnChat].radius   = ( g_chatFracR > 0.0f )
-                                 ? g_chatFracR * (float) g_height
-                                 : modeR * 0.58f;
+    //  Folded, it is a round control the size of the ride button beside it;
+    //  open, it is the plate on the chat's frame and the client sizes it.
+    g_buttons[kBtnChat].radius   = ( g_chatMode == 2 || g_chatFracR <= 0.0f )
+                                 ? modeR
+                                 : g_chatFracR * (float) g_height;
     g_buttons[kBtnChat].centre.x = g_chatFracX * (float) g_width;
     g_buttons[kBtnChat].centre.y = g_chatFracY * (float) g_height;
 
@@ -1327,7 +1329,11 @@ int RanTouch_PointerDown(int id, float x, float y) {
     //  window on purpose, so it is the one that answers before the rule.
     if (g_chatMode != 0) {
         Button &bc = g_buttons[kBtnChat];
-        if (bc.pointer < 0 && hit(bc.centre, bc.radius, x, y)) {
+        const bool onIt = (g_chatMode == 1)
+            ? (fabsf(x - bc.centre.x) <= bc.radius * RANTOUCH_CHATBAR_ASPECT &&
+               fabsf(y - bc.centre.y) <= bc.radius)
+            : hit(bc.centre, bc.radius, x, y);
+        if (bc.pointer < 0 && onIt) {
             bc.pointer = id;
             bc.down = true;
             bc.pressedEdge = true;
@@ -2453,15 +2459,10 @@ void glyphMark(const Button &b, float a) {
         drawRect(b.centre.x + g2*0.5f,      b.centre.y + g2*0.5f,      s2, s2, c.r, c.g, c.b, c.a);
     }
     else if (b.slot == kSlotChat) {
-        //  Two marks on one button, because it is one button in two states.
-        //
-        //  Open, it folds the chat away and the mark says which way it goes: a
-        //  chevron pointing down at the foot of the screen. Folded, it is the
-        //  chat itself - a speech bubble with its tail - so the thing that
-        //  brings the chat back looks like chat and not like a control.
-        if (g_chatMode == 1) {
-            drawTri(b.centre.x, b.centre.y, R * 0.46f, 1.0f, c.r, c.g, c.b, c.a);
-        } else {
+        //  Folded: the button IS the chat, so it wears a speech bubble rather
+        //  than an arrow - what brings the chat back should look like chat.
+        //  (Open, it is a plate with a bar and never reaches this.)
+        {
             const float bw = R * 0.62f, bh = R * 0.44f;
             drawRect(b.centre.x - bw, b.centre.y - bh * 1.15f,
                      bw * 2.0f, bh * 1.7f, c.r, c.g, c.b, c.a);
@@ -2942,6 +2943,28 @@ void RanTouch_Render(void) {
             continue;
         }
 
+        //  Open, the chat button is not a round control at all: it is the
+        //  window's own corner control, so it is drawn as a plate on the frame
+        //  with a minimise bar across it. A steel disc with an arrow on it read
+        //  as one more thumb button sitting on the chat.
+        if (b.slot == kSlotChat && g_chatMode == 1) {
+            const float hw = R * RANTOUCH_CHATBAR_ASPECT, hh = R;
+            const float x0 = b.centre.x - hw, y0 = b.centre.y - hh;
+            const float cut = hh * 0.45f;
+            const float a = b.down ? 1.0f : 0.92f;
+            drawChamfer(x0, y0, hw * 2.0f, hh * 2.0f, cut,
+                        kFaceE.r, kFaceE.g, kFaceE.b, a);
+            drawChamfer(x0 + 1.5f, y0 + 1.5f, hw * 2.0f - 3.0f, hh * 2.0f - 3.0f,
+                        cut, kFace.r, kFace.g, kFace.b, a);
+            //  The bar: what every window in reach of a thumb uses for "put
+            //  this away", and the one mark that cannot be read as anything
+            //  else at this size.
+            const float bw = hw * 0.92f, bh = hh * 0.17f;
+            drawRect(b.centre.x - bw, b.centre.y - bh, bw * 2.0f, bh * 2.0f,
+                     kInk.r, kInk.g, kInk.b, a);
+            continue;
+        }
+
         if (b.toggled) {
             bloom(b.centre.x, b.centre.y, R, state, 0.26f);
             chromeDisc(b.centre.x, b.centre.y, R, 1.0f,
@@ -3233,7 +3256,9 @@ extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode) {
         g_buttons[kBtnChat].slot     = kSlotChat;
         g_buttons[kBtnChat].centre.x = cx * (float) g_width;
         g_buttons[kBtnChat].centre.y = cy * (float) g_height;
-        if (r > 0.0f) g_buttons[kBtnChat].radius = r * (float) g_height;
+        g_buttons[kBtnChat].radius = ( mode == 2 || r <= 0.0f )
+                                   ? g_buttons[3].radius       //  a mode toggle
+                                   : r * (float) g_height;
     }
 }
 
