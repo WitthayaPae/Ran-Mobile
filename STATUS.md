@@ -12,6 +12,43 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-24 (1) — The challenge login, and the hash checked against production
+
+The account leak found in the security review is being closed the cheap way: the
+password stops crossing the wire, and nothing else about the protocol changes.
+
+**How it works.** The server sends the account's salt and a nonce chosen for that
+connection; the client computes `UserPassHash` - the salted, 1000-round SHA-256
+the database already stores (DB/FIX_03) - and answers with
+`HMAC-SHA256(hash, nonce)`. The server holds that hash, so it can check the
+answer without ever holding the password. A capture is worth nothing: the nonce
+is used once and the hash itself is never sent.
+
+**Verified against the live database**, not inferred. `fn_PassHash` on the
+production server (SQL Server 2019) and `RanPassHash` in the client agree byte
+for byte on every case, including the trailing-space one that FIX_05 records:
+
+    abc      36cf56011cff8fb8bb96d2a131f472e3823cb1b37dae413499db0ca0d7500095
+    "abc   " 36cf56011cff8fb8bb96d2a131f472e3823cb1b37dae413499db0ca0d7500095
+    " lead"  a16fc20a324fe22c16eff25e3857143d74b141ee1d3c193c687bf40ac610e7fd
+    1234     0b78de26de9bb52ffa327d7097176ec26a0318e7d0f8e577af5f89ee6a812d9e
+
+The live account table is one row and it is hashed, so there is nothing to
+migrate.
+
+**One thing this development machine nearly hid.** It runs SQL Server 2008 R2,
+where `HASHBYTES('SHA2_256', ...)` returns NULL - so `fn_PassHash` yields NULL
+here and the hashing looks broken. The live server is 2019 and is fine. The
+lesson stuck anyway: the hash is computed by the SERVER (RanPassHash), not by
+SQL, so the login does not depend on the database's version at all. On 2012 and
+up the bytes are identical, which is what the table above proves.
+
+**Built so far:** the hash primitive, the three wire messages, the client half,
+DB/FIX_06 (user_challenge_fetch, user_verify_hashed) and the ODBC layer
+(ChallengeFetch, SetPassHash, UserCheckHashed). Still to come: the two handlers
+in the agent server, the client's login flow with a fallback to the old message,
+and an end-to-end test.
+
 ## 2026-09-23 (9) — End-to-end pass on the shipping build, and the one thing it caught
 
 Everything today had been verified one change at a time. One pass over the build

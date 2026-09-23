@@ -1,6 +1,7 @@
 # Client-side subset only. Lib_Network is shared with the servers; the ODBC,
 # IOCP and *ServerThread files are server code and are not built for mobile.
 set(Lib_Network_SOURCES
+  ${RAN_SRC}/Lib_Network/s_PassHash.cpp
   ${RAN_SRC}/Lib_Network/s_NetClient.cpp
   ${RAN_SRC}/Lib_Network/s_NetClientMsg.cpp
   ${RAN_SRC}/Lib_Network/s_NetClientMsgDelCharacter.cpp
