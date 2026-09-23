@@ -87,9 +87,21 @@ of the whole solution first needed one build fix: Lib_Engine's include path had
 `Tik/Lua` where lua.h lives in `Tik/Lua/include`, which only ever showed up in a
 from-scratch build.
 
-**Still open:** the challenge path has not run end to end, because the new agent
-is not deployed yet. Until it is, clients wait three seconds and fall back -
-which is measured, above.
+**It runs end to end on live.** With the new ServerAgent deployed, the shipping
+APK logged in without the password leaving the device:
+
+    RanChal : salt asked (channel 0)
+    RanChal : salt answered - sending the challenge
+    RanLogin: result=0                      <- no fallback line, in as Test01
+
+That is the whole feature working: salt and nonce out, HMAC back, and the
+account's password never on the wire.
+
+**Shipped as store version 542** (APK versionCode 148 / iOS 1.0.148, minIos 148).
+The upload set is 4 blobs, 50.5 MB - the APK, the HUD atlas and the two ini
+files - plus ios/ (RanLegacyM.ipa 11.3 MB, source.json) and the manifest. The
+iOS binary was checked for a string only this build contains before publishing
+it, and its Info.plist reads 1.0.148.
 
 ## 2026-09-23 (9) — End-to-end pass on the shipping build, and the one thing it caught
 
