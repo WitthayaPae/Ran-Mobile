@@ -139,6 +139,10 @@ over the interface for exactly the same reason. The press was never the problem:
 that is claimed before the "a window on top gets it" rule, which is what let the
 button work at all while it was invisible behind the chat.
 
+Its right edge is 16 units in from the window's, not 5: the scroll bar owns the
+last ten or so and has its own button at the top, and the plate was sitting on
+it.
+
 Folded, the icon parks on the RIGHT of the ride button. `MOBILE/ICON-BRIEF.md` carries the prompt for
 the painted `chat.png`, which drops into `mobile_hud.dds` beside the other round
 controls when it exists.
