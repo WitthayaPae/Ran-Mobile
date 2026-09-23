@@ -27,8 +27,13 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.view.View;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -118,7 +123,7 @@ public class RanLauncher extends Activity {
     private static final String TAG = "RanPatch";
 
     private TextView status, detail;
-    private ProgressBar bar;
+    private PatchBar bar;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override protected void onCreate(Bundle b) {
@@ -217,13 +222,12 @@ public class RanLauncher extends Activity {
         status.setTextColor(Color.parseColor("#F0F4F6"));
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         status.setGravity(Gravity.CENTER);
-        status.setText("Starting");
+        status.setText("กำลังเริ่ม");
         band.addView(status);
 
-        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(1000);
+        bar = new PatchBar(this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
         lp.topMargin = dp(10);
         bar.setLayoutParams(lp);
         band.addView(bar);
@@ -383,43 +387,165 @@ public class RanLauncher extends Activity {
         ui.post(new Runnable() { public void run() {
             if (s != null) status.setText(s);
             if (d != null) detail.setText(d);
-            if (permille >= 0) { bar.setIndeterminate(false); bar.setProgress(permille); }
-            else bar.setIndeterminate(true);
+            bar.setPermille(permille);
         }});
+    }
+
+    /*  The progress bar, which never stops moving.
+     *
+     *  It was a plain horizontal ProgressBar: a filled rectangle and nothing
+     *  else. A patch spends most of its time inside one file - a 400 MB blob is
+     *  one step of the count - and during that the fill does not move at all,
+     *  so the screen looks frozen and the player force-closes a download that
+     *  was working. This draws the same fill and sweeps a highlight along it,
+     *  every frame, whatever the number is doing: the page says "still here"
+     *  without claiming progress it has not made.
+     *
+     *  With no number to show at all (busy), the highlight sweeps the whole
+     *  track instead, which is the indeterminate case the old bar had.
+     */
+    private static final class PatchBar extends View {
+        private float mFill = 0.0f;              //  0..1, -1 while busy
+        private boolean mBusy = true;
+        private long mT0 = 0;
+        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF mR = new RectF();
+
+        PatchBar(Context c) { super(c); }
+
+        /*  Redrawn from a ticker, not from inside onDraw.
+         *
+         *  postInvalidateOnAnimation() at the end of onDraw is the obvious way
+         *  to write this and it does not work here: measured on the device,
+         *  the bar's pixels were byte for byte identical across four frames
+         *  while the countdown text beside it changed on every one. An
+         *  invalidate issued while the view is being drawn is swallowed. A
+         *  posted Runnable is outside that pass, so it schedules the next
+         *  frame properly, and it stops when the view leaves the window.     */
+        private final Runnable mTick = new Runnable() {
+            public void run() { invalidate(); postDelayed(this, 16); }
+        };
+
+        @Override protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            post(mTick);
+        }
+
+        @Override protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            removeCallbacks(mTick);
+        }
+
+        void setPermille(int permille) {
+            if (permille < 0) { mBusy = true; }
+            else { mBusy = false; mFill = permille / 1000.0f; }
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            final float w = getWidth(), h = getHeight();
+            if (w <= 0.0f || h <= 0.0f) return;
+            if (mT0 == 0) mT0 = System.nanoTime();
+            final float t = (float)((System.nanoTime() - mT0) / 1e9);
+            final float r = h * 0.5f;
+
+            //  The track.
+            mPaint.setShader(null);
+            mPaint.setColor(0xFF1B2126);
+            mR.set(0, 0, w, h);
+            cv.drawRoundRect(mR, r, r, mPaint);
+
+            //  The progress, in the game's own gold. Honest: it is the number
+            //  the patcher gave, and nothing animates it.
+            final float fill = mBusy ? 0.0f : w * (mFill < 0.0f ? 0.0f : mFill);
+            if (fill > 1.0f) {
+                mPaint.setColor(0xFFC9962B);
+                mR.set(0, 0, fill, h);
+                cv.drawRoundRect(mR, r, r, mPaint);
+            }
+
+            //  And the part still to do carries the movement.
+            //
+            //  One bar doing both jobs: the fill says how far along this is,
+            //  the sweep runs along what is LEFT of it, so the page is visibly
+            //  alive without ever claiming progress it has not made. A patch
+            //  spends minutes inside one big file with the number motionless,
+            //  and that is exactly when a player decides it has hung.
+            //
+            //  Before a number exists at all the fill is zero, so the sweep has
+            //  the whole track - which is the indeterminate case, for free.
+            final float rest = w - fill;
+            if (rest > 2.0f) {
+                cv.save();
+                mR.set(fill, 0, w, h);
+                cv.clipRect(mR);
+
+                final float band = Math.min(rest, w * 0.28f);
+                final float span = rest + band;
+                final float x = fill + ((t / 1.5f) % 1.0f) * span - band;
+                mPaint.setShader(new LinearGradient(x, 0, x + band, 0,
+                        new int[] { 0x00C9962B, 0x55C9962B, 0x00C9962B },
+                        new float[] { 0.0f, 0.5f, 1.0f }, Shader.TileMode.CLAMP));
+                mR.set(0, 0, w, h);
+                cv.drawRoundRect(mR, r, r, mPaint);
+                mPaint.setShader(null);
+                cv.restore();
+            }
+
+            //  A bright head where the two meet, so the eye finds the number's
+            //  edge even while the sweep is at the far end.
+            if (fill > 1.0f && fill < w - 1.0f) {
+                mPaint.setColor(0xFFF2D493);
+                mR.set(fill - h * 0.35f, 0, fill, h);
+                cv.drawRect(mR, mPaint);
+            }
+        }
     }
 
     /* --------------------------------------------------------------- patch */
 
     private void patchThenPlay() {
-        try {
-            adoptPrivateRoot();
-            patch();
-        } catch (Throwable t) {
-            /*  A patch failure must not be fatal when the game is already
-             *  installed - a player on a bad connection should still get in. */
-            /*  The reason goes to the log, not to the screen. It carries URLs,
-             *  host names and file paths, and this screen is the first thing a
-             *  player screenshots when something goes wrong.                  */
-            Log.e(TAG, "patch failed", t);
-            /*  A short, safe reason on the screen.
-             *
-             *  "Could not reach the update server" is this catch, and this
-             *  catch is every failure in patch(): a refused certificate, a
-             *  full disk, an HTTP status, a signature that did not verify.
-             *  They need different answers, and the screen said the same words
-             *  for all of them - which cost a round trip to find out which it
-             *  was. The class name and the status number say that much and
-             *  carry no URL, host or path; the detail stays in the log.      */
-            final String why = reasonCode(t);
-            if (new File(ROOT, "data/glogic/GLogic.rcc").exists()) {
-                say("Could not reach the update server",
-                    "Starting with the data already installed.  (" + why + ")", 1000);
-                sleep(1800);
-            } else {
-                fail("Could not download the game data",
-                     "The update server could not be reached.\nCheck your connection and try again."
-                     + "\n\nReason: " + why);
-                return;
+        /*  The game does not start until the patch has been applied.
+         *
+         *  It used to: a failure here with the data already on disk said "could
+         *  not reach the update server" for a second and then played anyway. On
+         *  a client whose version does not match the server's that is a worse
+         *  outcome than waiting - the player gets in, plays against packets
+         *  they do not understand, and reads the symptoms as the game being
+         *  broken. And whether the versions match is exactly what this screen
+         *  cannot answer while the server is unreachable: the local .patchver
+         *  is the version we last applied, not the one that is current.
+         *
+         *  So a failure waits and tries again, with the number of seconds on
+         *  screen so it is visibly waiting rather than stuck, and the wait
+         *  grows to half a minute. It clears itself the moment the connection
+         *  comes back; nothing here needs the player to do anything but be
+         *  online. fail() is the other ending - the APK being too old is a
+         *  hard stop, and it has already said so.                            */
+        int wait = 5;
+        for (;;) {
+            try {
+                adoptPrivateRoot();
+                patch();
+                break;
+            } catch (Throwable t) {
+                /*  The reason goes to the log, not to the screen. It carries
+                 *  URLs, host names and file paths, and this screen is the
+                 *  first thing a player screenshots when something goes wrong.
+                 *
+                 *  What does go on screen is the class name and, for an HTTP
+                 *  failure, the status - enough to tell a refused certificate
+                 *  from a full disk from a 404 without a round trip, and it
+                 *  names no host and no path.                                */
+                Log.e(TAG, "patch failed", t);
+                if (mFatal) return;            //  fail() has already spoken
+                final String why = reasonCode(t);
+                for (int left = wait; left > 0; --left) {
+                    say("เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้",
+                        "จะลองใหม่ใน " + left + " วินาที กรุณาตรวจสอบอินเทอร์เน็ต  (" + why + ")", -1);
+                    sleep(1000);
+                }
+                say("กำลังเชื่อมต่ออีกครั้ง", null, -1);
+                if (wait < 30) wait += 5;
             }
         }
         play();
@@ -469,7 +595,7 @@ public class RanLauncher extends Activity {
      *  interrupted migration leaves the private root without it, so the next
      *  run starts again rather than running against half a tree.             */
     private boolean migrate(File legacy, File priv) {
-        say("Moving game data", "one-off, into private storage", -1);
+        say("กำลังย้ายข้อมูลเกม", "ครั้งเดียว ไปยังพื้นที่ส่วนตัวของแอป", -1);
 
         String[] names = legacy.list();
         if (names == null) return false;
@@ -484,7 +610,7 @@ public class RanLauncher extends Activity {
         long free = priv.getUsableSpace();
         if (free < need + (64L << 20)) {
             Log.w(TAG, "migration needs " + mb(need) + ", only " + mb(free) + " free");
-            say("Not enough free space", "need " + mb(need) + ", have " + mb(free), 1000);
+            say("พื้นที่ว่างไม่พอ", "ต้องการ " + mb(need) + " มีอยู่ " + mb(free), 1000);
             sleep(2500);
             return false;
         }
@@ -551,7 +677,7 @@ public class RanLauncher extends Activity {
         //  screen should not hand anyone the patch address. It goes to the log,
         //  which is where someone diagnosing a patch failure is looking anyway.
         Log.i(TAG, "patch base " + base());
-        say("Checking for updates", null, -1);
+        say("กำลังตรวจสอบอัปเดต", null, -1);
 
         /*  Fetched as bytes and checked before being parsed: a JSON parser is
          *  the first thing an attacker reaches, so it must not run on anything
@@ -573,9 +699,9 @@ public class RanLauncher extends Activity {
         if (minApk > myApk) {
             /*  A data patch cannot fix a client whose packet layout is stale,
              *  so this is a hard stop rather than a warning. */
-            fail("This version of RAN is out of date",
-                 "The server needs app version " + minApk + ", this is " + myApk +
-                 ".\nDownload the new APK and install it over this one.");
+            fail("เวอร์ชันแอปเก่าเกินไป",
+                 "เซิร์ฟเวอร์ต้องการแอปเวอร์ชัน " + minApk + " แต่เครื่องนี้เป็น " + myApk +
+                 "\nกรุณาติดตั้งไฟล์ APK ใหม่ทับของเดิม");
             throw new Exception("apk too old");
         }
 
@@ -589,7 +715,7 @@ public class RanLauncher extends Activity {
             throw new Exception("cannot create " + ROOT);
 
         int localVersion = readVersion();
-        if (localVersion == version) { say("Up to date", "version " + version, 1000); return; }
+        if (localVersion == version) { say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + version, 1000); return; }
 
         /*  Never go backwards.
          *
@@ -607,7 +733,7 @@ public class RanLauncher extends Activity {
         List<String[]> todo = new ArrayList<String[]>();  //  {path, sha, size}
         long todoBytes = 0;
 
-        say("Checking files", arr.length() + " files", 0);
+        say("กำลังตรวจสอบไฟล์", arr.length() + " ไฟล์", 0);
         for (int i = 0; i < arr.length(); i++) {
             JSONObject e = arr.getJSONObject(i);
             String p = e.getString("path");
@@ -644,16 +770,16 @@ public class RanLauncher extends Activity {
         if (todo.isEmpty()) {
             writeIndexFrom(arr, rootDir);
             writeVersion(version);
-            say("Up to date", "version " + version, 1000);
+            say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + version, 1000);
             return;
         }
 
-        say("Downloading update", todo.size() + " files, " + mb(todoBytes), 0);
+        say("กำลังดาวน์โหลดอัปเดต", todo.size() + " ไฟล์, " + mb(todoBytes), 0);
         downloadAll(todo, rootDir, todoBytes, base() + "blobs/");
 
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
-        say("Updated", "version " + version, 1000);
+        say("อัปเดตเสร็จแล้ว", "เวอร์ชัน " + version, 1000);
     }
 
     /*  The key the manifest must be signed with.
@@ -1034,12 +1160,16 @@ public class RanLauncher extends Activity {
         return sb.toString();
     }
 
+    /*  Set by fail(): this run is over, and the retry loop must not restart it. */
+    private volatile boolean mFatal = false;
+
     private void fail(final String title, final String msg) {
+        mFatal = true;
         ui.post(new Runnable() { public void run() {
             bar.setVisibility(ViewGroup.INVISIBLE);
             new AlertDialog.Builder(RanLauncher.this)
                 .setTitle(title).setMessage(msg).setCancelable(false)
-                .setPositiveButton("Close", null).show();
+                .setPositiveButton("ปิด", null).show();
             status.setText(title);
             detail.setText(msg);
         }});
@@ -1102,8 +1232,8 @@ public class RanLauncher extends Activity {
          *  of the game.                                                       */
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && !getPackageManager().canRequestPackageInstalls()) {
-            say("Update available", what + " is ready, but this app may not install it.\n" +
-                "Allow it under Install unknown apps, then restart.", -1);
+            say("มีอัปเดตใหม่", what + " พร้อมแล้ว แต่แอปนี้ติดตั้งเองไม่ได้\n" +
+                "อนุญาตใน ติดตั้งแอปที่ไม่รู้จัก แล้วเปิดเกมใหม่", -1);
             try {
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                                          Uri.parse("package:" + getPackageName())));
@@ -1112,7 +1242,7 @@ public class RanLauncher extends Activity {
             return false;
         }
 
-        say("Downloading update", what + ", " + mb(size), 0);
+        say("กำลังดาวน์โหลดอัปเดต", what + ", " + mb(size), 0);
 
         PackageInstaller pi = getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams sp =
@@ -1155,7 +1285,7 @@ public class RanLauncher extends Activity {
         } catch (Throwable t) {
             session.abandon();
             Log.e(TAG, "apk update failed", t);   //  reason to the log, not the screen
-            say("Update failed", "Continuing on the installed version", -1);
+            say("อัปเดตไม่สำเร็จ", "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
             sleep(2500);
             return false;                              //  the old binary still works
         }
@@ -1208,14 +1338,14 @@ public class RanLauncher extends Activity {
             if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
             PendingIntent pe = PendingIntent.getBroadcast(this, sessionId, i, flags);
 
-            say("Installing update", what + "\nConfirm the install when asked.", -1);
+            say("กำลังติดตั้งอัปเดต", what + "\nกดยืนยันการติดตั้งเมื่อระบบถาม", -1);
             session.commit(pe.getIntentSender());
             session.close();
 
             /*  Generous: the prompt waits on a human. If it expires the app is
              *  simply left as it was.                                         */
             if (!done.await(5, TimeUnit.MINUTES)) {
-                say("Update not confirmed", "Continuing on the installed version", -1);
+                say("ยังไม่ได้ยืนยันการติดตั้ง", "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
                 sleep(2000);
                 return false;
             }
@@ -1224,11 +1354,11 @@ public class RanLauncher extends Activity {
         }
 
         if (status[0] == PackageInstaller.STATUS_SUCCESS) {
-            say("Updated", what + " installed", 1000);
+            say("อัปเดตเสร็จแล้ว", "ติดตั้ง " + what + " แล้ว", 1000);
             return true;                     //  the process is about to be replaced
         }
         Log.w(TAG, "install not completed: status " + status[0] + " " + why[0]);
-        say("Update not installed", why[0] + "\nContinuing on the installed version", -1);
+        say("ติดตั้งอัปเดตไม่สำเร็จ", why[0] + "\nจะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
         sleep(2500);
         return false;
     }

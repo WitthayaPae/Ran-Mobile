@@ -12,6 +12,56 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (7) — The patch page: one bar that both measures and moves, in Thai, and no way past it
+
+"when it loading the loading bar load it should be something like loading
+animation because right now when it struck somewhere it make like it did not
+work", "text should be in Thai", and "if we check user did not have version same
+as server it should force user to patch not to continue if can not connect to
+patch server". Then, on seeing the first cut: "we can do the progress bar and
+animation bar same... the right side the empty where the progress bar have to
+load we make it animation bar".
+
+**One bar, two jobs.** The gold fill is the number the patcher gave and nothing
+animates it; the sweep runs along what is LEFT of it, clipped to the remainder.
+So the page is visibly alive without ever claiming progress it has not made -
+which matters because a patch spends minutes inside one big file with the number
+motionless, and that is exactly when a player decides it has hung. Before there
+is a number at all the fill is zero and the sweep has the whole track, so the
+indeterminate case falls out of the same rule.
+
+**It had to be ticked from outside onDraw.** `postInvalidateOnAnimation()` at the
+end of `onDraw` is the obvious way to write it and it does not work: measured on
+the device, the bar's pixels were byte for byte identical across four frames
+while the countdown text beside it changed on every one. An invalidate issued
+while the view is being drawn is swallowed. A posted Runnable at 16 ms is
+outside that pass and schedules properly; it stops when the view leaves the
+window.
+
+**Thai throughout** - every string the launcher can show, from "กำลังเริ่ม" to
+the APK-too-old stop. Numbers, sizes and the reason code stay as they are.
+
+**And the game no longer starts on a failed patch.** It used to: a failure with
+data already on disk said so for a second and played anyway. On a client whose
+version does not match the server's that is worse than waiting - the player gets
+in, plays against packets they do not understand, and reads the symptoms as the
+game being broken. Whether the versions match is exactly what the launcher
+cannot know while the server is unreachable: the local `.patchver` is the
+version last applied, not the current one. A failure now waits and retries, with
+the seconds counted on screen and the wait growing to half a minute, and clears
+itself when the connection returns. `fail()` still ends the run for good - the
+APK being too old is a hard stop.
+
+**Measured on the device**, by pointing `.patchbase` at a dead host and by
+deleting `textures/gui/*.dds` to force a real 180 MB download:
+
+| what | result |
+|---|---|
+| dead host | `เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้ \| จะลองใหม่ใน 5 วินาที ... (ConnectException)`, counting down, game never launched |
+| sweep moving | peak at x=1189, 1203, 1197, 1399 across four frames |
+| fill + sweep together | 8% gold with the sweep at x≈1200-1700; a moment later 30% gold, bright head at its edge, sweep at x≈1500-1900 |
+| after the patch | version 540 written, 500 GUI textures restored, login page up |
+
 ## 2026-09-23 (6) — The quick slot's sheet opens on the hold, not on the release
 
 "long press on the potion slot do not need to wait untill I let go to show the
