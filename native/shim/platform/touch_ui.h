@@ -121,10 +121,14 @@ extern "C" void RanTouch_SetSkillPage(int page);
 //  off the control the icon was taken from.
 //  The potion tray's slots, drawn round to match the skill slots. Same shape
 //  of hand-over: the client owns the slots and says where they are.
+//  dim[i] is the PC's own fade: the client draws a quick slot's picture at
+//  alpha 160/255 when the bag no longer holds the item it is bound to - which
+//  is what the player sees the moment they pick that item up. 1.0 is full.
 extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
                                         const float *cx, const float *cy, const float *r,
                                         const float *u0, const float *v0,
-                                        const float *u1, const float *v1);
+                                        const float *u1, const float *v1,
+                                        const float *dim);
 
 //  The corner icons - quest box, small party frame - and what the editor did
 //  to them. Set by the client each frame, read back by it the next.

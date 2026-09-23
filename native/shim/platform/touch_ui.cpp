@@ -1086,6 +1086,8 @@ float g_potX[kPotMax] = { 0 }, g_potY[kPotMax] = { 0 }, g_potRad[kPotMax] = { 0 
 float g_potU0[kPotMax] = { 0 }, g_potV0[kPotMax] = { 0 };
 float g_potU1[kPotMax] = { 0 }, g_potV1[kPotMax] = { 0 };
 float g_potTW[kPotMax] = { 0 }, g_potTH[kPotMax] = { 0 };
+//  The client's own fade for a slot whose item the bag no longer holds.
+float g_potDim[kPotMax] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 int   g_potCount = 0;
 
 bool groupCircle(int g, Vec2 &c, float &r) {
@@ -2002,7 +2004,8 @@ void drawIcons(float w, float h) {
 extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
                                         const float *cx, const float *cy, const float *r,
                                         const float *u0, const float *v0,
-                                        const float *u1, const float *v1) {
+                                        const float *u1, const float *v1,
+                                        const float *dim) {
     if (count < 0) count = 0;
     if (count > 8) count = 8;
     g_potCount = count;
@@ -2015,6 +2018,7 @@ extern "C" void RanTouch_SetPotionIcons(int count, const unsigned *tex,
         g_potV0[i]  = v0 ? v0[i] : 0.0f;
         g_potU1[i]  = u1 ? u1[i] : 1.0f;
         g_potV1[i]  = v1 ? v1[i] : 1.0f;
+        g_potDim[i] = dim ? dim[i] : 1.0f;
         //  The renderer's own record, not the driver's.
         //
         //  glGetTexLevelParameteriv does not exist on iOS's GLES2 headers, and
@@ -3090,9 +3094,11 @@ void RanTouch_Render(void) {
         if (g_texProg) {
             glUseProgram(g_texProg);
             glUniform2f(uTexViewport, (float)g_width, (float)g_height);
-            glUniform1f(uTexAlpha, pa);
             glUniform1i(uTexSampler, 0);
             for (int i = 0; i < g_potCount; ++i) {
+                //  Per icon, because the fade is per slot: the one whose potion
+                //  is in the hand goes dim while the rest stay lit.
+                glUniform1f(uTexAlpha, pa * g_potDim[i]);
                 //  An empty slot is a bezel and nothing else - the row keeps
                 //  its full length so a potion dropped into slot 5 does not
                 //  make the whole row jump.

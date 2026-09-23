@@ -12,6 +12,39 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (3) — The round potion slots never faded, and the macro buttons were a mouse's size
+
+"when I pick up item in the inventory that use in the potion slot it did not
+fade like pc version", and "the quick chat btn on top of the chat box... it's
+hard to click on the phone".
+
+**The fade.** `CBasicQuickPotionSlot::SetItem` draws a bound slot's picture at
+alpha 160/255 when the bag holds none of that item - which is exactly what the
+player sees the moment they pick the last stack up, because a carried item is
+out of the bag and in the hand. The square slot still does this; the round row
+does not draw through that control at all - the overlay draws the picture from a
+texture handle the client hands over - so the fade was simply not carried across.
+`RanTouch_SetPotionIcons` now takes a `dim` per icon, and the alpha uniform is
+set per icon inside the loop rather than once for the row, because the fade is
+per slot. The client fills it from `GetAmountActionQ`, which is the same number
+the PC's rule reads.
+
+Verified on the device: with a green potion in hand, both slots bound to it went
+dim while the red and blue ones beside them stayed lit; putting it back lit them
+again.
+
+**The macro buttons.** 28 x 19 layout units - about 6 x 4 mm on a phone, and the
+row is short in the direction that matters. The art stays (it is the chat's own
+tab skin, in a row against the chat's edge) and only the rectangle the press is
+tested against grows, which is what `SetTouchPad` was added for. It grew per
+axis: `SetTouchPadXY(1, 9)`, because the gap between buttons is 3 and a wide pad
+would only hand taps to the neighbour. `CUIControl` keeps a second pad for Y;
+where it is not set, it falls back to the old single value, so nothing else
+moves.
+
+Measured, not felt: a tap 10 px above the button's top edge sends the macro
+(`[Test01]:1` in the log), a tap 40 px above it does not.
+
 ## 2026-09-23 (2) — The quick-potion row was half again the size of the PC's
 
 "the potion slot I see that it's bigger then the original one and too much space
