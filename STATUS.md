@@ -12,6 +12,39 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (5) — "แสดง FX ไอเท็มบนพื้น" is gone from the options, and the effect with it
+
+"remove the setting แสดง FX ไอเท็ม we do not need that for mobile and disable
+this feature for mobile".
+
+**The label and the flag are one row apart in this build.** The video page builds
+three check boxes in order - CLICK_EFFECT, TARGET_EFFECT, MINE_EFFECT at authored
+Y 235, 260, 285 - and labels the three statics beside them with gameword
+`HWOPTION_VIDEO_OPTION` 12, 13, 14: "show the selected NPC", "show item FX on the
+ground", "show the target on the ground". The flags themselves say otherwise:
+`bClickEffect` drives the click marker, `bTargetEffect` the target effect, and
+`bMineEffect` is the one that hangs `strMINE_EFFECT` on every item lying on the
+ground (`GLLandManClient.cpp:461`). So the box in the row that READS "item FX"
+toggles the target effect, and the item glow is toggled by the box in the row
+below it.
+
+So both rows come off the mobile page: the one that was named, and the one that
+actually switches the feature being disabled - otherwise the page would keep a
+box that does nothing. Not created rather than hidden, the lesson the potion
+tray's own buttons recorded: an invisible check box still takes the tap. The two
+pointers are now NULLed in the constructor, which they never were, and every use
+tests them.
+
+**The effect is off with no switch.** It is a passive effect per dropped item,
+alive as long as the item is, and a field after a fight carries dozens - fill the
+phone pays for every frame, for a marker it does not need, since the pick-up
+button finds the nearest item itself. `bMineEffect` is forced FALSE after the
+options file is read (so a settings file written by the PC client still parses
+line for line) and the attach site is compiled out.
+
+Verified on the device: the video page now ends at "แสดงNPCที่เลือก", and
+ตกลง applies and closes with no crash - which is what the NULL guards are for.
+
 ## 2026-09-23 (4) — A tap on bare ground now lets the target go
 
 "when user click on the empty place like other places on the map or on the
