@@ -62,6 +62,7 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot);
 #define RANTOUCH_SLOT_MENU        (-9)
 #define RANTOUCH_SLOT_F3          (-10)
 #define RANTOUCH_SLOT_F4          (-11)
+#define RANTOUCH_SLOT_CHAT        (-12)
 
 //  Where the client put its quick-skill slots, as fractions of the surface, so
 //  the overlay can draw a round rim over each one.
@@ -94,6 +95,14 @@ extern "C" void RanTouch_SetToggle(int slot, int on);
 //  so it comes out identical to the attack ring and the mode toggles rather
 //  than merely similar to them.
 extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
+
+//  Where to put the chat button, and which one it is.
+//
+//  mode 0 hides it, 1 draws the collapse control that folds the chat away, and
+//  2 the chat icon that brings it back. One button in two states rather than
+//  two buttons, so it stays in the same place across the fold: the icon comes
+//  up under the thumb that just put the chat away.
+extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode);
 
 //  Which skill page the tray is showing, 1..4, for the page readout.
 extern "C" void RanTouch_SetSkillPage(int page);

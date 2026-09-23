@@ -162,6 +162,7 @@ const int kSlotPickup   = RANTOUCH_SLOT_PICKUP;
 const int kSlotCamLock  = RANTOUCH_SLOT_CAMLOCK;
 const int kSlotVehicle  = RANTOUCH_SLOT_VEHICLE;
 const int kSlotMenu     = RANTOUCH_SLOT_MENU;
+const int kSlotChat     = RANTOUCH_SLOT_CHAT;
 
 //  Attack, four skill-page buttons, the auto-target and PK toggles, pick-up,
 //  camera lock, the ride button, and the menu.
@@ -170,13 +171,21 @@ const int kSlotMenu     = RANTOUCH_SLOT_MENU;
 //  indices of the buttons below them are written out in half a dozen places -
 //  the group table, the outline table, the layout. Their ORDER on screen comes
 //  from layout(), not from their position here.
-const int kButtonCount = 11;
+const int kButtonCount = 12;
 const int kBtnF1 = 1, kBtnF2 = 2, kBtnF3 = 9, kBtnF4 = 10;
+//  The chat button, placed by the client like the ride button below it.
+const int kBtnChat = 11;
 
 //  The ride button is placed by the client, not by layout(): it lives beside
 //  the chat window, which the player drags. Hidden until the client says where.
 bool  g_vehShow = false;
 float g_vehFracX = 0.0f, g_vehFracY = 0.0f;
+
+//  The chat fold button: 0 off, 1 collapse, 2 the icon that brings it back.
+//  Placed by the client too - it rides the chat window's top right corner,
+//  and the chat is dragged and resized.
+int   g_chatMode = 0;
+float g_chatFracX = 0.0f, g_chatFracY = 0.0f, g_chatFracR = 0.0f;
 Button g_buttons[kButtonCount];
 
 //  Rims over the client's skill slots, in surface pixels. Filled in by the
@@ -875,6 +884,16 @@ void layout() {
     g_buttons[7].centre.x = g_vehFracX * (float) g_width;
     g_buttons[7].centre.y = g_vehFracY * (float) g_height;
 
+    //  The chat fold button, also placed by the client: on the chat's top right
+    //  corner, and smaller than a thumb control because it sits on the window
+    //  frame rather than out on the glass.
+    g_buttons[kBtnChat].slot     = kSlotChat;
+    g_buttons[kBtnChat].radius   = ( g_chatFracR > 0.0f )
+                                 ? g_chatFracR * (float) g_height
+                                 : modeR * 0.58f;
+    g_buttons[kBtnChat].centre.x = g_chatFracX * (float) g_width;
+    g_buttons[kBtnChat].centre.y = g_chatFracY * (float) g_height;
+
     //  The player's arrangement, on top of the designed positions.
     const float W = (float)g_width, H = (float)g_height;
     struct Clamp { static void to(Vec2 &c, float r, float W, float H) {
@@ -1300,6 +1319,24 @@ int RanTouch_PointerDown(int id, float x, float y) {
     //  needs two recorded fingers. In town, where there is a plate under
     //  almost every pixel, that meant no second finger, no pinch, and no zoom:
     //  the crowd bug that killed camera rotation, in its other half.
+    //  Except the chat fold button, which sits ON the chat's own frame.
+    //
+    //  That is the whole point of it - it is the window's corner control - so
+    //  the rule below would hand every press on it to the window underneath and
+    //  the chat could never be folded. It is the one button placed over a
+    //  window on purpose, so it is the one that answers before the rule.
+    if (g_chatMode != 0) {
+        Button &bc = g_buttons[kBtnChat];
+        if (bc.pointer < 0 && hit(bc.centre, bc.radius, x, y)) {
+            bc.pointer = id;
+            bc.down = true;
+            bc.pressedEdge = true;
+            Touch *tc = addTouch(id, x, y);
+            if (tc) tc->claimed = true;
+            return 1;
+        }
+    }
+
     {
         const int inControl = RanUI_PointInDragControl
                                 ? RanUI_PointInDragControl((int)x, (int)y)
@@ -1332,6 +1369,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
     for (int i = 0; i < kButtonCount; ++i) {
         Button &b = g_buttons[i];
         if (b.slot == kSlotVehicle && !g_vehShow) continue;
+        if (b.slot == kSlotChat && g_chatMode == 0) continue;
         if (b.pointer < 0 && hit(b.centre, b.radius, x, y)) {
             b.pointer = id;
             b.down = true;
@@ -2414,6 +2452,27 @@ void glyphMark(const Button &b, float a) {
         drawRect(b.centre.x - s2 - g2*0.5f, b.centre.y + g2*0.5f,      s2, s2, c.r, c.g, c.b, c.a);
         drawRect(b.centre.x + g2*0.5f,      b.centre.y + g2*0.5f,      s2, s2, c.r, c.g, c.b, c.a);
     }
+    else if (b.slot == kSlotChat) {
+        //  Two marks on one button, because it is one button in two states.
+        //
+        //  Open, it folds the chat away and the mark says which way it goes: a
+        //  chevron pointing down at the foot of the screen. Folded, it is the
+        //  chat itself - a speech bubble with its tail - so the thing that
+        //  brings the chat back looks like chat and not like a control.
+        if (g_chatMode == 1) {
+            drawTri(b.centre.x, b.centre.y, R * 0.46f, 1.0f, c.r, c.g, c.b, c.a);
+        } else {
+            const float bw = R * 0.62f, bh = R * 0.44f;
+            drawRect(b.centre.x - bw, b.centre.y - bh * 1.15f,
+                     bw * 2.0f, bh * 1.7f, c.r, c.g, c.b, c.a);
+            const float tail[6] = {
+                b.centre.x - bw * 0.52f, b.centre.y + bh * 0.55f,
+                b.centre.x - bw * 0.04f, b.centre.y + bh * 0.55f,
+                b.centre.x - bw * 0.62f, b.centre.y + bh * 1.45f,
+            };
+            drawPoly(tail, 3, c);
+        }
+    }
     else if (b.slot == kSlotCamLock) {
         drawRing(b.centre.x, b.centre.y, R * 0.13f, R * 0.21f, c.r, c.g, c.b, c.a);
         drawArc(b.centre.x, b.centre.y + R * 0.30f, R * 0.40f, R * 0.50f,
@@ -2817,6 +2876,7 @@ void RanTouch_Render(void) {
         const Button &b = g_buttons[i];
         //  Not placed by the client yet - outside the world, or no chat.
         if (b.slot == kSlotVehicle && !g_vehShow) continue;
+        if (b.slot == kSlotChat && g_chatMode == 0) continue;
         {
             const int grp = groupOfButton(i);
             emit();
@@ -2939,6 +2999,8 @@ void RanTouch_Render(void) {
         for (int i = 0; i < kButtonCount; ++i) {
             const Button &b = g_buttons[i];
             if (b.slot == kSlotVehicle && !g_vehShow) continue;
+            if (b.slot == kSlotChat && g_chatMode == 0) continue;
+        if (b.slot == kSlotChat && g_chatMode == 0) continue;
             const int grp = groupOfButton(i);
             const float ga = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
             const float R  = b.radius * (b.down ? 0.94f : 1.0f);
@@ -3162,6 +3224,19 @@ extern "C" void RanTouch_GetAttackCircle(float *cx, float *cy, float *r) {
 }
 
 //  The tray owns the tab index; the overlay only draws it.
+extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode) {
+    g_chatMode  = mode;
+    g_chatFracX = cx;
+    g_chatFracY = cy;
+    g_chatFracR = r;
+    if (g_inited) {
+        g_buttons[kBtnChat].slot     = kSlotChat;
+        g_buttons[kBtnChat].centre.x = cx * (float) g_width;
+        g_buttons[kBtnChat].centre.y = cy * (float) g_height;
+        if (r > 0.0f) g_buttons[kBtnChat].radius = r * (float) g_height;
+    }
+}
+
 extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show) {
     g_vehShow  = show != 0;
     g_vehFracX = cx;

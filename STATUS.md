@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-22
+- **Last updated:** 2026-09-23
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,93 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-09-23 (1) — A drag never let go of the item, and the chat could not be folded away
+
+"I see the bug here when I drag the skill or item to the slot then I release.
+it's not let, go", and "the chat it should have the collapse btn top right of
+the chat box. when collapsed it should become the btn chat".
+
+### The drag
+
+**Measured first.** On the emulator as `test01`, with the bag open: a long press
+then a drag moved the item; a plain drag - press, move, release - did nothing at
+all, and dragging a potion onto a quick slot did nothing either way. The log says
+why: `GESTURE left(tap/drag) ... moved=1`, so the gesture layer pressed the LEFT
+button at the source and released it at the target, and `CInnerInterface::
+MobileItemTouch` read that pair as "pressed on one cell, let go on another" -
+which it deliberately ignores, so a finger sliding across the bag does not open
+the actions for wherever it stopped.
+
+**What a drag actually is here.** The carried item is server state (`SLOT_HOLD`),
+so a move is two requests: lift the source, then place into the target. A tap
+does one of those per tap. A drag has to do both, and the two halves are a tenth
+of a second apart, which is less than a round trip - so the naive version loses
+the place, and the item stays stuck in the hand. That is the bug as the player
+sees it: "I release and it doesn't let go."
+
+Three things were needed:
+
+* **Lift on travel, not on the cell.** `CInnerInterface::MobileDragFrame` watches
+  the press: while the left button is down and the hand is empty, once the
+  pointer has moved more than 8 UI units from where it went down, the cell that
+  was pressed is lifted. It is a per-frame check and not a message handler
+  because a window is only asked about a message while the finger is over IT -
+  a drag from the bag to a quick slot leaves the bag on the first frame, so
+  judged by messages the lift never happened. That was exactly the potion case.
+* **A place that waits.** `MobilePlaceItem` performs the drop at once if the hand
+  is already full, and otherwise remembers the target and does it the moment the
+  hand fills (`MobilePlaceFrame`, giving up after 1.5 s so a refused lift does
+  not place whatever turns up next). Every window's DROP now goes through it -
+  bag, worn slot, bank, quick slot.
+* **The quick slots had no drop at all.** `CBasicPotionTray` bound on `LB_UP`
+  with a full hand only; a long press arrives as `RB_UP`, which did nothing, and
+  a plain drag arrives before the hand is full. Both now place.
+
+**Verified on device**, each one as a 1:1 crop before and after: plain drag
+between two bag cells; plain drag bag -> quick slot (slot 4 filled); long press
+then drag, which still works; unequip by dragging the amulet off the doll into
+the bag, and equip by dragging it back; a tap still opens the action sheet; a tap
+on an empty cell still does nothing.
+
+### The tap that stole a skill
+
+Reported while testing: "when click only one time on the skill icon it should
+only show detail not pick it up". `CSkillSlot` took the skill on `LB_DOWN` -
+the PC rule, where the cursor is already on the row and the pick-up is visible
+under it. With a finger, a tap on a skill row is how you READ it, and every such
+tap walked away carrying the skill. The press is now only remembered
+(`MobileSkillPress`); the same travel test above carries it, and a long press
+still takes it on the spot. Verified: a single tap now shows the detail panel
+and carries nothing. The carry-and-drop half could not be re-tested on `test01`
+- that character has no learned skill, and an unlearned row cannot be picked up
+at all - so that half rests on it being the same code path the items use.
+
+### The chat fold
+
+A round button on the chat's top right corner folds the whole chat group away
+and becomes the chat icon that brings it back, in the same place, under the same
+thumb. Drawn by the touch overlay (`RANTOUCH_SLOT_CHAT`), so it is the same
+object as the attack ring and the mode toggles; positioned from
+`DxGameStage::MobileArrangeInterface` rather than from `CBasicChat::Update`,
+because `CUIMan::UpdateList` skips a hidden group entirely - placed there the
+button would have vanished with the window it is the only way back from.
+
+**One rule had to be bent for it.** `RanTouch_PointerDown` hands any press that
+lands on a client control straight to the client, so windows are not eaten by the
+pad. This button sits ON the chat's frame on purpose, so it is tested before that
+rule - the first and only overlay button that is.
+
+The mark is drawn as vector art for now: a chevron while the chat is open, a
+speech bubble while it is folded. `MOBILE/ICON-BRIEF.md` carries the prompt for
+the painted `chat.png`, which drops into `mobile_hud.dds` beside the other round
+controls when it exists.
+
+**Verified on device:** fold, icon appears alone on the street, unfold, chat and
+its corner button back.
+
+**Builds:** arm64 and x86_64 0 errors; `SOURCE/RanOnline.sln` Release/Win32
+(client + all servers) 0 errors.
 
 ## 2026-09-22 (1) — The NPC shop drew through the inventory's equipment column
 

@@ -175,3 +175,20 @@ cut out when the atlas is packed.
 * The GUI XML controls are repointed at the new cells and `Gui.rcc` repacked.
 * Each one checked on the device at true size, and at the size the press and
   event rings sit over it.
+
+---
+
+## The chat button (added 2026-09-23)
+
+One more round control, for the button that folds the chat box away and brings
+it back. Same table as the on-screen controls above: round art on a square
+canvas, transparent outside the circle.
+
+| File | Canvas | Subject |
+|---|---|---|
+| `chat.png` | 128 × 128 | Steel disc, a parchment speech bubble with three short ruled lines of writing inside it, tail pointing down-left. |
+
+Until the painted version lands the overlay draws its own bubble, so the button
+works today and only gets better-looking when `chat.png` is packed into
+`mobile_hud.dds` (append it to `CELLS` in `tools/icon-art/hud-pack.js` and add
+`kCellChat` to the enum in `touch_ui.cpp`, in the same order).
