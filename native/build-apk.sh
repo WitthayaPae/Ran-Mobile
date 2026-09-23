@@ -159,17 +159,37 @@ powershell.exe -NoProfile -Command "
   }
   \$zip.Dispose()"
 
-# debug keystore so the APK can be installed
+# The signing key.
+#
+# Android checks this signature when the launcher installs an update over
+# the app, so it is the only thing stopping somebody else's APK replacing
+# yours. The password therefore does not belong in a file everyone with the
+# repository can read: native/.signing holds it, gitignored beside .login -
+#
+#     KEYSTORE=/c/path/to/ran-signing.keystore
+#     STOREPASS=...
+#     KEYPASS=...
+#
+# With no such file the build falls back to the local debug key, which is
+# all a test device needs, and generates it if missing so a fresh clone
+# still builds.
 KS="$HERE/android/debug.keystore"
+STOREPASS=android
+KEYPASS=android
+if [ -f "$HERE/.signing" ]; then
+  . "$HERE/.signing"
+  KS="${KEYSTORE:-$KS}"
+  KEYPASS="${KEYPASS:-$STOREPASS}"
+fi
 if [ ! -f "$KS" ]; then
-  "$U/OpenJDK/bin/keytool.exe" -genkeypair -keystore "$(cygpath -w "$KS")" -storepass android \
-    -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+  "$U/OpenJDK/bin/keytool.exe" -genkeypair -keystore "$(cygpath -w "$KS")" -storepass "$STOREPASS" \
+    -keypass "$KEYPASS" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
     -dname "CN=RAN Debug,O=RAN,C=TH" > /dev/null 2>&1 || true
 fi
 
 "$BT/zipalign.exe" -f -p 4 "$WINAPK" "$(cygpath -w "$OUT/aligned.apk")"
 "$JAVA" -jar "$(cygpath -w "$BT/lib/apksigner.jar")" sign \
-  --ks "$(cygpath -w "$KS")" --ks-pass pass:android --key-pass pass:android \
+  --ks "$(cygpath -w "$KS")" --ks-pass "pass:$STOREPASS" --key-pass "pass:$KEYPASS" \
   --out "$(cygpath -w "$HERE/out/$NAME.apk")" "$(cygpath -w "$OUT/aligned.apk")"
 
 printf "\n%s  %.1f MB   ABIs:%s\n" "out/$NAME.apk" \

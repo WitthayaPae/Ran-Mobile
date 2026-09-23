@@ -90,3 +90,6 @@ tools/patch/keys/
 
 # Login credentials for the device test rig. Never committed.
 native/.login
+
+# The APK signing key and its passwords - see build-apk.sh.
+native/.signing
