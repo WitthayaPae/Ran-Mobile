@@ -97,6 +97,27 @@ APK logged in without the password leaving the device:
 That is the whole feature working: salt and nonce out, HMAC back, and the
 account's password never on the wire.
 
+**What went wrong in production, and what fixed it (2026-09-24, measured):**
+
+1. The first agent build said OK and then could not load characters
+   ("ไม่สามารถเข้าถึงข้อมูลตัวละคร" = CHARACTERSTAGE_DAUM_GAME_JOIN_FAIL, the
+   join wait timing out). The challenge handler skipped MsgLogIn's pre-DB steps,
+   above all IncreaseChannelUser + SetChannel, so the channel stayed -1 and
+   GetFieldServer(field, -1) had no answer. All four steps now run in MsgLogIn's
+   order.
+2. The message then grew the encrypt key (68 -> 80 bytes). The 02:30 agent
+   accepted only 80, and v542 - already in players' hands, no stage-2 fallback -
+   hung on "checking data". The agent now reads both shapes
+   (NET_LOGIN_CHALLENGE_DATA_V1 asserted at 68).
+
+Verified on live against the deployed agent, both clients, into the world:
+
+    v542 client (68-byte):  salt answered - sending the challenge / result=0
+    new client  (80-byte):  salt answered - sending the challenge / result=0
+
+The lesson: a new login path must reproduce the WHOLE handler it stands in for,
+read end to end; and once a message shape ships, the server reads it forever.
+
 **Shipped as store version 542** (APK versionCode 148 / iOS 1.0.148, minIos 148).
 The upload set is 4 blobs, 50.5 MB - the APK, the HUD atlas and the two ini
 files - plus ios/ (RanLegacyM.ipa 11.3 MB, source.json) and the manifest. The
