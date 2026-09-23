@@ -12,6 +12,38 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (4) — A tap on bare ground now lets the target go
+
+"when user click on the empty place like other places on the map or on the
+ground it should cancel the target (incase auto target not on)".
+
+The tap latch in `GLCharacter::PlayerUpdate` only ever SET the target: a tap
+that landed on an actor latched it, and a tap that landed on nothing was treated
+as a move order and nothing else - the comment there said so in as many words.
+With a mouse that is right, because pointing somewhere else is itself a change
+of target and the client re-picks every frame; a finger has no pointer to move,
+so once something was selected there was no way to select nothing. The panel
+stayed up and the attack button stayed aimed at a mob the player had walked away
+from.
+
+A tap that resolves to `EMACTAR_NULL` now drops the target, through a new
+`MobileDropTarget` which takes the six target panels down with it - zeroing the
+target alone would have skipped `MobileTargetTick`'s own clean-up, which is
+guarded by the target still being there. Auto-target keeps its lock: while it is
+on and its pick is alive, a tap on the ground is only a walk, which is the
+condition the request named. Taps on the interface never reach this code -
+`IsCharMoveBlock` returns above it, the same guard that stops a tap on a window
+walking the character.
+
+**Measured on the device**, with auto-target off:
+
+    RanTarget: tap latch -> 591 (was 4294967295, live=0, click L1 R0)
+    RanTarget: tap cleared 591
+
+and the selection ring under that player is gone from the next frame. With
+auto-target on, the same two taps on bare ground produced no clear at all - only
+`select-nearest -> 595`, its own pick, holding.
+
 ## 2026-09-23 (3) — The round potion slots never faded, and the macro buttons were a mouse's size
 
 "when I pick up item in the inventory that use in the potion slot it did not
