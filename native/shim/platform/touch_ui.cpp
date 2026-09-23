@@ -779,8 +779,8 @@ void placePageRow();
 //  Open it is the chat's corner control and the client owns the spot. FOLDED
 //  there is no chat to hang it on, so it parks against the ride button - which
 //  is the overlay's own, and only the overlay knows where that ended up once
-//  the player has moved it. Straight to its left, one gap away, so the two read
-//  as a pair on the same line.
+//  the player has moved it. Straight to its right, one gap away, so the two
+//  read as a pair on the same line.
 void placeChatButton() {
     g_buttons[kBtnChat].slot = kSlotChat;
 
@@ -788,7 +788,7 @@ void placeChatButton() {
         const Button &veh = g_buttons[7];
         const float R = g_buttons[kBtnChat].radius;
         if (veh.radius > 0.0f) {
-            g_buttons[kBtnChat].centre.x = veh.centre.x - (veh.radius + R + R * 0.30f);
+            g_buttons[kBtnChat].centre.x = veh.centre.x + (veh.radius + R + R * 0.30f);
             g_buttons[kBtnChat].centre.y = veh.centre.y;
             return;
         }
@@ -1394,7 +1394,8 @@ int RanTouch_PointerDown(int id, float x, float y) {
     for (int i = 0; i < kButtonCount; ++i) {
         Button &b = g_buttons[i];
         if (b.slot == kSlotVehicle && !g_vehShow) continue;
-        if (b.slot == kSlotChat && g_chatMode == 0) continue;
+        //  Already answered above, by its own shape, before the window rule.
+        if (b.slot == kSlotChat) continue;
         if (b.pointer < 0 && hit(b.centre, b.radius, x, y)) {
             b.pointer = id;
             b.down = true;
@@ -2901,7 +2902,7 @@ void RanTouch_Render(void) {
         const Button &b = g_buttons[i];
         //  Not placed by the client yet - outside the world, or no chat.
         if (b.slot == kSlotVehicle && !g_vehShow) continue;
-        if (b.slot == kSlotChat && g_chatMode == 0) continue;
+        if (b.slot == kSlotChat) continue;     //  drawn in RanTouch_RenderChatTop
         {
             const int grp = groupOfButton(i);
             emit();
@@ -2967,28 +2968,6 @@ void RanTouch_Render(void) {
             continue;
         }
 
-        //  Open, the chat button is not a round control at all: it is the
-        //  window's own corner control, so it is drawn as a plate on the frame
-        //  with a minimise bar across it. A steel disc with an arrow on it read
-        //  as one more thumb button sitting on the chat.
-        if (b.slot == kSlotChat && g_chatMode == 1) {
-            const float hw = R * RANTOUCH_CHATBAR_ASPECT, hh = R;
-            const float x0 = b.centre.x - hw, y0 = b.centre.y - hh;
-            const float cut = hh * 0.45f;
-            const float a = b.down ? 1.0f : 0.92f;
-            drawChamfer(x0, y0, hw * 2.0f, hh * 2.0f, cut,
-                        kFaceE.r, kFaceE.g, kFaceE.b, a);
-            drawChamfer(x0 + 1.5f, y0 + 1.5f, hw * 2.0f - 3.0f, hh * 2.0f - 3.0f,
-                        cut, kFace.r, kFace.g, kFace.b, a);
-            //  The bar: what every window in reach of a thumb uses for "put
-            //  this away", and the one mark that cannot be read as anything
-            //  else at this size.
-            const float bw = hw * 0.92f, bh = hh * 0.17f;
-            drawRect(b.centre.x - bw, b.centre.y - bh, bw * 2.0f, bh * 2.0f,
-                     kInk.r, kInk.g, kInk.b, a);
-            continue;
-        }
-
         if (b.toggled) {
             bloom(b.centre.x, b.centre.y, R, state, 0.26f);
             chromeDisc(b.centre.x, b.centre.y, R, 1.0f,
@@ -3046,8 +3025,7 @@ void RanTouch_Render(void) {
         for (int i = 0; i < kButtonCount; ++i) {
             const Button &b = g_buttons[i];
             if (b.slot == kSlotVehicle && !g_vehShow) continue;
-            if (b.slot == kSlotChat && g_chatMode == 0) continue;
-        if (b.slot == kSlotChat && g_chatMode == 0) continue;
+            if (b.slot == kSlotChat) continue;     //  drawn in RanTouch_RenderChatTop
             const int grp = groupOfButton(i);
             const float ga = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
             const float R  = b.radius * (b.down ? 0.94f : 1.0f);
@@ -3437,6 +3415,69 @@ extern "C" void RanTouch_GetSkillSlotOffset(int i, float *fx, float *fy) {
 //  The overlay itself is drawn under the interface - that is what keeps the
 //  pad behind the game's windows - so the editor's toolbar came out behind
 //  them too. The client calls this once more at the end of its own render.
+//  The chat button, drawn over the whole interface.
+//
+//  The rest of the pad is drawn UNDER the client's windows - that is what keeps
+//  it out of their way - but this one belongs to the chat window and sits in its
+//  top right corner, so drawn there it went behind the very window it folds. It
+//  gets the same treatment the HUD editor's toolbar gets: its own little pass,
+//  after CInnerInterface::Render.
+extern "C" void RanTouch_RenderChatTop(void) {
+    if (!g_inited || !g_active || !g_prog || g_chatMode == 0) return;
+
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform2f(uViewport, (float)g_width, (float)g_height);
+    g_drawAlpha = 1.0f;
+
+    const Button &b = g_buttons[kBtnChat];
+    const float R = b.radius * (b.down ? 0.94f : 1.0f);
+    const int cell = hudSheet() ? hudCellFor(kSlotChat, false) : -1;
+
+    if (cell >= 0) {
+        //  The fold plate is a wide bar painted inside a square cell: 178 of the
+        //  cell's 256 across, 144 down. Drawn at this half-size its height comes
+        //  out 2R and its width 2R * ASPECT - the rectangle the press is tested
+        //  against.
+        if (g_chatMode == 1)
+            drawHudCell(cell, b.centre.x, b.centre.y, R * (256.0f / 144.0f), 1.0f);
+        else
+            drawHudCell(cell, b.centre.x, b.centre.y, R * 1.06f, 1.0f);
+    }
+    else if (g_chatMode == 1) {
+        //  No sheet: the plate, drawn. A steel disc with an arrow on it read as
+        //  one more thumb button sitting on the chat, so this is a window
+        //  control - a chamfered plate with a minimise bar across it.
+        const float hw = R * RANTOUCH_CHATBAR_ASPECT, hh = R;
+        const float x0 = b.centre.x - hw, y0 = b.centre.y - hh;
+        const float cut = hh * 0.45f;
+        const float a = b.down ? 1.0f : 0.92f;
+        drawChamfer(x0, y0, hw * 2.0f, hh * 2.0f, cut, kFaceE.r, kFaceE.g, kFaceE.b, a);
+        drawChamfer(x0 + 1.5f, y0 + 1.5f, hw * 2.0f - 3.0f, hh * 2.0f - 3.0f, cut,
+                    kFace.r, kFace.g, kFace.b, a);
+        const float bw = hw * 0.92f, bh = hh * 0.17f;
+        drawRect(b.centre.x - bw, b.centre.y - bh, bw * 2.0f, bh * 2.0f,
+                 kInk.r, kInk.g, kInk.b, a);
+        emit();
+    }
+    else {
+        chromeDisc(b.centre.x, b.centre.y, R, b.down ? 1.0f : 0.94f, kFace, kFaceE);
+        glyphMark(b, 0.88f);
+        emit();
+    }
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    RanGLR_InvalidateStateCache();
+}
+
 extern "C" void RanTouch_RenderEditTop(void) {
     if (!g_inited || !g_edit || !g_prog) return;
     glUseProgram(g_prog);

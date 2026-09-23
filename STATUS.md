@@ -130,8 +130,16 @@ is 1.236 and the cell is drawn at `R * 256/144` - which puts the painted plate
 exactly on the rectangle the press is tested against. The vector bar and bubble
 are still there for a build without the sheet.
 
-The plate sits a little ABOVE the frame rather than centred on it: on the line,
-its lower half covered the chat's own scroll arrow, which lives in that corner. `MOBILE/ICON-BRIEF.md` carries the prompt for
+**It had to be drawn in a pass of its own.** The plate belongs INSIDE the chat's
+top right corner, and the whole pad is drawn as the interface's underlay - after
+the bottom list, before the windows - so the chat drew straight over it. It now
+has its own little pass, `RanTouch_RenderChatTop`, called from `DxGameStage`
+right after `CInnerInterface::Render` beside the HUD editor's toolbar, which is
+over the interface for exactly the same reason. The press was never the problem:
+that is claimed before the "a window on top gets it" rule, which is what let the
+button work at all while it was invisible behind the chat.
+
+Folded, the icon parks on the RIGHT of the ride button. `MOBILE/ICON-BRIEF.md` carries the prompt for
 the painted `chat.png`, which drops into `mobile_hud.dds` beside the other round
 controls when it exists.
 

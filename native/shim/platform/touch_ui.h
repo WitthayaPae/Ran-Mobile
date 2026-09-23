@@ -191,3 +191,7 @@ extern "C" int  RanTouch_HudSavedGeneration(void);
 extern "C" void RanTouch_GetSkillSlotOffset(int slot, float *fx, float *fy);
 //  The editor's layer, drawn after the client's interface so it is on top.
 extern "C" void RanTouch_RenderEditTop(void);
+
+//  The chat fold button, drawn after the interface so it is over the window it
+//  belongs to. Everything else on the pad draws under the windows.
+extern "C" void RanTouch_RenderChatTop(void);
