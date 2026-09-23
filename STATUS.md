@@ -37,6 +37,22 @@ PC's do. The HUD editor's per-row and per-slot scales still multiply on top.
 
 Verified at 1:1 against the same crop before and after.
 
+**And the two buttons at the end of that tray were live, invisibly.** The
+collapse arrow and the auto-pot gear sit at the END of the authored tray - local
+226 and 246 - and the round row is drawn across that stretch by the overlay,
+which draws after the bottom list. So both were covered and both still took
+taps: a tap on what looked like street beside the last potion collapsed the tray
+or opened the auto-pot window. The client was asked where they were rather than
+guessed at: `(431,0 20x41)` and `(454,0 15x41)`, both reporting themselves
+visible.
+
+They are now not created at all in the mobile build, which is the lesson the
+skill tray's own collapse arrow already records - `SetVisibleSingle` is not what
+the hit test reads, so hiding one never sticks. Nothing is lost: the auto-pot
+window is a row on the long-press sheet of any quick slot, verified still there
+(ถอด / ตั้งค่า / ปิด), and collapsing the row that IS the HUD would leave no way
+to bring it back.
+
 ## 2026-09-23 (1) — A drag never let go of the item, and the chat could not be folded away
 
 "I see the bug here when I drag the skill or item to the slot then I release.
