@@ -109,9 +109,30 @@ server cfg with its DB credentials cannot ride along - the device tree confirms
 it. No credential is written to disk: `GETUSERID_ENC` has no caller and the
 account name appears nowhere under the data root.
 
-Not examined: server-side authority for item, skill and movement actions - where
-most cheating is actually decided, and server code - the wider EP9 packet
-parsing surface, and the iOS distribution chain beyond what ships in the patch.
+### First slice of the server side: the item move this port now automates
+
+The client change made today turns one gesture into a lift and a place, so the
+question is whether the server decides those or merely records them. It decides:
+
+* `GLChar::MsgReqInvenToHold` (`GLCharInvenMsg.cpp:1495`) looks the item up at
+  the cell the client named and refuses when there is none, refuses when the hand
+  is already full, and refuses an unknown item id. The coordinates are a lookup
+  key, never content.
+* `GLChar::MsgReqHoldToInven` (`:2983`) refuses unless something is held, re-reads
+  the held item's own size from the item table rather than trusting the packet,
+  and calls `IsInsertable` for that size at the requested cell before inserting.
+* `GLInventory::IsInsertable` (`GLInventory.cpp:606`) rejects a zero or oversized
+  item, and bounds the position with `(m_wCellSX-wSX) < wPosX` /
+  `(wVALIDY-wSY) < wPosY` before it indexes the barrier grid. Those subtractions
+  are int-promoted, so an under-sized `wVALIDY` goes negative rather than wrapping
+  to a huge WORD - the grid cannot be indexed out of range from a crafted packet.
+
+So a modified client can ask for a move it should not have; it cannot make one
+happen, and cannot corrupt the grid trying.
+
+Still not examined: the rest of server-side authority - skills, movement, trade,
+the shop - the wider EP9 packet parsing surface, and the iOS distribution chain
+beyond what ships in the patch.
 
 ## 2026-09-23 (7) — The patch page: one bar that both measures and moves, in Thai, and no way past it
 
