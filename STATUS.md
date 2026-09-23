@@ -12,6 +12,23 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-23 (6) — The quick slot's sheet opens on the hold, not on the release
+
+"long press on the potion slot do not need to wait untill I let go to show the
+option".
+
+It opened on `UIMSG_RB_UP`, so a long press looked like nothing was happening
+until the finger came off - while every other long press in the build acts on the
+DOWN edge: the bag lifts there, the worn slot too. It now opens on
+`UIMSG_RB_DOWN`, with a full hand still keeping its release, because that is a
+carried item being placed in the slot.
+
+The release cannot press whatever row lands under the finger: the sheet's rows
+answer to `CHECK_MOUSEIN_LBUPLIKE`, the LEFT button, and this is the right one.
+Verified by screenshotting mid-gesture, with the finger still down: the sheet is
+up (ถอด / ตั้งค่า / ปิด), and the frame after the release is identical - the
+release neither closed it nor opened it a second time. ปิด still closes it.
+
 ## 2026-09-23 (5) — "แสดง FX ไอเท็มบนพื้น" is gone from the options, and the effect with it
 
 "remove the setting แสดง FX ไอเท็ม we do not need that for mobile and disable
