@@ -76,10 +76,20 @@ sizes (32, 40, 68), compiled on both the 32-bit MSVC server and the 64-bit clang
 client: both ends check dwSize before reading, so a drifted layout would not
 crash, it would silently fall back forever.
 
-**Still open:** the challenge path itself has never run end to end, because no
-server is running the new agent. It needs DB/FIX_06 applied and the new
-ServerAgent deployed - both are your call, and nothing breaks if neither
-happens, because of the fallback above.
+**DB/FIX_06 is applied to live** (RanUser on 143.14.11.244, SQL Server 2019,
+2026-09-24), verified after it ran: ServerSecret holds one 32-byte row,
+user_verify_hashed answers 1 for test01 and 0 for an id that does not exist,
+and user_verify is untouched so old clients are unaffected.
+
+**The agent is built and staged** at `DEPLOY/challenge-login-2026-09-24/`
+(ServerAgent.exe, checksums, and a README with the rollback). A clean rebuild
+of the whole solution first needed one build fix: Lib_Engine's include path had
+`Tik/Lua` where lua.h lives in `Tik/Lua/include`, which only ever showed up in a
+from-scratch build.
+
+**Still open:** the challenge path has not run end to end, because the new agent
+is not deployed yet. Until it is, clients wait three seconds and fall back -
+which is measured, above.
 
 ## 2026-09-23 (9) — End-to-end pass on the shipping build, and the one thing it caught
 
