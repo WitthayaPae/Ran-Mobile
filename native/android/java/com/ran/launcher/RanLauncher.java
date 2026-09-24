@@ -696,19 +696,29 @@ public class RanLauncher extends Activity {
         int minApk = m.optInt("minApk", 0);
 
         int myApk = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
-        if (minApk > myApk) {
-            /*  A data patch cannot fix a client whose packet layout is stale,
-             *  so this is a hard stop rather than a warning. */
-            fail("เวอร์ชันแอปเก่าเกินไป",
-                 "เซิร์ฟเวอร์ต้องการแอปเวอร์ชัน " + minApk + " แต่เครื่องนี้เป็น " + myApk +
-                 "\nกรุณาติดตั้งไฟล์ APK ใหม่ทับของเดิม");
-            throw new Exception("apk too old");
-        }
 
         /*  A new binary, if the manifest offers one, before any data is
          *  fetched: data can depend on code, never the other way round, and an
-         *  install restarts the process anyway.                              */
+         *  install restarts the process anyway.
+         *
+         *  Offered BEFORE the minApk gate, not after. The gate used to come
+         *  first, so a phone below minApk was stopped with "install the new
+         *  APK" and never shown the download that would have fixed it - the
+         *  only way out was sideloading by hand. Now the install is offered
+         *  first, and the gate only stops a phone that is still too old after
+         *  that (declined, no permission, failed download).                 */
+        mApkRequired = (minApk > myApk);
         if (offerApk(m.optJSONObject("apk"), myApk)) return;
+
+        if (minApk > myApk) {
+            /*  A data patch cannot fix a client whose packet layout is stale,
+             *  so this is a hard stop rather than a warning. Reopening the game
+             *  offers the install again. */
+            fail("ต้องอัปเดตแอปก่อนเล่น",
+                 "เซิร์ฟเวอร์ต้องการแอปเวอร์ชัน " + minApk + " แต่เครื่องนี้เป็น " + myApk +
+                 "\nกรุณาเปิดเกมใหม่แล้วกดติดตั้งอัปเดต");
+            throw new Exception("apk too old");
+        }
 
         File rootDir = new File(ROOT);
         if (!rootDir.exists() && !rootDir.mkdirs())
@@ -1216,6 +1226,15 @@ public class RanLauncher extends Activity {
      *  replaced, so there is nothing further to do this run.                  */
     private static final String INSTALL_ACTION = "com.ran.launcher.INSTALL_RESULT";
 
+    /*  Set by patch() when the installed APK is below minApk: this update is
+     *  not optional, and the screen must not promise the old version will do. */
+    private volatile boolean mApkRequired = false;
+
+    private String keepOld() {
+        return mApkRequired ? "ต้องติดตั้งอัปเดตนี้ก่อนจึงจะเล่นได้"
+                            : "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้";
+    }
+
     private boolean offerApk(JSONObject apk, int myApk) throws Exception {
         if (apk == null) return false;
 
@@ -1285,7 +1304,7 @@ public class RanLauncher extends Activity {
         } catch (Throwable t) {
             session.abandon();
             Log.e(TAG, "apk update failed", t);   //  reason to the log, not the screen
-            say("อัปเดตไม่สำเร็จ", "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
+            say("อัปเดตไม่สำเร็จ", keepOld(), -1);
             sleep(2500);
             return false;                              //  the old binary still works
         }
@@ -1345,7 +1364,7 @@ public class RanLauncher extends Activity {
             /*  Generous: the prompt waits on a human. If it expires the app is
              *  simply left as it was.                                         */
             if (!done.await(5, TimeUnit.MINUTES)) {
-                say("ยังไม่ได้ยืนยันการติดตั้ง", "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
+                say("ยังไม่ได้ยืนยันการติดตั้ง", keepOld(), -1);
                 sleep(2000);
                 return false;
             }
@@ -1358,7 +1377,7 @@ public class RanLauncher extends Activity {
             return true;                     //  the process is about to be replaced
         }
         Log.w(TAG, "install not completed: status " + status[0] + " " + why[0]);
-        say("ติดตั้งอัปเดตไม่สำเร็จ", why[0] + "\nจะเล่นด้วยเวอร์ชันที่ติดตั้งไว้", -1);
+        say("ติดตั้งอัปเดตไม่สำเร็จ", why[0] + "\n" + keepOld(), -1);
         sleep(2500);
         return false;
     }
