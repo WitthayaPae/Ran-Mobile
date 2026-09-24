@@ -1224,6 +1224,40 @@ void editEnd() {
     g_editPtr = -1;
 }
 
+//  Tap feedback - the ring that answers every touch, as the phone games this
+//  one is compared against draw it.
+//
+//  Recorded here, at the point every finger enters (RanTouch_PointerDown is
+//  the one door for Android and iOS alike), and drawn by RanTouch_RenderTapFx
+//  from the D3D shim's Present, after everything else - so it shows on the
+//  login pages and over open windows, not only over the world.
+//
+//  Timed by the clock rather than RanTouch_Frame: that one only runs while the
+//  touch HUD is active, and a ring stuck half-grown on a menu is worse than
+//  none.
+struct TapFx { float x, y; double t0; };
+const int    kTapFxMax  = 8;
+//  Seconds a ring grows and fades. The diag file "tapfxhold" stretches it to
+//  three, long enough to photograph over adb; it is looked for once per touch,
+//  and deleting it puts the normal ring straight back.
+double kTapFxLife = 0.38;
+TapFx  g_tapFx[kTapFxMax];
+int    g_tapFxNext = 0;
+bool   g_tapFxOn   = true;
+
+double tapFxNow() {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+void tapFxPush(float x, float y) {
+    if (!g_tapFxOn) return;
+    kTapFxLife = RanPlat_DiagExists("tapfxhold") ? 3.0 : 0.38;
+    TapFx &f = g_tapFx[g_tapFxNext];
+    f.x = x; f.y = y; f.t0 = tapFxNow();
+    g_tapFxNext = (g_tapFxNext + 1) % kTapFxMax;
+}
+
 }   // namespace
 
 // ------------------------------------------------------------------- API
@@ -1267,6 +1301,11 @@ void RanTouch_SetActive(int active) {
 int RanTouch_IsActive(void) { return g_active ? 1 : 0; }
 
 int RanTouch_PointerDown(int id, float x, float y) {
+    //  Every touch gets its ring, whatever it lands on and whether or not the
+    //  HUD is up - except in the HUD editor, where a ring under each drag
+    //  would only be noise.
+    if (g_inited && !g_edit) tapFxPush(x, y);
+
     if (!g_inited || !g_active) return 0;
 
     //  Editing the HUD: every touch is the editor's. Nothing reaches the game,
@@ -3515,3 +3554,74 @@ extern "C" void RanTouch_RenderEditTop(void) {
 //  write the arrangement to its options.
 extern "C" int RanTouch_HudSavedGeneration(void) { return g_hudSavedGen; }
 
+
+//  Settings > Function switches the tap ring on and off. Turning it off also
+//  drops any ring still on screen.
+extern "C" void RanTouch_SetTapEffect(int on) {
+    g_tapFxOn = on ? true : false;
+    if (!g_tapFxOn)
+        for (int i = 0; i < kTapFxMax; ++i) g_tapFx[i].t0 = 0.0;
+}
+
+//  Drawn from the D3D shim's Present, after the interface: the last thing in
+//  the frame, so it sits over the world, the HUD and any open window, and on
+//  the login pages as much as in the world.
+//
+//  A white ring grows out from the finger and fades, with a small dot at the
+//  centre for the first moment - the press, then the answer. Sized from the
+//  panel so it reads the same on a phone and a tablet.
+extern "C" void RanTouch_RenderTapFx(void) {
+    if (!g_inited || !g_prog || !g_tapFxOn) return;
+
+    const double now = tapFxNow();
+    bool any = false;
+    for (int i = 0; i < kTapFxMax; ++i)
+        if (g_tapFx[i].t0 > 0.0 && now - g_tapFx[i].t0 < kTapFxLife) { any = true; break; }
+    if (!any) return;
+
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform2f(uViewport, (float)g_width, (float)g_height);
+    g_drawAlpha = 1.0f;
+
+    const float R = (float)(g_width < g_height ? g_width : g_height) * 0.055f;
+    for (int i = 0; i < kTapFxMax; ++i) {
+        const TapFx &f = g_tapFx[i];
+        if (f.t0 <= 0.0) continue;
+        const float p = (float)((now - f.t0) / kTapFxLife);
+        if (p < 0.0f || p >= 1.0f) continue;
+
+        const float e     = 1.0f - (1.0f - p) * (1.0f - p);         //  ease out
+        const float r     = R * (0.30f + 0.70f * e);
+        const float thick = R * (0.05f + 0.13f * (1.0f - p));
+        const float a     = 0.85f * (1.0f - p);
+        //  a soft dark edge under the white, so it reads on snow and sky
+        drawRing(f.x, f.y, r - thick - 1.5f, r + 1.5f, 0.0f, 0.0f, 0.0f, a * 0.25f);
+        drawRing(f.x, f.y, r - thick, r, 1.0f, 1.0f, 1.0f, a);
+        if (p < 0.45f) {
+            const float q = 1.0f - p / 0.45f;
+            drawFan(f.x, f.y, R * 0.16f * q + 1.0f, 1.0f, 1.0f, 1.0f, 0.55f * q);
+        }
+    }
+    emit();
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+    glDisable(GL_BLEND);
+    RanGLR_InvalidateStateCache();
+}
+
+//  Whether the attack button is being held right now - the client shows the
+//  attack range on the ground for as long as it is.
+extern "C" int RanTouch_AttackHeld(void) {
+    if (!g_inited || !g_active) return 0;
+    for (int i = 0; i < kButtonCount; ++i)
+        if (g_buttons[i].slot == kSlotAttack) return g_buttons[i].down ? 1 : 0;
+    return 0;
+}

@@ -21,6 +21,8 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3d9.h>
 #include <d3dx9.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
+//  The tap ring (touch_ui.cpp): drawn over the whole finished frame.
+extern "C" void RanTouch_RenderTapFx(void);
 #include <vector>
 #include <atomic>
 #include <mutex>
@@ -1355,6 +1357,10 @@ public:
             if (g_lastPresent > 0.0) g_frameSeconds += now - g_lastPresent;
             g_lastPresent = now;
         }
+        //  Last thing before the frame goes out: every UI draw is flushed and
+        //  the panel's own target is the one bound, so the ring lands over the
+        //  world, the HUD and any window alike.
+        RanTouch_RenderTapFx();
         RanGL_Present();
         // One census line every 5s at 60Hz — enough to see the scene change.
         if ((g_stats.frames % 300) == 0) {

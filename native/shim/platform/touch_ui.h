@@ -111,6 +111,13 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
 //  256 cell - so the button the finger gets is exactly the plate that is drawn.
 #define RANTOUCH_CHATBAR_ASPECT 1.236f
 
+/*  Tap feedback: a ring wherever the screen is touched. Drawn last in the
+    frame (D3D shim Present); switched from Settings > Function.        */
+extern "C" void RanTouch_SetTapEffect(int on);
+extern "C" void RanTouch_RenderTapFx(void);
+/*  1 while the attack button is held: the client shows the attack range. */
+extern "C" int  RanTouch_AttackHeld(void);
+
 extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode);
 
 //  Which skill page the tray is showing, 1..4, for the page readout.
