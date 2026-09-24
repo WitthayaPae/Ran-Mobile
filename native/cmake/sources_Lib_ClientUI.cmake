@@ -312,6 +312,7 @@ set(Lib_ClientUI_SOURCES
   ${RAN_SRC}/Lib_ClientUI/Interface/PKRankNotification.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/PKRankNotificationInfo.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/KillFeedSelectorWindow.cpp
+  ${RAN_SRC}/Lib_ClientUI/Interface/AntiBotWindow.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/PlayerRankingButton.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/PrivateMarketMake.cpp
   ${RAN_SRC}/Lib_ClientUI/Interface/PrivateMarketPage.cpp

@@ -87,6 +87,10 @@ extern "C" void RanTouch_SetSkillCircles(int count, const float *cx,
 //  PK is on - the client owns that - so it has to be told what to draw.
 extern "C" void RanTouch_SetToggle(int slot, int on);
 
+//  Blink a yellow ring round the menu button: an event has opened, or a quest
+//  step is waiting, while the menu (where those icons live) is shut.
+extern "C" void RanTouch_SetMenuAlert(int on);
+
 //  Where to put the ride button, as a fraction of the surface, and whether to
 //  show it at all.
 //

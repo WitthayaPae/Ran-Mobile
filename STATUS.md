@@ -12,6 +12,110 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (2) — Anti-bot check, open CDM entry, Tyranny tower lock, event/quest blink
+
+Asked 2026-09-25. All four implemented. What was verified, and how, is noted for
+each one; the server halves need the new ServerAgent/ServerField to be deployed
+before they do anything live.
+
+### Yellow warning blink (event icon, quest alarm): verified on LDPlayer
+- **Cause.** Mobile-only code switched both off on purpose:
+  - `CCompetitionNotifyButton` forced its blink hidden every frame.
+  - `DxGameStage::MobileKeepMenuIconsAbove` hid `QUEST_ALARM` every frame, which
+    also cleared its alarm.
+  - The event icon lives inside the MENU grid, so nothing could flash while the
+    menu was shut.
+- **Blink art.** New cell (384,128) in `mobile_icons.dds`: the PC's yellow
+  `q_icon` frame redrawn as an outline on the mobile tile's rounded edge (tile
+  edge measured at 8..120 x 10..119, r~20).
+- **Event icon.**
+  - The PC's blink is back. On mobile it is driven by the clock: the grid puts the
+    control in two UI lists, so Update runs twice a frame. Measured: 120 calls/s.
+    A summed timer blinked at twice the PC's rate.
+  - While the menu is shut, the MENU button carries a yellow ring blinking at 0.2 s
+    (`RanTouch_SetMenuAlert`). It is drawn live, outside the cached HUD geometry.
+- **Quest alarm.** A corner tile (`QUEST_ALARM_BUTTON_M`, the quest scroll)
+  beside the quest box, blinking with the same outline.
+- **Measured.** Yellow-pixel counts across frames:
+  - menu ring: 1892 / 212
+  - quest tile: 18 / 532
+  - grid event icon: 15 / 1902
+  - Alarm off: the outline disappears.
+- **Diagnostic.** Flag file `eventalarm` forces the event alarm on; deleting it
+  resets the alarm.
+
+### CDM: any club member can enter (server; not testable against live)
+- `GLCLUB::CanJoinCDM` (member or master) replaces `IsMemberFlgCDM` at all five
+  entry gates:
+  - agent `MsgReqGateOut`, `CheckStartMap`
+  - field `RequestGateOutReq`, `RequestInvenRecall`, `GLChar::CheckStartMap`
+- The master's CDM tick in the sub-master dialog is hidden. The flag is still
+  loaded and sent back unchanged.
+- **Effect.** Nothing now caps a club's headcount (the old cap was the 7
+  assigned members). CDM rewards go to everyone standing on the map, so more
+  items will be handed out.
+
+### Tyranny: towers damageable only in the last 5 minutes (server; client parts verified)
+- `TYRANNY_TOWER_OPEN_TIME` is 300 s.
+- **Field server.**
+  - Keeps `m_fBattleRemain` from the agent's STATE_BATTLE `fTime` and counts it
+    down.
+  - `GLCrow::IsTyrannyTowerLocked` gates:
+    - `GLChar::IsReActionable` (attacks, skills, summons)
+    - `GLCrow::ReceiveDamage` and `VAR_BODY_POINT` (damage only)
+    - `TyrannyDamageCheck`
+  - A field that missed the battle start (remaining 0) leaves the towers open.
+- **Client.**
+  - A locked tower is refused in `IsReActionable` / `MobReaction`, with a message
+    at most every 3 s.
+  - Auto-target skips locked towers.
+  - The tower HUD shows "ฐานเปิดใน 5 นาทีสุดท้าย".
+  - A one-time notice fires when 5 minutes remain.
+- **Captions.** `PVP_TYRANNY_BATTLE` now mentions the rule. The rule also sits on
+  the Tyranny page's note line: it was first put on the goal line, which cut it
+  off (seen on device).
+- **Not changed.** `tyranny.ntk` (encrypted NPC talk) may still describe the old
+  rule.
+
+### Anti-bot check (server + both clients; window verified with a local demo)
+- **When it asks.** Every `dwAntiBotIntervalSec` (3600) +/- `dwAntiBotJitterSec`
+  (1200) of hunting time. Hunting time is spent outside safe zones and event
+  maps, alive, not trading, duelling or running a shop, at or above
+  `dwAntiBotMinLevel`. GMs and fake PCs are exempt.
+- **The question.** The field asks a+b with four answers.
+- **Failure.** No answer within `dwAntiBotTimeoutSec` (180), or `dwAntiBotMaxTry`
+  (3) wrong answers, disconnects the character (cheat type 5, "ANTIBOT_KICKED").
+  A wrong answer brings a new sum on the same clock.
+- **Config.** `bFeatureAntiBot` (default ON) and the values above, in
+  `[GAME_FEATURE]` of the field server's Config.ini.
+- **Log.** `_antibot.txt`: ASK / PASS / WRONG / KICK / GM, with response time.
+- **GM command.** `/antibot <name>` asks that character now (same field server
+  only).
+- **Code.**
+  - Messages: `NET_MSG_GCTRL_ANTIBOT_*` (+3920..3923).
+  - Structs: `GLContrlServerMsg.h`.
+  - Server logic: `GLCharAntiBot.cpp`.
+  - Window: `CAntiBotWindow`, controls in `_inner_inventory_lock.xml`. Its X does
+    nothing, and it re-opens if hidden while a question is pending.
+- **Verified on LDPlayer** with the `antibotdemo` diagnostic (question made and
+  answered on the device, nothing sent):
+  - The window shows the sum, four 40-unit buttons, and the countdown with tries
+    left.
+  - A wrong answer shows "คำตอบไม่ถูกต้อง ลองข้อใหม่" with a new sum and 2
+    tries, and the clock keeps running.
+  - The X does not close it; the right answer does.
+- **Not verified.** The server round trip (needs the new field server).
+- **Limit.** A bot that reads client memory can do the sum. This stops click,
+  macro and pixel bots.
+
+### Still open
+- [ ] Deploy ServerAgent + ServerField + the PC client (user).
+- [ ] Ship the Android + iOS patch: glow fix, launcher minApk ordering, all of the
+  above, plus data (`Gui.rcc`, `mobile_icons.dds`).
+- [ ] Tablet check of the glow and the blink.
+
+---
+
 ## 2026-09-25 (1) — Weapon/costume neon glow: on, in the right place, whole
 
 Test01's costume bow (BDN0038_M_one.cps, NEON effect) and testp2's glove glow

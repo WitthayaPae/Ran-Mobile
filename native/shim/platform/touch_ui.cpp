@@ -2775,6 +2775,35 @@ void drawEditor() {
 
 extern "C" void RanTouch_RenderChatMode(int mode);
 
+//  An event has opened (or a quest step is waiting) while the menu is shut.
+//
+//  The event icon lives in the menu grid, and the grid is hidden while the menu
+//  is closed - so the PC's yellow warning blink on that icon had nowhere to
+//  show. The client says so here, and the menu button carries the same blink:
+//  a yellow ring round it, on and off every 0.2 s like the PC's. Drawn live,
+//  not in the cached HUD geometry: it changes five times a second, and every
+//  change would rebuild the cache.
+static bool g_menuAlert = false;
+extern "C" void RanTouch_SetMenuAlert(int on) { g_menuAlert = (on != 0); }
+
+static void renderMenuAlert() {
+    if (!g_menuAlert || g_edit) return;
+    //  The PC's rate: BLINK_TIME_LOOP, 0.2 s on, 0.2 s off.
+    if (((long long)(tapFxNow() / 0.2)) & 1) return;
+    for (int i = 0; i < kButtonCount; ++i) {
+        const Button &b = g_buttons[i];
+        if (b.slot != kSlotMenu) continue;
+        const int grp = groupOfButton(i);
+        const float ga = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
+        const float R = b.radius;
+        g_drawAlpha = 1.0f;
+        drawRing(b.centre.x, b.centre.y, R * 1.02f, R * 1.24f, 0.0f, 0.0f, 0.0f, 0.30f * ga);
+        drawRing(b.centre.x, b.centre.y, R * 1.06f, R * 1.20f, 1.0f, 0.90f, 0.30f, 0.95f * ga);
+        emit();
+        break;
+    }
+}
+
 void RanTouch_Render(void) {
     ageActivity();
     if (!g_inited || !g_active || !g_prog) return;
@@ -3108,6 +3137,8 @@ void RanTouch_Render(void) {
         glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
         glUniform2f(uViewport, (float)g_width, (float)g_height);
     }
+
+    renderMenuAlert();
 
     //  The skill slots get the painted bezel too - it was in the sheet from the
     //  start and only the potion row was using it.
