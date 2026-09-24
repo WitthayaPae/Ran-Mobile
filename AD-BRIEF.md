@@ -81,7 +81,7 @@ The four classes lined up across the frame like a movie poster — Brawler, Swor
 A female Brawler in green and black leaping forward with a glowing gauntlet punch, swirl of green smoke, dark background with club banners clashing. Headline top: "CLUB DEATHMATCH". Under it: "Every club. One winner."
 
 ### ad_ppl3_03.dds — was Cobra energy drink "Instant Brainergy"
-A male Shaman in crimson robes casting red and yellow lightning from both hands, a smartphone floating beside him showing an "AUTO" button glowing. Headline right: "AUTO BATTLE". Under it: "Keep fighting, even on the go."
+A male Shaman in crimson robes casting red and yellow lightning from both hands, a smartphone floating beside him showing a glowing virtual joystick and a ring of skill buttons. Headline right: "TAP. CAST. WIN." Under it: "Built for touch."
 
 ---
 
