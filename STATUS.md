@@ -12,17 +12,27 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
-## 2026-09-24 (3) — ROV-style touch feedback, target lock, attack range (IN PROGRESS)
+## 2026-09-24 (3) — ROV-style touch feedback, target lock, range circle, settings
 
-**Still open (being built now, both platforms - the code is shared):**
-1. Tap effect: an expanding white ring wherever the screen is touched, every
-   screen, drawn last (d3d9 shim Present). On/off in Settings > Function.
-2. Auto-lock follows the player: with AUTO or PK on, tapping an enemy switches
-   the lock to it (bKEEP_LOCK used to refuse). New drop-down in Settings >
-   Function: nearest / lowest HP / lowest HP % - used by every auto-pick.
-3. Range circle: a white ring on the ground around the character showing how
-   far the attack or the pressed skill reaches (the game's own range formulas),
-   shown while attack is held and for a moment after a press.
+All in shared code, so Android and iOS both have it; iOS CI build of it passed
+(run 36033074739). Verified on the emulator:
+
+- **Tap ring**: white ring wherever the screen is touched, every page (login
+  included), drawn last in Present. Screenshot on the login page.
+- **Target rule** drop-down (nearest / lowest HP / lowest HP %): after picking
+  HP %, the log shows `auto-pick (rule 2)`.
+- **Auto-lock follows a tap on an enemy**; an NPC/friendly can no longer hold
+  the auto-lock (it used to, for ever - measured). The switch itself was NOT
+  seen live: mobs never stood still in reach of a tap on the emulator. Per-tap
+  log line `RanTarget: tap on kind=.. id=..` shows what each tap hit.
+- **Range circle**: white outline only, attack reach while attack is held,
+  skill reach on a skill press, follows the ground. Seen on screen.
+- **Settings > Function**: players drawn, graphics quality and target rule are
+  drop-downs; tap ring and range circle are check boxes (range off verified:
+  no circle); HUD editor button last.
+- **Chat button layers**: open, the fold plate draws right after the chat
+  window; folded, the icon draws with the ride button - both under the
+  inventory (screenshots).
 
 ## 2026-09-24 (2) — Billboards, the copyright line, and iOS catching up with Android
 
