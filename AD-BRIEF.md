@@ -83,6 +83,15 @@ A female Brawler in green and black leaping forward with a glowing gauntlet punc
 ### ad_ppl3_03.dds — was Cobra energy drink "Instant Brainergy"
 A male Shaman in crimson robes casting red and yellow lightning from both hands, a smartphone floating beside him showing a glowing virtual joystick and a ring of skill buttons. Headline right: "TAP. CAST. WIN." Under it: "Built for touch."
 
+### ad_ppl2_13.dds — was an old costume sale "Suit your nobleness!"
+Weapons and armor for the four classes — a gauntlet, a sword, a bow and a staff — floating in a ring around a glowing chest plate, dark velvet background with gold sparks. Elegant headline right: "GEAR UP".
+
+### ad_ppl3_04.dds — was a Taiwanese club promo with real player names
+A female Swordsman in a dueling stance, long blade glowing white-gold, cherry petals and sparks swirling, dark stone arena behind her. Headline right: "MASTER THE BLADE".
+
+### ad_ppl3_05.dds — was the same Taiwanese club promo
+A towering armored boss monster filling the right half of the frame, glowing red eyes, a party of four heroes of different classes charging at it from the left, sparks and debris, dark stormy arena. Top headline: "HUNT THE BOSS". Under it: "Bring your party."
+
 ---
 
 `airportfueltruck01_d.dds` — no prompt, not an ad (see top).

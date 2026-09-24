@@ -26,8 +26,8 @@ SRC    = os.path.join(HERE, 'src')
 ORIG   = os.path.join(HERE, 'orig')
 
 NAMES = (['ad_ppl1_%02d' % i for i in (1, 2, 3)] +
-         ['ad_ppl2_%02d' % i for i in range(1, 13)] +
-         ['ad_ppl3_%02d' % i for i in (1, 2, 3)])
+         ['ad_ppl2_%02d' % i for i in range(1, 14)] +
+         ['ad_ppl3_%02d' % i for i in (1, 2, 3, 4, 5)])
 
 # Inner picture areas of the framed billboards, measured on the originals
 # (left, top, right, bottom; right/bottom exclusive). ad_ppl2_11 is two
