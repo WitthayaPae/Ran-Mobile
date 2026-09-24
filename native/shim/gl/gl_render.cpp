@@ -62,6 +62,7 @@ const char *kVS =
     "uniform mat4 uMVP;\n"
     "uniform mat4 uWorld;\n"
     "uniform vec2 uViewport;\n"
+    "uniform float uFlipY;\n"
     "#ifndef uPreTransformed\n"
     "uniform int  uPreTransformed;\n"
     "#endif\n"
@@ -181,6 +182,15 @@ const char *kVS =
     "        vWorldPos = (uWorld * vec4(aPos.xyz, 1.0)).xyz;\n"
     "        vNormal   = normalize((uWorld * vec4(aNormal, 0.0)).xyz);\n"
     "    }\n"
+    //  Into a render target, rows are stored in D3D order - the top of the
+    //  image in row 0 - so a texture coordinate the client computed the D3D
+    //  way (v = 0 at the top) reads what it means when that target is sampled.
+    //  Without this every off-screen pass came back upside down: the weapon
+    //  glow composited as the mirror image of the weapon. The cull flip for
+    //  render targets was always written for this mirror; it just never had
+    //  one to match. Negative only: a uniform never set reads 0 and must not
+    //  collapse the geometry.
+    "    if (uFlipY < 0.0) gl_Position.y = -gl_Position.y;\n"
     "    vColor = aColor.bgra;\n"   // D3DCOLOR is B,G,R,A in memory
     "    vUV = aUV;\n"
     "    vUV2 = aUV2;\n"
@@ -729,7 +739,10 @@ char g_diagTag[512] = "?";         // what the engine says it is drawing
 //  several effect passes into textures; without a real off-screen target those
 //  passes -- and the full-screen black Clear that opens them -- land on the
 //  visible frame and wipe the scene that was just drawn.
-struct RanRT { GLuint fbo = 0, depth = 0; int w = 0, h = 0; };
+//  depthFrame: the frame whose first bind last cleared this target's depth.
+struct RanRT { GLuint fbo = 0, depth = 0; int w = 0, h = 0; unsigned depthFrame = 0; };
+//  Counts frames for RanRT::depthFrame; starts at 1 so a new target clears.
+unsigned g_rtFrame = 1;
 std::map<GLuint, RanRT> g_rts;
 bool g_rtActive = false;
 int  g_rtW = 0, g_rtH = 0;
@@ -1834,10 +1847,53 @@ extern "C" void RanGLR_SetRenderTargetTexture(unsigned glTex, int w, int h) {
     }
     ++g_rtSwitches;
 
+    //  The target's depth buffer is the shim's, not the client's. D3D has no
+    //  such thing: the neon pass (DxEffCharNeon) draws into the glow target
+    //  against the SCENE's depth, which is rebuilt every frame. This one was
+    //  cleared once, at creation, and after that each frame's glow mesh was
+    //  tested against the nearest depth of every place the weapon had ever
+    //  been - so the glow broke up into fragments and faded out over a
+    //  session. Start each frame from far, on the first bind of the frame, so
+    //  the pieces drawn in one frame still sort against each other. The scene
+    //  depth itself cannot be shared: it is the panel's size, not the target's.
+    if (rt.depthFrame != g_rtFrame) {
+        rt.depthFrame = g_rtFrame;
+        const GLboolean scis = glIsEnabled(GL_SCISSOR_TEST);
+        if (scis) glDisable(GL_SCISSOR_TEST);
+        const int maskWas = g_gl.depthMask;
+        if (!maskWas) glDepthMask(GL_TRUE);
+        glClearDepthf(1.0f);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        if (!maskWas) glDepthMask(GL_FALSE);
+        if (scis) glEnable(GL_SCISSOR_TEST);
+    }
+
     g_rtActive = true;
     g_rtFbo = rt.fbo;
     g_rtW = w; g_rtH = h;
     glViewport(0, 0, w, h);
+}
+
+//  Diagnostic: write whatever is bound for drawing right now - a render target
+//  or the world's surface - to <diag root>/<name>.ppm, rows as GL stores them:
+//  a render target top row first, the frame bottom row first. Used to line an
+//  off-screen pass up against the frame.
+extern "C" void RanGLR_DumpTarget(const char *name) {
+    if (!g_inited || !name) return;
+    const int w = g_rtActive ? g_rtW : baseWidth();
+    const int h = g_rtActive ? g_rtH : baseHeight();
+    if (w <= 0 || h <= 0) return;
+    std::vector<unsigned char> px((size_t)w * h * 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, &px[0]);
+    char file[96];
+    snprintf(file, sizeof(file), "%s.ppm", name);
+    FILE *f = RanPlat_DiagOpenWrite(file);
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    for (size_t i = 0; i < (size_t)w * h; ++i) fwrite(&px[i * 4], 1, 3, f);
+    fclose(f);
+    LOGI("dumped %s %dx%d (rt=%d)", file, w, h, g_rtActive ? 1 : 0);
 }
 
 //  How much of the panel the world is drawn at: 1.0 is the panel itself and
@@ -2062,7 +2118,8 @@ extern "C" void RanGLR_ClearRect(int x, int y, int w, int h) {
     const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
     const int y0 = (int)lroundf(y * scale), y1 = (int)lroundf((y + h) * scale);
     glEnable(GL_SCISSOR_TEST);
-    glScissor(x0, surfaceH - y1, x1 - x0, y1 - y0);
+    //  A render target stores rows top first (see uFlipY), the frame bottom first.
+    glScissor(x0, g_rtActive ? y0 : surfaceH - y1, x1 - x0, y1 - y0);
 }
 
 extern "C" void RanGLR_ClearRectOff(void) {
@@ -2072,7 +2129,7 @@ extern "C" void RanGLR_ClearRectOff(void) {
 //  The frame is over: the next one starts on a buffer of unknown content.
 extern "C" int RanGLR_FrameDrawCount(void) { return g_frameDraw; }
 
-extern "C" void RanGLR_FrameEnd(void) { g_frameClearedColor = false; }
+extern "C" void RanGLR_FrameEnd(void) { g_frameClearedColor = false; ++g_rtFrame; }
 
 extern "C" void RanGLR_Clear(DWORD flags, D3DCOLOR color, float z, DWORD stencil) {
     if (!g_inited) return;
@@ -2116,8 +2173,9 @@ extern "C" void RanGLR_SetViewport(int x, int y, int w, int h) {
     const int surfaceH = g_rtActive ? g_rtH : baseHeight();
     const int x0 = (int)lroundf(x * scale), x1 = (int)lroundf((x + w) * scale);
     const int y0 = (int)lroundf(y * scale), y1 = (int)lroundf((y + h) * scale);
-    // D3D viewport Y is measured from the top, GL's from the bottom.
-    glViewport(x0, surfaceH - y1, x1 - x0, y1 - y0);
+    // D3D viewport Y is measured from the top, GL's from the bottom - except in
+    // a render target, whose rows are stored top first (see uFlipY).
+    glViewport(x0, g_rtActive ? y0 : surfaceH - y1, x1 - x0, y1 - y0);
 }
 
 // Apply the D3D render-state block to GL immediately before a draw. Doing it

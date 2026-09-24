@@ -3,12 +3,52 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-23
+- **Last updated:** 2026-09-25
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
 - **On device:** renders on the x86_64 test device (Adreno 750, GLES 3.1) at a steady 60 fps.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
+
+---
+
+## 2026-09-25 (1) — Weapon/costume neon glow: on, in the right place, whole
+
+Test01's costume bow (BDN0038_M_one.cps, NEON effect) and testp2's glove glow
+on PC and showed nothing on mobile. Three causes, each measured:
+
+1. **Never switched on.** `ran_app.cpp`'s copy of `RestoreDeviceObjects` skipped
+   `DxGlowMan::SetProjectActiveON()` / `DxPostProcess::SetProjectActiveON()`,
+   which the PC calls there. Added; the pink appeared.
+2. **Mirrored top-to-bottom.** Frame dumps (`glowdump` switch, below) showed the
+   neon source texture and the blur exactly on the weapons, and the final frame
+   showing the glow reflected about the screen's horizontal centre. The glove
+   glowed low, and the bow's arc was drawn backwards. The shim stored
+   render targets bottom row first, while the client samples them with D3D
+   UVs (v=0 at the top). RT-to-RT passes flipped twice and cancelled out; the
+   last composite onto the frame flipped once. `uFlipY` had been uploaded per
+   draw since the first commit, but the vertex shader never declared it. The
+   render-target cull flip was written for a mirror that never happened, so
+   off-screen world geometry was also culled inside out. Fix: the shader
+   mirrors into RTs, so rows are stored in D3D order. RT viewport and
+   scissor now use top-down y, and `StretchRect` converts each side separately
+   (RT as-is, frame inverted).
+3. **Fragments that faded.** The shim gives each RT its own depth buffer, and
+   that buffer was cleared only when the RT was created. The PC's neon pass uses
+   the scene depth, rebuilt every frame. Each frame's glow was therefore tested
+   against the nearest depth of everywhere the weapon had ever been. Fix: clear
+   RT depth on each RT's first bind every frame (`RanRT::depthFrame`). Sharing
+   the scene depth isn't possible: it's panel-sized and the glow source is
+   1280x720. Remaining difference from PC: a glow isn't hidden behind another
+   object in front of the weapon.
+
+Verified on LDPlayer: source dump shows the whole glove and bow; the frame
+shows each glow on its weapon; no GL errors or incomplete targets. Tablet
+not yet checked.
+
+Diagnostic: flag file `glowdump` in the data root writes `glow_scene.ppm`,
+`glow_src.ppm` and `glow_blur.ppm` every 120 glow frames
+(`RanGLR_DumpTarget`). RT dumps are top row first, the frame bottom row first.
 
 ---
 

@@ -1243,11 +1243,17 @@ public:
         if (pSrcRect) { sx0 = pSrcRect->left; sy0 = pSrcRect->top; sx1 = pSrcRect->right; sy1 = pSrcRect->bottom; }
         if (pDstRect) { dx0 = pDstRect->left; dy0 = pDstRect->top; dx1 = pDstRect->right; dy1 = pDstRect->bottom; }
 
-        //  D3D counts rows from the top and GL from the bottom.
-        const int syA = sh - sy1, syB = sh - sy0;
-        const int dyA = dh - dy1, dyB = dh - dy0;
+        //  Each side's rows as GL stores them, top edge first so the blit keeps
+        //  the image upright: a render target holds D3D's row order (the
+        //  shader mirrors into it, see uFlipY), the frame counts from the
+        //  bottom.
+        const bool dstIsFrame = (dst == m_backBuffer);
+        const int syA = sy0, syB = sy1;
+        const int dyA = dstIsFrame ? dh - dy0 : dy0;
+        const int dyB = dstIsFrame ? dh - dy1 : dy1;
+        (void)sh;
 
-        const unsigned dstTex = (dst == m_backBuffer) ? 0u : dst->RenderTargetTexture();
+        const unsigned dstTex = dstIsFrame ? 0u : dst->RenderTargetTexture();
         RanGLR_BlitTexture(src->RenderTargetTexture(), sx0, syA, sx1, syB,
                            dstTex, dx0, dyA, dx1, dyB,
                            Filter == D3DTEXF_LINEAR ? 1 : 0);

@@ -40,6 +40,8 @@
 #include "DxLightMan.h"
 #include "ShaderConstant.h"
 #include "NsOCTree.h"
+#include "DxGlowMan.h"
+#include "DxPostProcess.h"
 
 #include <string>
 
@@ -135,6 +137,14 @@ public:
     HRESULT RestoreDeviceObjects() override {
         DxResponseMan::GetInstance().RestoreDeviceObjects();
         DxGlobalStage::GetInstance().RestoreDeviceObjects();
+        //  The PC's RestoreDeviceObjects switches these two on here, and this
+        //  copy of it did not. Without them DxGlowMan::RenderTex/Render return
+        //  on their first test (!m_bProjectActive) whatever the glow option
+        //  says, so every Neon effect - the pink edge on costume weapons and
+        //  gloves - was drawn into the glow buffer and never reached the
+        //  screen. Post-process was dead the same way.
+        DxGlowMan::GetInstance().SetProjectActiveON();
+        DxPostProcess::GetInstance().SetProjectActiveON();
         DXPARAMSET::INIT();
         return S_OK;
     }
