@@ -5,6 +5,15 @@ How an update reaches a player's tablet, and what to do to publish one.
 Everything here has been run end to end against the live store; the numbers are
 from that, not from the design.
 
+> **Rule: every mobile change ships to BOTH Android and iOS, in the same patch.**
+> A launcher, patch-page, platform or string change made in
+> `android/java/.../RanLauncher.java` or `platform/android/` has its iOS
+> counterpart in `platform/ios/ran_ios_main.mm` / `ran_ios_patch.mm`, and is not
+> done until that is changed too and the iOS build is published (see *Shipping
+> code on iOS* below). The 2026-09-23 patch-page rebuild reached Android only;
+> iOS caught up on 2026-09-24. The counterpart map is in the project root's
+> `CLAUDE.md`.
+
 ---
 
 ## The two halves
