@@ -24,8 +24,8 @@ fuel truck model. Leave it alone; repainting it scrambles the truck.
 
 Game facts the prompts use (from the game data, not invented): schools
 **Sacred Gate, Mystic Peak, Phoenix**; classes **Brawler, Swordsman, Archer,
-Shaman, Extreme, Gunner, Assassin, Tricker**; events **Club Deathmatch, Capture the Flag,
-Tyranny** (School Wars is not in the live game); mobile on **Android and iOS**.
+Shaman, Extreme, Gunner, Assassin, Tricker**; events **School Wars, Club War,
+Club Deathmatch, Capture the Flag, Tyranny**; mobile on **Android and iOS**.
 
 ---
 
@@ -51,7 +51,7 @@ Two academy students, one male one female, standing confidently in a sunny campu
 Several glowing golden mystery boxes with teal ribbons tumbling toward the viewer, sparkles and light rays, deep brown-gold background. Big chunky yellow headline: "MYSTERY BOXES OUT NOW!"
 
 ### ad_ppl2_05.dds — was "Domination 6" job-fair tournament
-Three students standing back to back in the center, each in their school's colors and holding its banner — crimson for Sacred Gate, blue for Mystic Peak, amber for Phoenix — three school gates glowing behind them. Top headline across the full width: "CHOOSE YOUR SCHOOL". Under it: "Sacred Gate · Mystic Peak · Phoenix".
+Three heroes charging toward the center from three sides, each carrying a banner — crimson for Sacred Gate, blue for Mystic Peak, amber for Phoenix — sparks where they meet. Top headline across the full width: "SCHOOL WARS". Under it: "Sacred Gate · Mystic Peak · Phoenix".
 
 ### ad_ppl2_06.dds — was a sushi ad (has a thin gold frame — generate the picture only; the frame is kept)
 A group of five adventurers of different classes posing together under a big club banner on a rooftop at sunset, warm friendly mood. Headline top-left: "FORM YOUR CLUB".
