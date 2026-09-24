@@ -14,9 +14,14 @@ fuel truck model. Leave it alone; repainting it scrambles the truck.
 - **Text:** keep it to the headline in quotes. At 512 px and seen from across a
   map, anything smaller than a headline turns to mush. English only - image
   models draw Thai badly; if you want Thai lines, ask and they get added after.
-- **Save as PNG** named after the texture (`ad_ppl2_05.png`). Hand them back and
-  they get resized, framed where the original has a frame, converted to the same
-  DDS format as the file they replace, and put in the patch.
+- **Save as PNG** named after the texture (`ad_ppl2_05.png`) into
+  `MOBILE/tools/ad-art/src/`, then run `python MOBILE/tools/ad-art/make-ads.py`.
+  It fits each picture (cover-crop, never stretched), keeps the painted frame on
+  ad_ppl2_06/08/10/11/12, writes the same DDS format with the full mip chain
+  over `CLIENT/textures/map/<name>.dds`, and checks every file's size against
+  the original. Any PNG you have not made yet leaves that billboard as it is.
+  A `<name>.preview.png` lands next to your PNG so you can see the framed result.
+  Untouched originals are kept in `tools/ad-art/orig/`.
 
 **Style line — add to the end of every prompt:**
 
