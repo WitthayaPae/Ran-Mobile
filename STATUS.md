@@ -118,6 +118,16 @@ Verified on live against the deployed agent, both clients, into the world:
 The lesson: a new login path must reproduce the WHOLE handler it stands in for,
 read end to end; and once a message shape ships, the server reads it forever.
 
+**Mobile security sign-off for go-live (2026-09-24, measured on device):** the
+password never leaves the phone (challenge accepted for v542 and the newer
+client); after a login the device log holds neither the id nor the password;
+nothing in the app's data folder stores either (the one digit match,
+`activity.bin`, is byte-identical to shipped game data). Accepted and left open
+by decision: chat and gameplay traffic in the clear, and the 3-second fallback
+an active attacker on a hostile network could force. Cleanups, not blockers:
+drop MANAGE_EXTERNAL_STORAGE when the migration window closes; move
+KEYSTORE-BACKUP/ offline. DB exposure (1433 + sa) is the user's, deferred.
+
 **Shipped as store version 542** (APK versionCode 148 / iOS 1.0.148, minIos 148).
 The upload set is 4 blobs, 50.5 MB - the APK, the HUD atlas and the two ini
 files - plus ios/ (RanLegacyM.ipa 11.3 MB, source.json) and the manifest. The
