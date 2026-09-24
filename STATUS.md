@@ -108,10 +108,29 @@ before they do anything live.
 - **Limit.** A bot that reads client memory can do the sum. This stops click,
   macro and pixel bots.
 
+### Release built (2026-09-25)
+- **Store 550.** APK versionCode 151 "V129"; iOS 1.0.151 (CI run 36053177633).
+  The binary was grepped for the anti-bot, menu-alert and quest-tile strings.
+  `minIos` is 151.
+- **Upload set.** `MOBILE/native/out/upload`:
+  - 3 blobs (Gui.rcc, mobile_icons.dds, APK)
+  - `ios/`
+  - `manifest.json` + `manifest.sig`
+- **Builds.** MSVC Release|Win32 ServerAgent / ServerField / MiniA: 0 errors,
+  and the new packet-size static_asserts pass on MSVC and on clang arm64/x86_64.
+  Copied into `CLIENT/`.
+- **Tooling.** `layout/gen-probe.sh` is broken (syntax error at line 24).
+  The new structs are covered by static_asserts instead.
+
 ### Still open
-- [ ] Deploy ServerAgent + ServerField + the PC client (user).
-- [ ] Ship the Android + iOS patch: glow fix, launcher minApk ordering, all of the
-  above, plus data (`Gui.rcc`, `mobile_icons.dds`).
+- [ ] Upload store 550 (user): blobs first, `ios/` next, manifest last.
+- [ ] Deploy ServerAgent + ServerField (user). Until then the anti-bot check, the
+  open CDM entry and the tower lock do nothing live.
+- **Ordering risk.** Deploy the servers together with (or before) the mobile
+  upload. A patched client already refuses towers until the last 5 minutes. If
+  the old server is still running, mobile players can't hit towers early while
+  old-client players can. The anti-bot and CDM client parts are harmless against
+  the old server, which never sends a question and handles CDM entry as before.
 - [ ] Tablet check of the glow and the blink.
 
 ---
