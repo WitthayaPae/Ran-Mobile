@@ -23,8 +23,8 @@ fuel truck model. Leave it alone; repainting it scrambles the truck.
 > bold esports-style game advertisement, Korean MMORPG art style, vivid saturated colors, strong rim lighting, high contrast, large clean readable headline typography, logo "RAN LEGACY M" in the corner, no real-world brands, no watermark, 2:1 wide banner composition
 
 Game facts the prompts use (from the game data, not invented): schools
-**Sacred Gate, Mystic Peak, Phoenix**; classes **Brawler, Swordsman, Archer,
-Shaman, Extreme, Gunner, Assassin, Tricker**; events **Club War, Club Deathmatch, Tyranny** (School Wars and
+**Sacred Gate, Mystic Peak, Phoenix**; classes **Brawler, Swordsman,
+Archer, Shaman** (the four classes live on production); events **Club War, Club Deathmatch, Tyranny** (School Wars and
 Capture the Flag are not in the live game); mobile on **Android and iOS**.
 
 ---
@@ -75,13 +75,13 @@ Two heroes of different classes bumping gauntleted fists in the center, a third 
 An epic castle under siege at golden hour, armies of the three schools on the field, banners and fire arrows, a lone hero on the wall raising a sword. Classical serif headline left: "TYRANNY — CLAIM THE CITY".
 
 ### ad_ppl3_01.dds — was a crowded anime event poster
-All eight classes lined up across the frame like a movie poster — Brawler, Swordsman, Archer, Shaman, Extreme, Gunner, Assassin, Tricker — dramatic red and black sunburst behind them. Center headline in a bold emblem: "8 CLASSES. ONE LEGACY."
+The four classes lined up across the frame like a movie poster — Brawler, Swordsman, Archer, Shaman — each in a heroic pose, dramatic red and black sunburst behind them. Center headline in a bold emblem: "4 CLASSES. ONE LEGACY."
 
 ### ad_ppl3_02.dds — was "Join the AXE Wars" competition
-A female Assassin in green and black leaping forward with twin blades, swirl of green smoke, dark background with club banners clashing. Headline top: "CLUB DEATHMATCH". Under it: "Every club. One winner."
+A female Brawler in green and black leaping forward with a glowing gauntlet punch, swirl of green smoke, dark background with club banners clashing. Headline top: "CLUB DEATHMATCH". Under it: "Every club. One winner."
 
 ### ad_ppl3_03.dds — was Cobra energy drink "Instant Brainergy"
-A Gunner in crimson armor firing twin pistols, red and yellow lightning energy, a smartphone floating beside him showing an "AUTO" button glowing. Headline right: "AUTO BATTLE". Under it: "Keep fighting, even on the go."
+A male Shaman in crimson robes casting red and yellow lightning from both hands, a smartphone floating beside him showing an "AUTO" button glowing. Headline right: "AUTO BATTLE". Under it: "Keep fighting, even on the go."
 
 ---
 
