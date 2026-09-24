@@ -69,7 +69,7 @@ An Archer drawing a bow, arrow of blue light, splash of water and energy around 
 Three friendly academy instructors in formal uniforms smiling in front of a grand school gate, red paper lanterns and bamboo at the edge, warm light, Asian-airline-ad mood. Thin italic headline top-left: "WELCOME, STUDENT".
 
 ### ad_ppl2_11.dds — was "Spend it or lose it" (TWO SQUARE PANELS in one frame — generate **one 1024 × 1024 square**, it is used twice)
-A glowing golden "Level Up" card held up in a gauntleted hand, beams of light and rising numbers around it, deep blue background with streaks of red. Big stacked headline: "LEVEL UP CARD". Under it: "Straight to the top."
+Two heroes of different classes bumping gauntleted fists in the center, a third and fourth running in behind them, warm golden light and sparks, deep blue background. Big stacked headline: "PARTY UP". Under it: "Nobody hunts alone."
 
 ### ad_ppl2_12.dds — was a wedding ad (ornate stone frame — picture only, slightly narrower: ~1.9 : 1)
 An epic castle under siege at golden hour, armies of the three schools on the field, banners and fire arrows, a lone hero on the wall raising a sword. Classical serif headline left: "TYRANNY — CLAIM THE CITY".
