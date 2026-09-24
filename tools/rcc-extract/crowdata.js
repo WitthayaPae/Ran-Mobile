@@ -135,6 +135,7 @@ function parse(raw) {
       const start = c.p;
       if (dt === FILE_SBASIC) {
         rec.main = c.b.readUInt16LE(start);
+        rec.emCrow = c.b.readUInt32LE(start + 4);   // SCROWBASIC::m_emCrow, right after sNativeID
         rec.sub = c.b.readUInt16LE(start + 2);
         const nm = c.b.slice(start + NAME_OFF, start + NAME_OFF + NAME_LEN);
         const z = nm.indexOf(0);
