@@ -12,6 +12,18 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-24 (3) — ROV-style touch feedback, target lock, attack range (IN PROGRESS)
+
+**Still open (being built now, both platforms - the code is shared):**
+1. Tap effect: an expanding white ring wherever the screen is touched, every
+   screen, drawn last (d3d9 shim Present). On/off in Settings > Function.
+2. Auto-lock follows the player: with AUTO or PK on, tapping an enemy switches
+   the lock to it (bKEEP_LOCK used to refuse). New drop-down in Settings >
+   Function: nearest / lowest HP / lowest HP % - used by every auto-pick.
+3. Range circle: a white ring on the ground around the character showing how
+   far the attack or the pressed skill reaches (the game's own range formulas),
+   shown while attack is held and for a moment after a press.
+
 ## 2026-09-24 (2) — Billboards, the copyright line, and iOS catching up with Android
 
 **Map billboards.** The 18 `textures/map/ad_ppl*.dds` still carried 2010-2012
