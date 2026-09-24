@@ -2,6 +2,7 @@
 
     python make-ads.py            # every src/<name>.png present -> CLIENT/textures/map/<name>.dds
     python make-ads.py --out DIR  # write somewhere else (a dry run)
+    python make-ads.py NAME ...   # only these textures
 
 Each output matches the texture it replaces exactly: same size (512x256), same
 pixel format (DXT1, DXT3 or A8R8G8B8 - it varies per file), and the full
@@ -30,6 +31,12 @@ NAMES = (['ad_ppl1_%02d' % i for i in (1, 2, 3)] +
          ['ad_ppl3_%02d' % i for i in (1, 2, 3, 4, 5)] +
          #  the Trade Zone market signs (4:1, text only)
          ['min_su_11_04', 'min_su_11_04_redbull'])
+
+# Signs whose art must keep its full height - the yellow market sign's orange
+# stripes run along the top and bottom edge, and a cover-crop to 4:1 cuts them
+# off. These are scaled to the exact size instead; their condensed lettering
+# takes the change in proportion without looking wrong.
+STRETCH = {'min_su_11_04', 'min_su_11_04_redbull'}
 
 # Inner picture areas of the framed billboards, measured on the originals
 # (left, top, right, bottom; right/bottom exclusive). ad_ppl2_11 is two
@@ -86,6 +93,8 @@ def build(name, out_dir):
         comp = base.copy()
         for (l, t, r, b) in FRAMES[name]:
             comp.paste(cover(art, r - l, b - t), (l, t))
+    elif name in STRETCH:
+        comp = art.resize((w, h), Image.LANCZOS)
     else:
         comp = cover(art, w, h)
     comp.putalpha(255)          # the originals are fully opaque
@@ -123,7 +132,16 @@ def main():
             shutil.copy2(os.path.join(MAPDIR, n + '.dds'), o)
 
     todo = [n for n in NAMES if os.path.exists(os.path.join(SRC, n + '.png'))]
-    unknown = [f for f in os.listdir(SRC) if f.endswith('.png') and f[:-4] not in NAMES]
+    #  names on the command line build just those, leaving every other
+    #  texture exactly as it is
+    only = [a for i, a in enumerate(sys.argv[1:], 1)
+            if not a.startswith('--') and sys.argv[i - 1] != '--out']
+    if only:
+        bad = [n for n in only if n not in NAMES]
+        if bad: raise SystemExit('not a known texture: %s' % ', '.join(bad))
+        todo = [n for n in todo if n in only]
+    unknown = [f for f in os.listdir(SRC) if f.endswith('.png') and not f.endswith('.preview.png')
+               and f[:-4] not in NAMES]
     if unknown:
         raise SystemExit('not a billboard name: %s' % ', '.join(unknown))
     if not todo:
