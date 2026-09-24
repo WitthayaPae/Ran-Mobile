@@ -1,5 +1,9 @@
 """Replace the logo an image model drew with the real RAN LEGACY M emblem.
 
+The drawn logo is removed by inpainting (LaMa, pip: simple-lama-inpainting,
+torch CPU, opencv-python-headless) - the scene is repainted through it - and
+the real emblem is placed where it was.
+
     python put-emblem.py <in_dir> <out_dir>
 
 Each generated ad carries a made-up "RAN LEGACY M" wordmark. For every ad the
@@ -22,7 +26,7 @@ MARK = os.path.join(HERE, '..', '..', 'native', 'android', 'res', 'drawable-nodp
 BOXES = {
     'ad_ppl1_01': ((35, 215, 225, 285), (0.05, 0.15, 0.05, 0.02)),
     'ad_ppl1_02': ((480, 12, 615, 77),  None),
-    'ad_ppl1_03': ((225, 49, 390, 119), None),
+    'ad_ppl1_03': ((225, 49, 390, 119), (0.06, 0.42, 0.06, 0.30)),   # school banners either side
     'ad_ppl2_01': ((470, 29, 610, 94),  None),
     'ad_ppl2_02': ((485, 166, 610, 221), None),
     'ad_ppl2_03': ((435, 26, 575, 96),  None),
@@ -35,11 +39,23 @@ BOXES = {
     'ad_ppl2_10': ((505, 17, 638, 77),  None),
     'ad_ppl2_11': ((455, 27, 625, 102), None),
     'ad_ppl2_12': ((525, 14, 635, 69),  None),
-    'ad_ppl3_01': ((530, 14, 635, 69),  None),
+    'ad_ppl3_01': ((530, 14, 635, 69),  (0.04, 0.42, 0.22, 0.30)),   # SHAMAN banner on the left
     'ad_ppl3_02': ((495, 226, 630, 291), None),
     'ad_ppl3_03': ((10, 11, 135, 71),   None),
 }
 DEFAULT_GROW = (0.22, 0.42, 0.22, 0.30)   # the spiked logos reach well past the text
+
+_lama = None
+def inpaint(img, mask):
+    """LaMa ("resolution-robust large mask inpainting"): the model behind most
+    remove-object tools. It repaints the hole from the scene around it, so
+    the logo disappears instead of being covered."""
+    global _lama
+    if _lama is None:
+        from simple_lama_inpainting import SimpleLama
+        _lama = SimpleLama()
+    out = _lama(img, mask)
+    return out.crop((0, 0) + img.size)          # LaMa pads to a multiple of 8
 
 def fix(src, dst, name, mark):
     im = Image.open(src).convert('RGB')
@@ -51,37 +67,31 @@ def fix(src, dst, name, mark):
     X0 = max(0, int((x0 - gl * bw) * s)); Y0 = max(0, int((y0 - gt * bh) * s))
     X1 = min(W, int((x1 + gr * bw) * s)); Y1 = min(H, int((y1 + gb * bh) * s))
 
-    # 1. cover: fill the box from the pixels AROUND it, never from the fake
-    #    logo itself - a normalised blur (blur of the picture with the box
-    #    cut out, divided by the blur of the cut-out mask). Blurring the logo
-    #    in place left a ghost of its letters and spikes.
-    a = np.asarray(im, dtype=np.float32)
-    keep = np.ones((H, W), np.float32)
-    keep[Y0:Y1, X0:X1] = 0.0
-    r = max(24, int(0.09 * W))
-    def blur(x):        # x in 0..255; PIL blurs 8-bit planes only
-        return np.asarray(Image.fromarray(np.clip(x, 0, 255).astype(np.uint8), 'L')
-                          .filter(ImageFilter.GaussianBlur(r)), dtype=np.float32)
-    num = np.stack([blur(a[..., c] * keep) for c in range(3)], -1)
-    den = blur(keep * 255.0)[..., None] / 255.0 + 1e-4
-    fill = np.clip(num / den, 0, 255)
-    #    an oval, solid in the middle and fading well past the box edge -
-    #    a rectangle, however feathered, reads as a pasted label
-    yy, xx = np.mgrid[0:H, 0:W]
-    cx0, cy0 = (X0 + X1) / 2.0, (Y0 + Y1) / 2.0
-    rx, ry = (X1 - X0) / 2.0 * 1.08, (Y1 - Y0) / 2.0 * 1.12
-    dist = np.sqrt(((xx - cx0) / rx) ** 2 + ((yy - cy0) / ry) ** 2)
-    m = np.clip((1.18 - dist) / 0.38, 0, 1)
-    m = (m * m * (3 - 2 * m))[..., None]                 # smoothstep
-    fill = fill * (1.0 - 0.30 * np.clip(1.0 - dist, 0, 1)[..., None])   # dark glow
-    im = Image.fromarray((a * (1 - m) + fill * m).astype(np.uint8))
+    # 1. remove the drawn logo: inpaint a crop around it (context on every
+    #    side gives the model something to continue), then paste it back
+    mx, my = (X1 - X0), (Y1 - Y0)
+    cx0, cy0 = max(0, X0 - mx), max(0, Y0 - my)
+    cx1, cy1 = min(W, X1 + mx), min(H, Y1 + my)
+    crop = im.crop((cx0, cy0, cx1, cy1))
+    mask = Image.new('L', crop.size, 0)
+    r = int(0.25 * min(X1 - X0, Y1 - Y0))
+    ImageDraw.Draw(mask).rounded_rectangle((X0 - cx0, Y0 - cy0, X1 - cx0, Y1 - cy0), radius=r, fill=255)
+    mask = mask.filter(ImageFilter.MaxFilter(9))             # a little past the glow
+    filled = inpaint(crop, mask)
+    soft = mask.filter(ImageFilter.GaussianBlur(3))
+    im.paste(Image.composite(filled, crop, soft), (cx0, cy0))
 
-    # 2. the emblem, as tall as the covered area, centred on it
-    d = int((Y1 - Y0) * 1.10)
+    # 2. the real emblem where the logo was, the same height it had, with a
+    #    soft shadow so it sits on the art instead of floating
+    d = int((Y1 - Y0) * 0.98)
     m = mark.resize((d, d), Image.LANCZOS)
     cx, cy = (X0 + X1) // 2, (Y0 + Y1) // 2
     ox, oy = max(0, min(W - d, cx - d // 2)), max(0, min(H - d, cy - d // 2))
     out = im.convert('RGBA')
+    sh = Image.new('RGBA', m.size, (0, 0, 0, 0))
+    sh.putalpha(m.getchannel('A').point(lambda v: int(v * 0.55)))
+    sh = sh.filter(ImageFilter.GaussianBlur(max(3, d // 30)))
+    out.alpha_composite(sh, (min(W - d, ox + d // 60), min(H - d, oy + d // 40)))
     out.alpha_composite(m, (ox, oy))
     out.convert('RGB').save(dst)
     return (X0, Y0, X1, Y1), d
