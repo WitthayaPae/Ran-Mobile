@@ -18,9 +18,14 @@ fuel truck model. Leave it alone; repainting it scrambles the truck.
   they get resized, framed where the original has a frame, converted to the same
   DDS format as the file they replace, and put in the patch.
 
+**The logo is added afterwards, never generated.** An image model redraws a
+logo instead of copying it, and covering a drawn logo later looks pasted on.
+So every prompt asks for an empty corner, and the real emblem
+(`ran_mark.png`) is placed there cleanly.
+
 **Style line — add to the end of every prompt:**
 
-> bold esports-style game advertisement, Korean MMORPG art style, vivid saturated colors, strong rim lighting, high contrast, large clean readable headline typography, logo "RAN LEGACY M" in the corner, no real-world brands, no watermark, 2:1 wide banner composition
+> bold esports-style game advertisement, Korean MMORPG art style, vivid saturated colors, strong rim lighting, high contrast, large clean readable headline typography, NO logo, NO game title, NO emblem, no real-world brands, no watermark, keep the top corner opposite the headline as calm empty background (about a third of the image height, nothing drawn there), 2:1 wide banner composition
 
 Game facts the prompts use (from the game data, not invented): schools
 **Sacred Gate, Mystic Peak, Phoenix**; classes **Brawler, Swordsman,
