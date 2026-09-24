@@ -113,6 +113,9 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show);
 
 /*  Tap feedback: a ring wherever the screen is touched. Drawn last in the
     frame (D3D shim Present); switched from Settings > Function.        */
+/*  The open chat's fold plate, drawn by the interface right after the chat
+    window (folded, the button is drawn in the pad pass).                  */
+extern "C" void RanTouch_RenderChatOpen(void);
 extern "C" void RanTouch_SetTapEffect(int on);
 extern "C" void RanTouch_RenderTapFx(void);
 /*  1 while the attack button is held: the client shows the attack range. */

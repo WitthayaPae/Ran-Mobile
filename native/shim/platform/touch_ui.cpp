@@ -2773,6 +2773,8 @@ void drawEditor() {
     emit();
 }
 
+extern "C" void RanTouch_RenderChatMode(int mode);
+
 void RanTouch_Render(void) {
     ageActivity();
     if (!g_inited || !g_active || !g_prog) return;
@@ -3236,6 +3238,12 @@ void RanTouch_Render(void) {
     //  The renderer caches the bound VAO, the program and the blend state, and
     //  all three have just changed behind its back.
     RanGLR_InvalidateStateCache();
+
+    //  The folded chat button lives beside the ride button, so it is drawn in
+    //  the ride button's layer: here, under every window. (Open, the fold
+    //  plate sits on the chat window and is drawn right after that window by
+    //  the interface - RanTouch_RenderChatOpen.)
+    RanTouch_RenderChatMode(2);
 }
 
 // ------------------------------------------------- what the game side reads
@@ -3467,8 +3475,12 @@ extern "C" void RanTouch_GetSkillSlotOffset(int i, float *fx, float *fy) {
 //  top right corner, so drawn there it went behind the very window it folds. It
 //  gets the same treatment the HUD editor's toolbar gets: its own little pass,
 //  after CInnerInterface::Render.
-extern "C" void RanTouch_RenderChatTop(void) {
-    if (!g_inited || !g_active || !g_prog || g_chatMode == 0) return;
+//  One drawer for both looks of the chat button, called from two layers:
+//  folded (mode 2) at the end of the pad pass, open (mode 1) straight after the
+//  chat window by the interface. It draws only when the button is in the mode
+//  asked for, so each layer gets exactly its own case.
+extern "C" void RanTouch_RenderChatMode(int mode) {
+    if (!g_inited || !g_active || !g_prog || g_chatMode == 0 || g_chatMode != mode) return;
 
     glUseProgram(g_prog);
     glBindVertexArray(g_vao);
@@ -3624,4 +3636,14 @@ extern "C" int RanTouch_AttackHeld(void) {
     for (int i = 0; i < kButtonCount; ++i)
         if (g_buttons[i].slot == kSlotAttack) return g_buttons[i].down ? 1 : 0;
     return 0;
+}
+
+//  The open chat's fold plate: called by the interface right after it has drawn
+//  the chat window, so the plate is on the chat and under every window above it.
+extern "C" void RanTouch_RenderChatOpen(void) { RanTouch_RenderChatMode(1); }
+
+//  Kept for callers that draw both at once.
+extern "C" void RanTouch_RenderChatTop(void) {
+    RanTouch_RenderChatMode(1);
+    RanTouch_RenderChatMode(2);
 }
