@@ -12,6 +12,35 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-24 (2) — Billboards, the copyright line, and iOS catching up with Android
+
+**Map billboards.** The 18 `textures/map/ad_ppl*.dds` still carried 2010-2012
+Philippine sponsor ads. They now carry RAN LEGACY M ads (prompts in
+`AD-BRIEF.md`, only features live on production). The image model drew its own
+fake logo on every one; `tools/ad-art/put-emblem.py` removes it with LaMa
+inpainting and puts the real `ran_mark.png` in its place, and
+`tools/ad-art/make-ads.py` writes each DDS in its original format with the full
+mip chain, keeping the five painted frames. Checked at full size and at the
+512x256 the game draws. Three more old ads (ad_ppl2_13, ad_ppl3_04/05 - a
+dated sale and a Taiwanese club promo with real player names) have prompts and
+wait for art.
+
+**Copyright.** Login footer, map-loading line and the PC launcher's About now
+say "Copyright (c) 2026 Invis Dev." / "All Rights Reserved." - gameword.xml
+and launcher.xml edited and repacked into Gui.rcc (packed == loose, verified),
+seen on the emulator's login screen.
+
+**iOS patch page = Android's.** The 2026-09-23 Android rebuild (moving bar,
+Thai text, retry instead of starting on a failed patch) had never reached iOS.
+It has now: RanPatchBar draws the Java's bar, every string is the Java's Thai,
+failures count down and retry, and only a too-old app is fatal. Compiled on CI;
+not yet seen on an iPhone.
+
+**Still open:** the store-543 upload set built earlier is STALE (it predates the
+Gui.rcc copyright change and the iOS page) - rebuild with MAKE-PATCH before any
+upload. The patch also carries the user's GLogic.rcc/NpcTalk.rcc beta-shop
+edits and the level-up-card client commit.
+
 ## 2026-09-24 (1) — The challenge login, and the hash checked against production
 
 The account leak found in the security review is being closed the cheap way: the
