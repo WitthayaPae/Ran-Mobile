@@ -613,13 +613,160 @@ extern "C" void RanPlat_PumpEvents ( void ) {}
 //  The first half is true and the second does not follow: Android carries the
 //  same four PNGs in its own package and draws them before a byte is fetched.
 
+//  The patch bar - RanLauncher.PatchBar, drawn the same way.
+//
+//  It was a UIProgressView: a filled line and nothing else. A patch spends most
+//  of its time inside one file - a 400 MB blob is one step of the count - and
+//  during that the fill does not move at all, so the page looks frozen and the
+//  player kills a download that was working. Android fixed this on 2026-09-23
+//  and iOS was left behind; this is the same bar.
+//
+//  The fill is the patcher's own number and nothing animates it. A highlight
+//  sweeps along what is LEFT of it, every frame, so the page is visibly alive
+//  without claiming progress it has not made. With no number yet (permille
+//  -1) the fill is zero and the sweep has the whole track - the indeterminate
+//  case, for free. Same colours as the Java: track #1B2126, fill #C9962B,
+//  sweep #C9962B at 1/3 alpha, head #F2D493.
+@interface RanPatchBar : UIView
+@property (nonatomic, assign) int permille;          //  -1 while busy
+@end
+
+@implementation RanPatchBar
+{
+    CADisplayLink *_link;
+    CFTimeInterval _t0;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame
+{
+    if ((self = [super initWithFrame:frame])) {
+        _permille = -1;
+        self.opaque = NO;
+        self.backgroundColor = UIColor.clearColor;
+    }
+    return self;
+}
+
+//  Ticked by a display link while the bar is on screen, and only then - the
+//  Java does the same with a posted Runnable that stops on detach.
+- (void)didMoveToWindow
+{
+    [super didMoveToWindow];
+    [_link invalidate];
+    _link = nil;
+    if (self.window) {
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+}
+
+- (void)tick:(CADisplayLink *)link { [self setNeedsDisplay]; }
+
+- (void)setPermille:(int)permille
+{
+    _permille = permille;
+    [self setNeedsDisplay];
+}
+
+static UIColor *RanRGBA ( unsigned argb )
+{
+    return [UIColor colorWithRed:((argb >> 16) & 0xFF) / 255.0
+                           green:((argb >>  8) & 0xFF) / 255.0
+                            blue:( argb        & 0xFF) / 255.0
+                           alpha:((argb >> 24) & 0xFF) / 255.0];
+}
+
+- (void)drawRect:(CGRect)rect
+{
+    const CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
+    if (w <= 0 || h <= 0) return;
+    if (_t0 == 0) _t0 = CACurrentMediaTime ();
+    const CGFloat t = (CGFloat)( CACurrentMediaTime () - _t0 );
+    const CGFloat r = h * 0.5f;
+    CGContextRef cg = UIGraphicsGetCurrentContext ();
+
+    //  The track.
+    [RanRGBA ( 0xFF1B2126 ) setFill];
+    [[UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:r] fill];
+
+    //  The progress, in the game's own gold. Honest: it is the patcher's
+    //  number, and nothing animates it.
+    const BOOL busy = _permille < 0;
+    const CGFloat fill = busy ? 0.0f : w * MIN ( 1.0f, _permille / 1000.0f );
+    if (fill > 1.0f) {
+        [RanRGBA ( 0xFFC9962B ) setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake ( 0, 0, fill, h )
+                                    cornerRadius:r] fill];
+    }
+
+    //  The part still to do carries the movement: a band of light crossing it
+    //  every 1.5 s, clipped to what is left so it never paints over the fill.
+    const CGFloat rest = w - fill;
+    if (rest > 2.0f) {
+        CGContextSaveGState ( cg );
+        CGContextClipToRect ( cg, CGRectMake ( fill, 0, rest, h ) );
+        [[UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:r] addClip];
+
+        const CGFloat band = MIN ( rest, w * 0.28f );
+        const CGFloat span = rest + band;
+        const CGFloat x = fill + fmod ( t / 1.5f, 1.0f ) * span - band;
+
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+        const CGFloat comps[12] = { 0xC9/255.0, 0x96/255.0, 0x2B/255.0, 0.0,
+                                    0xC9/255.0, 0x96/255.0, 0x2B/255.0, 0x55/255.0,
+                                    0xC9/255.0, 0x96/255.0, 0x2B/255.0, 0.0 };
+        const CGFloat locs[3] = { 0.0, 0.5, 1.0 };
+        CGGradientRef g = CGGradientCreateWithColorComponents ( cs, comps, locs, 3 );
+        CGContextDrawLinearGradient ( cg, g, CGPointMake ( x, 0 ), CGPointMake ( x + band, 0 ), 0 );
+        CGGradientRelease ( g );
+        CGColorSpaceRelease ( cs );
+        CGContextRestoreGState ( cg );
+    }
+
+    //  A bright head where the two meet, so the eye finds the number's edge
+    //  even while the sweep is at the far end.
+    if (fill > 1.0f && fill < w - 1.0f) {
+        [RanRGBA ( 0xFFF2D493 ) setFill];
+        UIRectFill ( CGRectMake ( fill - h * 0.35f, 0, h * 0.35f, h ) );
+    }
+}
+
+- (void)dealloc { [_link invalidate]; }
+
+@end
+
+//  What a failure shows on screen: a short code, never the message itself.
+//  The message carries URLs and file paths, and this page is the first thing
+//  a player screenshots when something goes wrong - RanLauncher.reasonCode()
+//  makes the same choice. The whole message goes to the log.
+static NSString *RanPatchReasonCode ( NSString *error )
+{
+    if (!error.length) return @"ERR";
+    NSRegularExpression *http = [NSRegularExpression
+        regularExpressionWithPattern:@"HTTP ([0-9]{3})" options:0 error:NULL];
+    NSTextCheckingResult *m = [http firstMatchInString:error options:0
+                                                 range:NSMakeRange ( 0, error.length )];
+    if (m) return [@"HTTP " stringByAppendingString:[error substringWithRange:[m rangeAtIndex:1]]];
+    NSString *lower = error.lowercaseString;
+    if ([lower containsString:@"signature"])                               return @"SIG";
+    if ([lower containsString:@"checksum"] || [lower containsString:@"hash"]) return @"SHA";
+    if ([lower containsString:@"cannot write"] || [lower containsString:@"cannot create"] ||
+        [lower containsString:@"cannot replace"] || [lower containsString:@"cannot read"]) return @"IO";
+    if ([lower containsString:@"manifest"])                                return @"MANIFEST";
+    if ([lower containsString:@"reach"] || [lower containsString:@"response"] ||
+        [lower containsString:@"timed out"] || [lower containsString:@"offline"] ||
+        [lower containsString:@"connection"])                              return @"NET";
+    return @"ERR";
+}
+
 @interface RanPatchViewController : UIViewController
 {
     double _shownAt;
     double _holdSeconds;
+    int    _retryWait;       //  seconds before the next attempt, 5 to 30
 }
 @property (nonatomic, strong) UILabel *status, *detail;
-@property (nonatomic, strong) UIProgressView *bar;
+@property (nonatomic, strong) RanPatchBar *bar;
 @property (nonatomic, strong) UIImageView *art, *topBand, *underBand, *mark;
 @property (nonatomic, strong) UIStackView *band;
 @property (nonatomic, strong) NSLayoutConstraint *bandCentre;
@@ -666,18 +813,11 @@ extern "C" void RanPlat_PumpEvents ( void ) {}
     self.status.textColor = [UIColor colorWithRed:0xF0/255.0 green:0xF4/255.0
                                              blue:0xF6/255.0 alpha:1.0];
     self.status.textAlignment = NSTextAlignmentCenter;
-    self.status.text = @"Starting";
+    self.status.text = @"กำลังเริ่ม";
 
-    self.bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    //  Android's bar is the theme accent, #FFCB00, on a dark track, and about
-    //  6dp tall - sampled off a screenshot of the launcher page rather than
-    //  guessed. UIProgressView's default is a thin system-blue line on light
-    //  grey, which is the one thing on this page that did not match.
-    self.bar.progressTintColor = [UIColor colorWithRed:1.0 green:203/255.0 blue:0.0 alpha:1.0];
-    self.bar.trackTintColor    = [UIColor colorWithWhite:0.22 alpha:1.0];
-    //  A UIProgressView is a fixed ~4.5pt tall whatever frame it is given, so
-    //  the only way to thicken it is to scale it.
-    self.bar.transform = CGAffineTransformMakeScale ( 1.0f, 1.4f );
+    //  Drawn, not a UIProgressView - see RanPatchBar. 8pt tall, the Java's 8dp.
+    self.bar = [RanPatchBar new];
+    [self.bar.heightAnchor constraintEqualToConstant:8].active = YES;
 
     self.detail = [UILabel new];
     self.detail.font = [UIFont systemFontOfSize:12];
@@ -779,7 +919,17 @@ extern "C" void RanPlat_PumpEvents ( void ) {}
     //  With the data current it is otherwise on screen for about a third
     //  of a second, which no screen capture over USB can catch.
     self->_holdSeconds = RanPlat_DiagExists ( "patchhold" ) ? 12.0 : 0.0;
+    self->_retryWait = 5;
+    [self attempt];
+}
 
+//  One run of the patcher. A failure that is worth retrying comes back here
+//  after a countdown, exactly as RanLauncher.patchThenPlay() loops: the game
+//  does not start on a failed patch, because whether this data matches the
+//  server is the one thing that cannot be known while the server is out of
+//  reach. The wait grows by 5 s a round, to 30.
+- (void)attempt
+{
     __weak RanPatchViewController *weakSelf = self;
     RanIOS_RunPatch (
         ^(NSString *status, NSString *detail, int permille) {
@@ -790,15 +940,12 @@ extern "C" void RanPlat_PumpEvents ( void ) {}
                 //  detail, hundreds of times.
                 if (status) me.status.text = status;
                 if (detail) me.detail.text = detail;
-                const BOOL wantHidden = (permille < 0);
-                if (me.bar.hidden != wantHidden) {
-                    me.bar.hidden = wantHidden;
-                    [me.view setNeedsLayout];
-                }
-                if (permille >= 0) [me.bar setProgress:permille / 1000.0f animated:NO];
+                //  The bar stays up either way: with no number it sweeps the
+                //  whole track, which is what says "still working".
+                me.bar.permille = permille;
             });
         },
-        ^(BOOL ok, NSString *error) {
+        ^(BOOL ok, BOOL fatal, NSString *error) {
             dispatch_async ( dispatch_get_main_queue(), ^{
                 RanPatchViewController *me = weakSelf;
                 if (!me) return;
@@ -817,15 +964,61 @@ extern "C" void RanPlat_PumpEvents ( void ) {}
                     }
                     return;
                 }
-                //  A failed patch is a dead end, not a warning: the client would
-                //  read half-updated data. Same stance as the Java.
-                me.status.text = @"Update failed";
-                me.detail.text = error ?: @"unknown error";
-                me.bar.hidden = YES;
-                RanPlat_Log ( RANLOG_ERROR, "RanPatch", "%s",
+
+                RanPlat_Log ( RANLOG_ERROR, "RanPatch", "%s%s",
+                              fatal ? "fatal: " : "",
                               error ? error.UTF8String : "unknown error" );
+
+                if (fatal) {
+                    //  The app itself is too old: say so and stop, as fail()
+                    //  does on Android. The message is "title" then the body.
+                    NSArray<NSString *> *lines = [error ?: @""
+                        componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+                    NSString *title = lines.count ? lines[0] : @"";
+                    NSString *body  = lines.count > 1
+                        ? [[lines subarrayWithRange:NSMakeRange ( 1, lines.count - 1 )]
+                              componentsJoinedByString:@" "]
+                        : @"";
+                    me.bar.hidden = YES;
+                    me.status.text = title;
+                    me.detail.text = body;
+                    UIAlertController *a = [UIAlertController alertControllerWithTitle:title
+                                                message:body
+                                         preferredStyle:UIAlertControllerStyleAlert];
+                    [a addAction:[UIAlertAction actionWithTitle:@"ปิด"
+                                                          style:UIAlertActionStyleDefault
+                                                        handler:nil]];
+                    [me presentViewController:a animated:YES completion:nil];
+                    return;
+                }
+
+                [me countdown:me->_retryWait reason:RanPatchReasonCode ( error )];
+                if (me->_retryWait < 30) me->_retryWait += 5;
             });
         });
+}
+
+//  "Cannot reach the update server - trying again in N seconds", one second at
+//  a time, then another attempt. The number on screen is what makes it read as
+//  waiting rather than stuck.
+- (void)countdown:(int)left reason:(NSString *)why
+{
+    if (left <= 0) {
+        self.status.text = @"กำลังเชื่อมต่ออีกครั้ง";
+        self.detail.text = @"";
+        self.bar.permille = -1;
+        [self attempt];
+        return;
+    }
+    self.status.text = @"เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้";
+    self.detail.text = [NSString stringWithFormat:
+        @"จะลองใหม่ใน %d วินาที กรุณาตรวจสอบอินเทอร์เน็ต  (%@)", left, why];
+    self.bar.permille = -1;
+    __weak RanPatchViewController *weakSelf = self;
+    dispatch_after ( dispatch_time ( DISPATCH_TIME_NOW, NSEC_PER_SEC ),
+                     dispatch_get_main_queue(), ^{
+        [weakSelf countdown:left - 1 reason:why];
+    });
 }
 
 //  Hand the page itself to the client's boot screen.

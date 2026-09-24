@@ -438,16 +438,16 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         //  screen should not hand anyone the patch address. It goes to the log,
         //  where someone diagnosing a patch failure is already looking.
         LOGI ( "patch base %s", base.UTF8String );
-        say ( @"Checking for updates", nil, -1 );
+        say ( @"กำลังตรวจสอบอัปเดต", nil, -1 );
 
         //  Fetched as bytes and checked before being parsed: a JSON parser is
         //  the first thing an attacker reaches, so it must not run on anything
         //  unverified.
         NSData *body = HttpGet ( [base stringByAppendingString:@"manifest.json"], &err );
-        if (!body) { done ( NO, [@"cannot reach the patch server: " stringByAppendingString:err] ); return; }
+        if (!body) { done ( NO, NO, [@"cannot reach the patch server: " stringByAppendingString:err] ); return; }
 
         NSData *sig = HttpGet ( [base stringByAppendingString:@"manifest.sig"], &err );
-        if (!sig) { done ( NO, [@"no manifest signature on the server: " stringByAppendingString:err] ); return; }
+        if (!sig) { done ( NO, NO, [@"no manifest signature on the server: " stringByAppendingString:err] ); return; }
 
         if (!VerifyManifest ( body, sig, &err )) {
             //  What was actually checked, so a mismatch can be compared with the
@@ -460,12 +460,12 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
             LOGI ( "manifest refused: body %lu bytes sha256 %s..., sig %lu bytes '%s'",
                    (unsigned long)body.length, hex.UTF8String, (unsigned long)sig.length,
                    sigText.UTF8String ?: "(not UTF-8)" );
-            done ( NO, err );
+            done ( NO, NO, err );
             return;
         }
 
         NSDictionary *m = [NSJSONSerialization JSONObjectWithData:body options:0 error:NULL];
-        if (![m isKindOfClass:NSDictionary.class]) { done ( NO, @"manifest is not an object" ); return; }
+        if (![m isKindOfClass:NSDictionary.class]) { done ( NO, NO, @"manifest is not an object" ); return; }
 
         const int version = [m[@"version"] intValue];
 
@@ -474,7 +474,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         //  the key that governs here. A manifest without one predates iOS
         //  support, and being offered its data is a mistake, not a no-op.
         if (!m[@"minIos"]) {
-            done ( NO, @"this patch server does not support the iOS client yet" );
+            done ( NO, NO, @"this patch server does not support the iOS client yet" );
             return;
         }
         const int minIos = [m[@"minIos"] intValue];
@@ -484,10 +484,13 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
             //  itself. A stale packet layout is a hard stop either way.
             //  The game is sideloaded, not on TestFlight or the App Store, so
             //  the message names where an update actually comes from.
-            done ( NO, [NSString stringWithFormat:
-                        @"This version of RAN is out of date.\n"
-                        @"The server needs build %d, this is %d.\n"
-                        @"Update the app in AltStore or SideStore, or install the new .ipa with Sideloadly.",
+            //  The one fatal ending, as RanLauncher.fail() is on Android: no
+            //  amount of retrying fixes an app that is too old. "Title\nbody",
+            //  in Thai like the rest of the page.
+            done ( NO, YES, [NSString stringWithFormat:
+                        @"เวอร์ชันแอปเก่าเกินไป\n"
+                        @"เซิร์ฟเวอร์ต้องการแอปเวอร์ชัน %d แต่เครื่องนี้เป็น %d\n"
+                        @"กรุณาอัปเดตแอปใน AltStore หรือ SideStore",
                         minIos, myBuild] );
             return;
         }
@@ -497,8 +500,8 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
 
         const int localVersion = ReadVersion ();
         if (localVersion == version) {
-            say ( @"Up to date", [NSString stringWithFormat:@"version %d", version], 1000 );
-            done ( YES, nil );
+            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+            done ( YES, NO, nil );
             return;
         }
 
@@ -507,20 +510,20 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         //  manifest stays validly signed forever. To publish old content
         //  deliberately, republish it under a higher number.
         if (localVersion >= 0 && version < localVersion) {
-            done ( NO, [NSString stringWithFormat:
+            done ( NO, NO, [NSString stringWithFormat:
                         @"server offers version %d, older than the installed %d",
                         version, localVersion] );
             return;
         }
 
         NSArray *files = m[@"files"];
-        if (![files isKindOfClass:NSArray.class]) { done ( NO, @"manifest has no file list" ); return; }
+        if (![files isKindOfClass:NSArray.class]) { done ( NO, NO, @"manifest has no file list" ); return; }
 
         NSDictionary *index = ReadIndex ();
         NSMutableArray *todo = [NSMutableArray array];      //  @[rel, sha, @(size), parts or NSNull]
         long long todoBytes = 0;
 
-        say ( @"Checking files", [NSString stringWithFormat:@"%lu files",
+        say ( @"กำลังตรวจสอบไฟล์", [NSString stringWithFormat:@"%lu ไฟล์",
                                   (unsigned long)files.count], 0 );
 
         for (NSUInteger i = 0; i < files.count; ++i) {
@@ -532,7 +535,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
 
                 NSString *perr = nil;
                 NSString *full = SafeDest ( root, rel, &perr );
-                if (!full) { done ( NO, perr ); return; }
+                if (!full) { done ( NO, NO, perr ); return; }
 
                 const BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:full];
                 BOOL ok = NO;
@@ -568,13 +571,13 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         if (todo.count == 0) {
             WriteIndexFrom ( files, root );
             WriteVersion ( version );
-            say ( @"Up to date", [NSString stringWithFormat:@"version %d", version], 1000 );
-            done ( YES, nil );
+            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+            done ( YES, NO, nil );
             return;
         }
 
-        say ( @"Downloading update",
-              [NSString stringWithFormat:@"%lu files, %.1f MB",
+        say ( @"กำลังดาวน์โหลดอัปเดต",
+              [NSString stringWithFormat:@"%lu ไฟล์, %.1f MB",
                (unsigned long)todo.count, todoBytes / 1048576.0], 0 );
 
         //  kDlThreads workers pull entries off one shared counter. A failure
@@ -624,12 +627,12 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
                   (int)(todoBytes == 0 ? 1000 : b * 1000 / todoBytes) );
             if (waited == 0) break;
         }
-        if (failMsg) { done ( NO, failMsg ); return; }
+        if (failMsg) { done ( NO, NO, failMsg ); return; }
 
         WriteIndexFrom ( files, root );
         WriteVersion ( version );                   //  last, always
-        say ( @"Updated", [NSString stringWithFormat:@"version %d", version], 1000 );
-        done ( YES, nil );
+        say ( @"อัปเดตเสร็จแล้ว", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+        done ( YES, NO, nil );
     });
 }
 
