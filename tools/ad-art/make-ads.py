@@ -27,7 +27,9 @@ ORIG   = os.path.join(HERE, 'orig')
 
 NAMES = (['ad_ppl1_%02d' % i for i in (1, 2, 3)] +
          ['ad_ppl2_%02d' % i for i in range(1, 14)] +
-         ['ad_ppl3_%02d' % i for i in (1, 2, 3, 4, 5)])
+         ['ad_ppl3_%02d' % i for i in (1, 2, 3, 4, 5)] +
+         #  the Trade Zone market signs (4:1, text only)
+         ['min_su_11_04', 'min_su_11_04_redbull'])
 
 # Inner picture areas of the framed billboards, measured on the originals
 # (left, top, right, bottom; right/bottom exclusive). ad_ppl2_11 is two
