@@ -12,6 +12,39 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (6) — iPhone lag: the glow blur. Blur off on phones
+
+- **Reported.** A bit laggy after the update; down to 30 fps when running.
+- **Measured on the iPhone 15** (1.0.155, `pymobiledevice3` syslog + `dvt graphics`):
+  - **Standing still:** median 16.6 ms, but several frames a second over 34 ms.
+    The frame budget was 16.7–18.7 ms, against 8.5 ms on 2026-09-18 in a quiet
+    area.
+  - **Running, heat "fair":** 28–31 fps, budget 24 ms. CPU sections barely moved,
+    so it is GPU-bound. GPU ~92% busy in every case.
+- **The "SLOW frame 62.5 ms" lines are an artefact.** `DXUtil_Timer(TIMER_GETABSOLUTETIME)`
+  returns a FLOAT of seconds since boot; after ~6 days of uptime its step is
+  exactly 1/16 s. Game timing uses ELAPSED/APPTIME (relative, precise), so only
+  the profiler and the fps readout are affected.
+- **Attribution** (sectionskip A/B, two interleaved rounds, standing still):
+
+  | Skipped | fps |
+  |---|---|
+  | none | 43–47 |
+  | `ch:glow` | 42–44 |
+  | `glow` | 45–53 |
+  | `glow-tex` (the blur) | **59.5–59.6** |
+
+- **Fix (mobile only).** `DxGlowMan::RenderTex` skips the two blur passes.
+  `Render` composites the unblurred `m_pGlowTex_SRC` and then clears it. The
+  glow stays on the weapon, sharper, without the halo (checked on character
+  select on LDPlayer). PC unchanged.
+- **Not verified yet.** The fps on the iPhone with 1.0.156: re-measure after it
+  is installed.
+- **Next, if the soft look is wanted back.** Find what makes the blur cost that
+  much (12 small quads cannot be fill; most likely the mid-frame break of the
+  2556x1179 scene target) and restructure it.
+- **Release.** Store 560: APK 156, iOS 1.0.156.
+
 ## 2026-09-25 (5) — Anti-bot bug: the question came on entering the game
 
 - **Reported.** After the new servers were deployed, the anti-bot window showed
