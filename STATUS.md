@@ -42,6 +42,9 @@ If anything here disagrees with another file, this file wins.
   against the live server): the minimap, description and level all show.
 - **Deploy.** The new ServerAgent + ServerField and the new `cdm1.ini` must go on
   the server. Until then the page has no map and shows "ไม่จำกัด".
+- **Release.** Store 552: APK 152, iOS 1.0.152 (CI run 36099695773; the binary
+  was grepped for the new CDM strings). The upload set in `out/upload` accumulates
+  since 549, so it replaces the earlier 550 set.
 
 ## 2026-09-25 (2) — Anti-bot check, open CDM entry, Tyranny tower lock, event/quest blink
 
