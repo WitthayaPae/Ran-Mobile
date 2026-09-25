@@ -12,6 +12,27 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (4) — Quest alarm moved into the menu
+
+- **The ask.** The user asked why the quest icon was on screen rather than in the
+  menu.
+- **Why it was there.** The PC's quest alarm is a corner icon, shown whenever any
+  quest is in progress and blinking yellow while a step waits. Session (2) had
+  put it in the corner row, but the menu already has the quest cell.
+- **Now.**
+  - The icon is kept off screen again.
+  - Its alarm is read just before it is hidden (hiding clears it; the interface
+    sets it again every update while the step waits).
+  - The blink shows as the yellow outline on the menu's quest cell
+    (`CBasicGameMenu::MobileSetQuestBlink`, 0.2 s by the clock), and as the MENU
+    button's ring while the menu is shut.
+- **Verified on LDPlayer** (Test01 has a step waiting):
+  - corner: 0 yellow px
+  - menu ring: 1892 / 212
+  - quest cell: 1930 / 43
+- **Release.** Store 556: APK 154, iOS 1.0.154 (CI run 36108977291). The upload set
+  accumulates since 549.
+
 ## 2026-09-25 (3) — CDM event page like Tyranny's: minimap, description, minimum level
 
 - **Minimap.**
