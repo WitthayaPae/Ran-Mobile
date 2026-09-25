@@ -42,9 +42,15 @@ If anything here disagrees with another file, this file wins.
   against the live server): the minimap, description and level all show.
 - **Deploy.** The new ServerAgent + ServerField and the new `cdm1.ini` must go on
   the server. Until then the page has no map and shows "ไม่จำกัด".
-- **Release.** Store 552: APK 152, iOS 1.0.152 (CI run 36099695773; the binary
-  was grepped for the new CDM strings). The upload set in `out/upload` accumulates
-  since 549, so it replaces the earlier 550 set.
+- **Fallback map.** The user saw no minimap. The live server doesn't send the map,
+  and the client can't find it itself: `bCDMZone` is set by the server at run
+  time and never loaded on a client (measured: no zone in the device's map list
+  carries it). The page now falls back to circle_zone (251/0) until a server
+  sends the map. Verified against the live server with no diagnostic: the
+  minimap shows. The level reads "ไม่จำกัด" until the new server sends
+  LEVEL_REQ, which is true: the old server does not enforce one.
+- **Release.** Store 554: APK 153, iOS 1.0.153 (CI run 36101763836). The upload
+  set in `out/upload` accumulates since 549 and replaces the 550/552 sets.
 
 ## 2026-09-25 (2) — Anti-bot check, open CDM entry, Tyranny tower lock, event/quest blink
 
