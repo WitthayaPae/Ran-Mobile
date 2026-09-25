@@ -12,6 +12,33 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (5) — Anti-bot bug: the question came on entering the game
+
+- **Reported.** After the new servers were deployed, the anti-bot window showed
+  on entering the game.
+- **Cause (confirmed by reading the code).**
+  - Characters come from `CMemPool<GLChar>::New()`: either a released object,
+    which went through `RESET_DATA` -> `AntiBotReset`, or `new GLChar`, which
+    runs only the constructor. The constructor set `m_fAntiBotNext(0.0f)`.
+  - `RESET_DATA` is called only in `RELEASE_CHAR`; nothing on
+    `CreatePC`/`CreateChar` calls it.
+  - Every character object created since the server started therefore asked on
+    its first frame of hunting time.
+- **Other causes ruled out.** The window opens only three ways: the server's
+  question (message 3920, which first exists in commit 8a48884, so no old server
+  sends it); the mobile-only `antibotdemo` file; or re-showing a pending
+  question. So the server's question was the cause.
+- **Fix.** `AntiBotFrameMove` draws the first interval itself
+  (`m_bAntiBotArmed`).
+- **Second fix.** The client window closes itself 10 s after its time runs out
+  with no result. A question left behind when the character moves to a map on
+  another field server would otherwise stay up forever, and it cannot be closed.
+- **Not verified live.** It needs the rebuilt ServerField. Test with
+  `/antibot <name>` and by logging in: no question should come for ~40-80 min
+  of hunting.
+- **Release.** Store 558: APK 155, iOS 1.0.155. MSVC ServerAgent / ServerField /
+  MiniA: 0 errors, copied into `CLIENT/`.
+
 ## 2026-09-25 (4) — Quest alarm moved into the menu
 
 - **The ask.** The user asked why the quest icon was on screen rather than in the
