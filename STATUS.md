@@ -12,6 +12,37 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (3) — CDM event page like Tyranny's: minimap, description, minimum level
+
+- **Minimap.**
+  - CDM is map 251 (`circle_zone.lev`). Its axis file names `circle_zone_mini.dds`,
+    which did not exist anywhere (PC client included), so the arena had no
+    picture, even on the large map.
+  - Made one from the level's own top-down shadow map (`textures/shadow/circle_zone.dds`),
+    in the CDM minimap style. Walkable = the connected spoke/ring/centre network;
+    the grey islands are the raised blocks.
+  - Written as `CLIENT/textures/gui/mini/circle_zone_mini.dds` (512x512 32-bit,
+    same header as `sps_ground_mini_02`).
+  - Orientation follows the shadow map. The layout is symmetric apart from small
+    details, so it has not been checked against in-map positions.
+- **Page.**
+  - Laid out like the Tyranny page: map box, six description lines
+    (`COMPETITION_CDM_PAGE` 0..8), `* Level :` and rewards.
+  - The map texture is resolved at runtime from the map list, once the server
+    names the map.
+- **Minimum level.**
+  - `LEVEL_REQ` in `[CLUB_DM]`; `cdm1.ini` in `CLIENT/data/glogicserver` is set to
+    130 (v8 re-encrypted and round-trip checked).
+  - The field enforces it at gate-out, recall and the Enter request. The agent's
+    level is from login, so it is not used.
+  - The client refuses Enter with "เลเวลไม่ถึง %d ไม่สามารถเข้าร่วม CDM ได้".
+- **Packet.** `SCDM_INFO` gains `wLevelReq`, `wMapMID` and `wMapSID`, appended.
+  A client reading an older server's shorter packet treats them as 0.
+- **Verified on LDPlayer** with the `cdmdemo` diagnostic (map 251, level 130
+  against the live server): the minimap, description and level all show.
+- **Deploy.** The new ServerAgent + ServerField and the new `cdm1.ini` must go on
+  the server. Until then the page has no map and shows "ไม่จำกัด".
+
 ## 2026-09-25 (2) — Anti-bot check, open CDM entry, Tyranny tower lock, event/quest blink
 
 Asked 2026-09-25. All four implemented. What was verified, and how, is noted for
