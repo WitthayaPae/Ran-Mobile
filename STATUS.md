@@ -52,7 +52,11 @@ If anything here disagrees with another file, this file wins.
 - Peace zone required. Parsed `mapslist.mst` exactly to EOF: the only map that allows stalls and is a peace zone is the trade zone, 22/0. So offline stalls exist only there, and nobody can attack one.
 
 **Still open**
-- [ ] Run `SOURCE/DB/OFFLINE_MARKET.sql` on the live database (user; auto mode refused it). Until then, offline trades still work but the report stays empty, and the field logs a SQL error per trade.
+- [x] `OFFLINE_MARKET.sql` run on the live RanGame1 (table present, 0 rows).
+- Report format changed to the user's layout (`c78964a`): "ขาย", then one line per item ("<item> [xN] <money> บาท"), then "รวมขายได้ ... บาท"; the same with "ซื้อ" / "รวมซื้อ" for the buy stall. More than 20 lines on one side adds "และอีก N รายการ".
+- Rebuilt at 02:37 into `CLIENT/`.
+- [x] Mobile patch built as **store 562**: APK 157 and iOS 1.0.157 (CI run 36181539628). The iOS binary was grepped for the report's CP874 bytes, found once. The upload set in `out/upload` includes the not-yet-uploaded store 560.
+- [ ] Upload `MOBILE/native/out/upload` (user): blobs first, `ios/` next, `manifest.json` + `manifest.sig` last.
 - [ ] Deploy `CLIENT/ServerAgent.exe`, `CLIENT/ServerField.exe` and `CLIENT/Config.ini` (user).
 - [ ] Live test (me, on LDPlayer). Two accounts:
   - open a stall in the trade zone and disconnect;
