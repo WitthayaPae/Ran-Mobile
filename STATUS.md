@@ -12,6 +12,35 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-25 (7) — Duplicate login broken since FIX_03: FIX_07
+
+- **Reported.** Logging in with an account already in the game showed
+  "เซิร์ฟเวอร์ไม่สามารถสร้างตัวละครได้" (`EMCJOIN_FB_ERROR` at character join)
+  instead of the original handling.
+- **Cause (read, not guessed).**
+  - The stock `user_verify` (text recovered from `DB/RanUser.bak`) returned the
+    codes below, and on success set `UserLoginState=1`, wrote `LogLogin` and
+    updated `StatLogin`:
+    - 5 already online
+    - 30 relog within 20 s for players
+    - 7 dynamic password
+    - 2/3/4 IP
+    - 6 blocked
+  - FIX_03 (password hashing) reduced it to "password right -> 1".
+  - FIX_06's `user_verify_hashed` and `CAgentChallengeCheck` copied that.
+  - The agent's DUP handling (close the other session) never fired, and blocked
+    accounts could log in.
+- **Fix.**
+  - `DB/FIX_07_restore_login_checks.sql`: the stock logic in
+    `user_verify_after_credential`, called by both procedures.
+  - `CAgentChallengeCheck` handles every code as `CAgentUserCheck` does.
+- **Verified on a scratch database** on local SQL Express: 15 cases across both
+  paths, all PASS.
+- **Deploy (user).**
+  - Run FIX_07 on the live RanUser (use `sqlcmd -I`).
+  - Deploy the new ServerAgent (built 23:54, in `CLIENT/`).
+  - No mobile patch needed.
+
 ## 2026-09-25 (6) — iPhone lag: the glow blur. Blur off on phones
 
 - **Reported.** A bit laggy after the update; down to 30 fps when running.
