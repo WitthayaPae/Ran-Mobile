@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-25
+- **Last updated:** 2026-09-26
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,60 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-09-26 (1) — Audit of everything changed server-side, and the fixes
+
+The duplicate-login regression prompted a full audit of my server, DB and login
+changes: the challenge path, the FIX_01–07 procedures against the originals
+recovered from the backups, and the 54 G-Logic commits. Each finding below was
+confirmed by reading the code before it was fixed.
+
+**Fixed.** All built into `CLIENT/` at 00:28, 0 errors. The mobile arm64 build
+still compiles.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| Challenge login: the salt's hash was not tied to an account id, so the answer could name any account (account takeover) | critical | Salt id stored with the challenge and must match (ServerAgent, `604b970`, pushed) |
+| Auction storage: a page write skipped by the 2 s throttle was lost; withdraw then logout duplicated gold, items and points | critical | Held writes are pending, flushed in FrameMove and DropOutPC; gold/item moves also save the character |
+| Anti-bot on by default kicks players whose client cannot show the question | critical (deploy) | `bFeatureAntiBot` defaults to FALSE; turn on in ServerField Config.ini once clients are updated |
+| CDM enter/winner, club war winner, event club-top accepted from player sockets (fake broadcast, warp anyone) | high | Dropped unless from a field slot (ServerAgent, `604b970`) |
+| Email change and character delete compared plaintext `UserPass2`, blank since FIX_03: real PIN refused, empty PIN accepted | high | `DB/FIX_08`: `selchar_changemail` via `sp_PassCheck`; delete via new `sp_DelCharPinCheck` |
+| GM fake-player load test compiled on | high | `RAN_GM_LOADTEST` commented out |
+| Point auctions took the points and delivered nothing; no-space refund unsaved; failed page load could overwrite the page; prizes over page size dropped | medium | Point settlement like in-game gold; refund saved; load failure fails the load; overflow re-queued |
+| `sp_PassCheck` plaintext branch accepted '' = '' | medium | Empty value refused (FIX_08) |
+| `user_register` returned 2 on success | medium | Original codes 0 / 1 / -1 (FIX_08) |
+| Q-box usable while dead | medium | `IsValidBody` gate |
+
+Second round (`eec5b0e`). SOURCE is pushed through it, and `9be6e39` is pushed too.
+
+| Item | Fix |
+|---|---|
+| GM load test | Back ON: the GM-only guard is sound, so the fix goes where the damage was. Fakes are skipped by `SaveCharDB`, never drop gear on death, and "Clear" returns their GIDs to the agent's free list. |
+| Level-up card burst | The per-level hooks still run. The client result, view-around broadcast, state update and level log go out once per card. |
+| `MsgLoginSalt` flood | One per second per connection; the 20th closes the connection. |
+| GM tool | Login goes through `sp_PassCheck`. Create and edit set passwords through `sp_PassSet`; a blank field on edit means unchanged, and plaintext is never written. Inputs are quote-escaped. |
+| Ranking struct layout | No change needed: the shipped `Ran/MiniA.exe` (08-18) already has the 1c6baa7 layout (`EVENT_END_CLUB_TOP` present), as do the mobile builds. |
+
+Builds at 00:47: ServerAgent, ServerField, MiniA and GM_Tool, all copied to `CLIENT/`. The mobile arm64 build compiles.
+
+**Checked and fine:**
+- FIX_07 `user_verify`, branch by branch.
+- The shop and top-up procedures.
+- The CDM open entry.
+- The Tyranny tower lock.
+- The anti-bot logic.
+
+**Still open**
+- [x] FIX_08 applied to the live RanUser at 00:50:39 on 2026-09-26, exit 0.
+  - Checked: an empty password is refused, and `sp_DelCharPinCheck` on a missing user returns 0.
+  - The old ServerAgent is unaffected: it does not call the new procedure, and it reads register code 0 as OK.
+- [ ] Deploy `CLIENT/ServerAgent.exe` and `ServerField.exe` (00:47 build), plus `GM_Tool.exe` (user).
+- [ ] One live check after deploy:
+  - log in;
+  - deposit, withdraw, relog and check the balance;
+  - delete a test character with its PIN;
+  - log in to the GM tool;
+  - edit one user without touching the password fields.
 
 ## 2026-09-25 (7) — Duplicate login broken since FIX_03: FIX_07
 
