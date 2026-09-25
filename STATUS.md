@@ -12,6 +12,56 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-26 (2) — Offline market (sell and buy stalls stay open after logout)
+
+**Request.**
+- A sell or buy stall opened in a trade zone stays open after the player goes offline.
+- It is enabled and disabled from config.
+- On relog, the chat box lists what sold and what was bought, with totals, in Thai.
+
+**What the code does today** (read, with file:line in this session's notes):
+- Both stalls live on the field `GLChar` (`m_sPMarket`). Nothing is held in escrow: sold items stay in the seller's inventory, and a buy stall pays from the buyer's `m_lnMoney` at fulfil time.
+- Every drop-out closes both stalls (`GLGaeaServer::DropOutPC`).
+- A relog's wait-for-save is the field's `RequestFieldSvrCharChk`. It drops an existing character by name or GID, then answers the agent through the DB queue, after that save.
+- The agent frees the GID on the next frame after a disconnect.
+- The only characters with no client are the GM load-test fakes.
+
+**Design.**
+- The offline stall is the real character, kept on its field with its client detached:
+  - `m_dwClientID` is moved to a private range, so every send to it is dropped;
+  - it is saved at once, then periodically and after each trade;
+  - it ends on relog of any character on the account (via CHARCHK, by name, GID or user id, and the join waits for its save);
+  - it also ends on the time limit, when the stall empties, and on server stop.
+- The agent takes the GID off its free list while the stall runs (message 3924) and returns it when the field drops the character (3925).
+- Trades made while offline are written to a new table `OfflineMarketLog`. They are drained when the character loads, and the client prints them in Thai (message 3926).
+
+**Fixed on the way, because an unattended stall makes these worse.** All confirmed by reading the code:
+- `dwNum * llPRICE` is never range-checked. A huge price overflows negative and passes the money check, so gold is created.
+- Fulfil takes the first matching item: a GM item, an expired item, or the listed item itself.
+- Fulfil's pile path ignores failed deletes and inserts, but still moves the money.
+- A failed insert after the delete destroys the item.
+- The "save in progress" marker is a set, so an earlier save clears it while a later one is still queued.
+
+**Status:** built (02:21), not yet deployed or tested live. SOURCE `e4aee2a` is pushed.
+- Builds: ServerAgent, ServerField and MiniA copied to `CLIENT/`. The mobile arm64 and x86_64 builds compile.
+- `CLIENT/Config.ini` has `bFeatureOfflineMarket = 1`, `dwOfflineMarketHours = 24` and `dwOfflineMarketMax = 300`. It is re-encrypted v8 and round-trip checked; the backup is in the session scratchpad.
+- Adversarial review of the whole diff: one locker-dup race (a relog landing before the disconnect is processed) and two lesser issues, all fixed:
+  - A login cancels any pending disconnect for the account, and any disconnect within 60 s of a login is dropped normally.
+  - The agent holds at most a tenth of the gaea ids.
+  - A server-kicked character is never kept, and `DROP_OUT_FORCED` is accepted from the agent only.
+- Peace zone required. Parsed `mapslist.mst` exactly to EOF: the only map that allows stalls and is a peace zone is the trade zone, 22/0. So offline stalls exist only there, and nobody can attack one.
+
+**Still open**
+- [ ] Run `SOURCE/DB/OFFLINE_MARKET.sql` on the live database (user; auto mode refused it). Until then, offline trades still work but the report stays empty, and the field logs a SQL error per trade.
+- [ ] Deploy `CLIENT/ServerAgent.exe`, `CLIENT/ServerField.exe` and `CLIENT/Config.ini` (user).
+- [ ] Live test (me, on LDPlayer). Two accounts:
+  - open a stall in the trade zone and disconnect;
+  - buy from it with the other account;
+  - relog the owner: check the Thai report, the totals, and that the item and gold are correct;
+  - check nothing was duplicated.
+- [ ] Then a mobile patch (Android + iOS) for the report lines; PC gets the new MiniA.
+- Not handled, known: a web panel editing a character marked offline (`ChaOnline = 0`) while its stall runs could race with the stall's saves.
+
 ## 2026-09-26 (1) — Audit of everything changed server-side, and the fixes
 
 The duplicate-login regression prompted a full audit of my server, DB and login

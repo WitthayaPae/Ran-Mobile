@@ -65,6 +65,7 @@ set(Lib_Client_SOURCES
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharInvenMsg.cpp
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharInvenMsg2.cpp
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharAntiBot.cpp
+  ${RAN_SRC}/Lib_Client/G-Logic/GLOfflineMarket.cpp
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharMsg.cpp
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharPetMsg.cpp
   ${RAN_SRC}/Lib_Client/G-Logic/GLCharPMarketMsg.cpp
