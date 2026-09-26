@@ -568,9 +568,34 @@ refusal did not lock the player out of the game.
 `build-apk.sh` silently generates a fresh one if the file is missing. Android
 refuses an update signed with a different key. **Lose that file and no player can
 ever upgrade again** — they would have to uninstall, which wipes
-`Android/data/com.ran.native` and costs them the full 1.7 GB re-download. It is
-gitignored. Back it up off this machine, alongside
-`MOBILE/tools/patch/keys/manifest-signing-key.pem`.
+`Android/data/com.ran.native` and costs them the full 4.5 GB re-download. It is
+gitignored.
+
+Decision (2026-09-26, owner): the keystore stays where it is. There is no
+`native/.signing` and no separate release keystore; every published APK is
+signed with `native/android/debug.keystore` (alias `androiddebugkey`). Nothing
+else on this machine uses that folder. Do not regenerate, move or replace it,
+and do not add a `.signing` pointing elsewhere without planning a reinstall for
+every player. The manifest key `MOBILE/tools/patch/keys/manifest-signing-key.pem`
+has the same standing: lose it and no data patch reaches an existing install.
+
+### First install: the Android download page
+
+A phone that already has the game updates itself (the manifest's `apk` entry,
+above). A new player needs a link, so every publish also writes
+`launcher_mobile/android/`:
+
+| file | what |
+|---|---|
+| `RanLegacyM.apk` | the published APK under a fixed name (same bytes as its blob) |
+| `index.html` | the Thai install page, from `tools/patch/android-install.html` |
+| `icon.png` | copied from `ios/icon.png` |
+| `version.json` | versionCode, name, size and sha256 of that APK |
+
+The link to give players is `https://ran-legacy-m.com/launcher_mobile/android/`.
+`android/` is staged into `out/upload` only when the APK changes, tracked by
+`native/out/.android-uploaded` exactly as `ios/` is by `.ios-uploaded`. Upload
+it with `ios/`: after the blobs, before `manifest.json`.
 
 ---
 
