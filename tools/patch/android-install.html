@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ติดตั้ง RAN Legacy M บน Android</title>
+<style>
+  :root {
+    --bg: #14110b;
+    --panel: #1f1a11;
+    --line: #3a3120;
+    --text: #efe6d2;
+    --muted: #b3a88f;
+    --gold: #ffcb00;
+    --warn: #ff9f43;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.65 "Noto Sans Thai", "Sukhumvit Set", Tahoma, sans-serif;
+    padding: 20px 16px 48px;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 20px; }
+  header img { width: 96px; height: 96px; border-radius: 22px; }
+  h1 { font-size: 1.5rem; margin: 12px 0 4px; color: var(--gold); text-wrap: balance; }
+  header p { margin: 0; color: var(--muted); }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  h2 { font-size: 1.1rem; margin: 0 0 8px; color: var(--gold); }
+  ol, ul { margin: 0; padding-left: 1.3em; }
+  li { margin: 6px 0; }
+  b { color: #fff; }
+  p { margin: 0 0 8px; }
+  .muted { color: var(--muted); font-size: 0.93rem; }
+  .download {
+    display: block; text-align: center; text-decoration: none;
+    background: var(--gold); color: #1a1405; font-weight: 700; font-size: 1.15rem;
+    border-radius: 14px; padding: 16px 12px; margin: 4px 0 8px;
+  }
+  .download:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  .meta { text-align: center; color: var(--muted); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  .warn { border-color: var(--warn); }
+  .warn h2 { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="" width="96" height="96">
+    <h1>RAN Legacy M สำหรับ Android</h1>
+    <p>ดาวน์โหลดแล้วติดตั้งได้เลย ไม่ต้องผ่าน Play Store</p>
+  </header>
+
+  <section>
+    <a class="download" href="RanLegacyM.apk" download>ดาวน์โหลดเกม (Android)</a>
+    <p class="meta">เวอร์ชัน {{VERSION}} &middot; {{SIZE}} MB</p>
+  </section>
+
+  <section>
+    <h2>วิธีติดตั้ง</h2>
+    <ol>
+      <li>กดปุ่ม <b>ดาวน์โหลดเกม</b> ด้านบน ถ้า Chrome เตือนว่าไฟล์อาจเป็นอันตราย ให้กด <b>ดาวน์โหลดต่อ</b></li>
+      <li>เมื่อโหลดเสร็จ กด <b>เปิด</b> ที่แจ้งเตือน หรือเปิดแอป <b>ไฟล์</b> &rarr; <b>ดาวน์โหลด</b> แล้วแตะไฟล์ <b>RanLegacyM.apk</b></li>
+      <li>ถ้าขึ้นว่าไม่อนุญาตให้ติดตั้งแอปจากแหล่งนี้ ให้กด <b>การตั้งค่า</b> เปิด <b>อนุญาตจากแหล่งที่มานี้</b> แล้วกดย้อนกลับ</li>
+      <li>กด <b>ติดตั้ง</b> ถ้า Play Protect ถาม ให้กด <b>ติดตั้งต่อ</b></li>
+      <li>เปิดเกม ครั้งแรกเกมจะดาวน์โหลดข้อมูลเกมประมาณ 4.5 GB แนะนำให้ใช้ Wi-Fi</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>อัปเดตเกม</h2>
+    <p>ไม่ต้องกลับมาหน้านี้ เมื่อมีเวอร์ชันใหม่ เกมจะดาวน์โหลดและถามให้ติดตั้งเองตอนเปิดเกม</p>
+  </section>
+
+  <section class="warn">
+    <h2>ติดตั้งไม่ได้?</h2>
+    <ul>
+      <li>ขึ้นว่า <b>แอปไม่ได้ติดตั้ง</b> หรือ <b>แพ็กเกจขัดแย้ง</b>: ถอนการติดตั้งเกมเวอร์ชันเก่าก่อน แล้วติดตั้งใหม่</li>
+      <li>พื้นที่ไม่พอ: ต้องมีพื้นที่ว่างอย่างน้อย 6 GB</li>
+    </ul>
+    <p class="muted">ติดต่อทีมงานผ่านช่องทางของเซิร์ฟเวอร์ถ้ายังติดปัญหา</p>
+  </section>
+</main>
+</body>
+</html>

@@ -491,6 +491,34 @@ const apk = (() => {
            size: st.size, sha256: hash };
 })();
 
+/* ------------------------------------------------------------ android page
+   The launcher updates itself from blobs/<sha256> (the manifest's "apk"), but a
+   first install needs a link a person can open: launcher_mobile/android/ holds
+   the same APK under a fixed name, a download page (android-install.html) and
+   version.json, which is what tells a later run whether android/ has been
+   uploaded (see ANDROID_MARK). Rewritten only when the APK changes.           */
+if (apk) {
+  const AND_DIR = path.join(OUT, 'android');
+  fs.mkdirSync(AND_DIR, { recursive: true });
+  const verPath = path.join(AND_DIR, 'version.json');
+  let prevAnd = null;
+  try { prevAnd = JSON.parse(fs.readFileSync(verPath, 'utf8')); } catch (e) {}
+  const apkOut = path.join(AND_DIR, 'RanLegacyM.apk');
+  if (!prevAnd || prevAnd.sha256 !== apk.sha256 || !fs.existsSync(apkOut)) {
+    fs.copyFileSync(apkArg, apkOut);
+    if (sha256(apkOut) !== apk.sha256) throw new Error('android/RanLegacyM.apk does not match the APK blob');
+    const tpl = fs.readFileSync(path.join(HERE, 'android-install.html'), 'utf8');
+    fs.writeFileSync(path.join(AND_DIR, 'index.html'),
+      tpl.replace(/\{\{VERSION\}\}/g, (apk.versionName ? apk.versionName + ' ' : '') + '(' + apk.versionCode + ')')
+         .replace(/\{\{SIZE\}\}/g, (apk.size / 1048576).toFixed(1)));
+    const icon = path.join(OUT, 'ios', 'icon.png');
+    if (fs.existsSync(icon)) fs.copyFileSync(icon, path.join(AND_DIR, 'icon.png'));
+    fs.writeFileSync(verPath, JSON.stringify({ versionCode: apk.versionCode, versionName: apk.versionName,
+                                               size: apk.size, sha256: apk.sha256 }, null, 1));
+    console.log('android  : android/RanLegacyM.apk + index.html for versionCode ' + apk.versionCode);
+  }
+}
+
 
 /* ------------------------------------------------------------------ version
    The version number is the switch that makes an already-patched client look
@@ -691,6 +719,8 @@ const UP = path.join(path.dirname(OUT), 'upload');
    *  that hash is remembered here, outside UP, when --uploaded clears the set. */
   const IOS_DIR  = path.join(OUT, 'ios');
   const IOS_MARK = path.join(path.dirname(OUT), '.ios-uploaded');
+  const AND_DIR  = path.join(OUT, 'android');
+  const AND_MARK = path.join(path.dirname(OUT), '.android-uploaded');
   const iosHash = f => require('crypto').createHash('sha256')
                                          .update(fs.readFileSync(f)).digest('hex');
   /*  Did the last set land? Asked of the server, not of the person.
@@ -722,6 +752,7 @@ const UP = path.join(path.dirname(OUT), 'upload');
   };
   let landed = argv.includes('--uploaded');
   let liveIos = null;
+  let liveAnd = null;
   if (!landed && PREV && fs.existsSync(UP)) {
     const body = liveGet('manifest.json');
     let liveVer = null;
@@ -729,6 +760,7 @@ const UP = path.join(path.dirname(OUT), 'upload');
     if (Number.isFinite(liveVer) && liveVer >= PREV.version) {
       landed = true;
       liveIos = liveGet('ios/source.json');
+      liveAnd = liveGet('android/version.json');
       console.log('upload   : the server already has version ' + liveVer +
                   ' - the previous upload set is cleared automatically');
     } else {
@@ -740,6 +772,9 @@ const UP = path.join(path.dirname(OUT), 'upload');
     const stagedSrc = path.join(UP, 'ios', 'source.json');
     if (liveIos) fs.writeFileSync(IOS_MARK, crypto.createHash('sha256').update(liveIos).digest('hex'));
     else if (fs.existsSync(stagedSrc)) fs.writeFileSync(IOS_MARK, iosHash(stagedSrc));
+    const stagedAnd = path.join(UP, 'android', 'version.json');
+    if (liveAnd) fs.writeFileSync(AND_MARK, crypto.createHash('sha256').update(liveAnd).digest('hex'));
+    else if (fs.existsSync(stagedAnd)) fs.writeFileSync(AND_MARK, iosHash(stagedAnd));
     fs.rmSync(UP, { recursive: true, force: true });
     fs.rmSync(path.join(path.dirname(OUT), 'UPLOAD.txt'), { force: true });
     if (argv.includes('--uploaded'))
@@ -859,6 +894,20 @@ const UP = path.join(path.dirname(OUT), 'upload');
         }
       }
     }
+    const andFiles = [];
+    const andVer = path.join(AND_DIR, 'version.json');
+    if (fs.existsSync(andVer)) {
+      const done = fs.existsSync(AND_MARK) ? fs.readFileSync(AND_MARK, 'utf8').trim() : '';
+      if (iosHash(andVer) !== done) {
+        fs.mkdirSync(path.join(UP, 'android'), { recursive: true });
+        for (const n of fs.readdirSync(AND_DIR)) {
+          const src = path.join(AND_DIR, n);
+          if (!fs.statSync(src).isFile()) continue;
+          fs.copyFileSync(src, path.join(UP, 'android', n));
+          andFiles.push('android/' + n);
+        }
+      }
+    }
     //  Count what is actually staged, which after a second publish without an
     //  upload is more than this run added.
     for (const h of fs.readdirSync(path.join(UP, 'blobs'))) {
@@ -874,10 +923,11 @@ const UP = path.join(path.dirname(OUT), 'upload');
     lines.push('');
     for (const h of fs.readdirSync(path.join(UP, 'blobs')).sort()) lines.push('blobs/' + h);
     for (const n of iosFiles) lines.push(n);
+    for (const n of andFiles) lines.push(n);
     lines.push('manifest.json');
     lines.push('manifest.sig');
     global.__uploadSummary = staged + ' blob(s), ' + mb(stagedBytes) +
-                             ' + manifest' + (iosFiles.length ? ' + ios/' : '') + '  ->  out/upload' +
+                             ' + manifest' + (iosFiles.length ? ' + ios/' : '') + (andFiles.length ? ' + android/' : '') + '  ->  out/upload' +
                              (since !== version ? '   (accumulated since v' + since + ')' : '') +
                              (staged ? '   [clear with --uploaded once it is up]' : '');
   }
