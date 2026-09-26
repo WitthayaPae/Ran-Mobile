@@ -31,6 +31,10 @@ SOURCE `f9f39f6`. Built at 18:0x: ServerAgent, ServerField and MiniA are in `CLI
   - Verified on LDPlayer against the old live agent: V3 is dropped, and the phone falls back to the classic login in 5.0 s, then enters the world.
 - **Not yet verified on device.** The upgrade window (test01 has no stones) and ขาย (needs an NPC shop reached by touch). The HP flicker fix needs the new ServerField.
 
+**Released:** store **564**: APK 158 + iOS 1.0.158 (CI run 36244083366; the binary has `MsgSendLevelUpFB`). It is **forced**: minApk 158, minIos 158. The upload set includes `android/` (first-install page) and `ios/`.
+- The new ServerAgent is live, verified 20:02: the phone's V3 challenge was answered with no 5 s fallback.
+- `bFeatureBlockPCLogin` is still 0. Turn it on once phones are on store 564.
+
 **Order to ship**
 1. Deploy ServerAgent and ServerField (plus Config.ini).
 2. Mobile patch (Android + iOS). With the new agent the phone logs in at once, not after the 5 s fallback.
