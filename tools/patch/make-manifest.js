@@ -588,7 +588,7 @@ if (minIosOut !== null) manifest.minIos = minIosOut;
 {
   const envPath = path.join(HERE, 'keys', 'r2.env');
   if (fs.existsSync(envPath)) {
-    const m = /^\s*R2_PUBLIC_BASE\s*=\s*(\S+)\s*$/m.exec(fs.readFileSync(envPath, 'utf8'));
+    const m = /^[ \t]*R2_PUBLIC_BASE[ \t]*=[ \t]*(\S+)[ \t]*\r?$/m.exec(fs.readFileSync(envPath, 'utf8'));
     if (m) {
       const b = m[1].endsWith('/') ? m[1] : m[1] + '/';
       if (!/^https:\/\//.test(b)) { console.error('R2_PUBLIC_BASE must be https://'); process.exit(1); }
