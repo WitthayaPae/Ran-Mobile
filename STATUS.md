@@ -12,6 +12,30 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-26 (3) — HP flicker after a level-up card, upgrade window, ขาย row, PC login block
+
+SOURCE `f9f39f6`. Built at 18:0x: ServerAgent, ServerField and MiniA are in `CLIENT/`, and the mobile arm64 and x86_64 builds compile.
+
+- **HP/MP/SP flicker after a level-up card: my regression from `eec5b0e`.**
+  - Cause: the client's LEVELUP_FB handler steps its own stats one level per message (LEVLEUP), then takes the level number from the message. One FB for the whole card left the stats at L+1 while the level read max. Every frame `UPDATE_MAX_POINT` recomputed max HP from the stale stats, and the server's 1.6 s state update put it back.
+  - Fix (server only, so every client is covered, PC included): the FB goes once per level again. The broadcast, state update and log stay once per card.
+- **Upgrade window (`CMobileEnhanceWindow`, mobile only) cleared the material on every press.**
+  - The stack was picked up into the hand, and the `Refresh()` straight after found its cell empty.
+  - Now the rest of the stack goes back into its own cell, and the slot is re-read only once the hand is empty. The server inserts before it releases the hand, so the cell is final by then.
+- **ขาย missing from the mobile item sheet.** It had never been implemented.
+  - Now shown while an NPC shop is open (classic `MARKET_WINDOW` or the renewal page), for saleable non-GM items.
+  - It works like the PC Ctrl+click: `ReqNpcSaleInven`, then the `MODAL_SELL_ITEM` confirm. On mobile, No puts the item back in the bag.
+- **PC login block** (`[GAME_FEATURE] bFeatureBlockPCLogin`, read by the agent, default 0, now written as 0 in `CLIENT/Config.ini`).
+  - A login counts as mobile only if it uses the new 84-byte challenge shape (`NET_LOGIN_CHALLENGE_DATA_V3`, dwClient = Android/iOS).
+  - Every other login below USER_GM4 gets `EM_LOGIN_FB_SUB_FAIL` ("ไม่สามารถล็อกอินได้") and is logged back out.
+  - Verified on LDPlayer against the old live agent: V3 is dropped, and the phone falls back to the classic login in 5.0 s, then enters the world.
+- **Not yet verified on device.** The upgrade window (test01 has no stones) and ขาย (needs an NPC shop reached by touch). The HP flicker fix needs the new ServerField.
+
+**Order to ship**
+1. Deploy ServerAgent and ServerField (plus Config.ini).
+2. Mobile patch (Android + iOS). With the new agent the phone logs in at once, not after the 5 s fallback.
+3. Turn on `bFeatureBlockPCLogin` only once phones are on that patch: an older phone build counts as PC. Raising minApk/minIos in that patch forces them.
+
 ## 2026-09-26 (2) — Offline market (sell and buy stalls stay open after logout)
 
 **Request.**
