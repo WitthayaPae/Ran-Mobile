@@ -390,7 +390,33 @@ static NSString *DownloadParts ( NSString *dest, NSString *tmp, NSString *blobBa
 //  corrupt file behind. Safe to run on several threads at once: every path is
 //  per file, and directory creation tolerates a race. Returns nil, or what
 //  went wrong.
-static NSString *DownloadOne ( NSString *root, NSString *blobBase, NSArray *t )
+//  Where the blobs come from - same rule as blobBase() in RanLauncher.java. The
+//  signed manifest may name a storage bucket on the CDN (Cloudflare R2) so a
+//  fresh install never waits on the game server's upload; anything that is not
+//  an https folder means the store itself. Every blob is checked against its
+//  hash either way.
+static NSString *BlobBase ( NSDictionary *m, NSString *base )
+{
+    id b = m[@"blobBase"];
+    if ([b isKindOfClass:NSString.class] && [(NSString *)b hasPrefix:@"https://"]
+        && [(NSString *)b hasSuffix:@"/"] && [(NSString *)b length] < 512)
+        return (NSString *)b;
+    return [base stringByAppendingString:@"blobs/"];
+}
+
+static NSString *DownloadOneFrom ( NSString *root, NSString *blobBase, NSArray *t );
+
+//  From the bucket first; a blob it does not have (not uploaded yet) or serves
+//  wrong comes from the store, which has every one.
+static NSString *DownloadOne ( NSString *root, NSString *blobBase, NSString *storeBase, NSArray *t )
+{
+    NSString *fe = DownloadOneFrom ( root, blobBase, t );
+    if (fe && ![blobBase isEqualToString:storeBase])
+        fe = DownloadOneFrom ( root, storeBase, t );
+    return fe;
+}
+
+static NSString *DownloadOneFrom ( NSString *root, NSString *blobBase, NSArray *t )
 {
     NSString *rel = t[0], *sha = t[1];
     const long long size = [t[2] longLongValue];
@@ -585,7 +611,8 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         //  fail on their own, and nothing half-written is ever renamed into
         //  place, so the next launch resumes cleanly.
         const NSUInteger count = todo.count;
-        NSString *blobBase = [base stringByAppendingString:@"blobs/"];
+        NSString *storeBase = [base stringByAppendingString:@"blobs/"];
+        NSString *blobBase = BlobBase ( m, base );
         NSLock *lock = [NSLock new];
         __block NSUInteger next = 0, doneFiles = 0;
         __block long long gotBytes = 0;
@@ -602,7 +629,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
                     [lock unlock];
                     if (!t) break;
                     @autoreleasepool {
-                        NSString *fe = DownloadOne ( root, blobBase, t );
+                        NSString *fe = DownloadOne ( root, blobBase, storeBase, t );
                         [lock lock];
                         if (fe) { if (!failMsg) failMsg = fe; }
                         else    { ++doneFiles; gotBytes += [t[2] longLongValue]; }

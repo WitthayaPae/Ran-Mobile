@@ -785,7 +785,7 @@ public class RanLauncher extends Activity {
         }
 
         say("กำลังดาวน์โหลดอัปเดต", todo.size() + " ไฟล์, " + mb(todoBytes), 0);
-        downloadAll(todo, rootDir, todoBytes, base() + "blobs/");
+        downloadAll(todo, rootDir, todoBytes, blobBase(m));
 
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
@@ -969,7 +969,32 @@ public class RanLauncher extends Activity {
         say(null, files.get() + " / " + todo.size() + "   " + mb(bytes.get()) + " of " + mb(todoBytes), 1000);
     }
 
+    /*  Where the blobs come from. The signed manifest may name a storage bucket
+     *  on the CDN (Cloudflare R2), so a fresh install never waits on the game
+     *  server's upload - measured 2026-09-26, a blob Cloudflare had dropped came
+     *  from the server at 0.28 MB/s against 89 MB/s from the cache. Without one,
+     *  or with anything that is not an https folder, it is the store itself.
+     *  Every blob is checked against its hash either way, so this address can
+     *  make a download fail but never install anything else.                   */
+    private String blobBase(JSONObject m) {
+        String b = m.optString("blobBase", "");
+        if (b.startsWith("https://") && b.endsWith("/") && b.length() < 512) return b;
+        return base() + "blobs/";
+    }
+
+    /*  From the bucket first; a blob it does not have (not uploaded yet) or
+     *  serves wrong comes from the store, which has every one.                 */
     private void downloadOne(File rootDir, String blobBase, String[] t) throws Exception {
+        try {
+            downloadOneFrom(rootDir, blobBase, t);
+        } catch (Exception e) {
+            String store = base() + "blobs/";
+            if (blobBase.equals(store)) throw e;
+            downloadOneFrom(rootDir, store, t);
+        }
+    }
+
+    private void downloadOneFrom(File rootDir, String blobBase, String[] t) throws Exception {
         File dest = safeDest(rootDir, t[0]);
         File parent = dest.getParentFile();
         /*  Two workers can create the same directory at the same moment, and

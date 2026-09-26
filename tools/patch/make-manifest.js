@@ -578,6 +578,25 @@ const manifest = { version: version, minApk: minApk, files: files };
     patch server does not support the iOS client yet"). Store 434 went out
     without one on 2026-09-15 and every iPhone failed. See minIosOut above.  */
 if (minIosOut !== null) manifest.minIos = minIosOut;
+
+/*  Where the launchers fetch blobs from, when the store is mirrored to a
+    Cloudflare R2 bucket (r2-upload.js). Read from keys/r2.env, R2_PUBLIC_BASE,
+    e.g. https://cdn.ran-legacy-m.com/blobs/ - absent means the store itself,
+    as before. Both launchers fall back to the store per blob, so a blob the
+    bucket does not have yet only costs speed. The address is signed with the
+    rest of the manifest; the blob hashes are what make it safe.             */
+{
+  const envPath = path.join(HERE, 'keys', 'r2.env');
+  if (fs.existsSync(envPath)) {
+    const m = /^\s*R2_PUBLIC_BASE\s*=\s*(\S+)\s*$/m.exec(fs.readFileSync(envPath, 'utf8'));
+    if (m) {
+      const b = m[1].endsWith('/') ? m[1] : m[1] + '/';
+      if (!/^https:\/\//.test(b)) { console.error('R2_PUBLIC_BASE must be https://'); process.exit(1); }
+      manifest.blobBase = b;
+      console.log('blobBase : ' + b);
+    }
+  }
+}
 if (apk) manifest.apk = apk;
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
 
