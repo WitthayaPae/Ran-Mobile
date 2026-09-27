@@ -28,6 +28,7 @@ SOURCE `2bd969a`, `7baf13c`, `de3e831`. DB FIX_09, FIX_10, FIX_11 are live. Buil
   - filling a buy order was refused while your own stall listed the item
   - a phone whose salt answer was late was refused by the PC block (it is now marked a phone at the salt request)
   - the level-up log: one row per card, not one per level above 20
+- **Plaintext columns removed** (SOURCE `13be01d`): FIX_12 took `UserPass`/`UserPass2` out of the procedures, the 13:18 ServerAgent/GM_Tool stopped naming them, and FIX_13 dropped them live at 13:2x. 42/42 afterwards. The GM tool's create-user never worked (missing `UserType2`); fixed in the same build.
 - **Verified:** 42/42 checks of every password/PIN procedure on the live RanUser, in a rolled-back transaction. Every page → agent → procedure path was read.
 - **Not verified in game:** the stall fixes and the PIN reset through the page. Both need the new ServerAgent/ServerField.
 
