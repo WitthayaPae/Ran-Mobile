@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-27
+- **Last updated:** 2026-09-28
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,16 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-09-28 — Item mall: buying failed for every item
+
+Server + client fix. The mall showed "ซื้อไอเท็มไม่สำเร็จ" for every item, at any price or discount.
+
+- **Root cause (server log):** `sp_InsertItem2Bank('s355',...)` → SQL error 245, "cannot convert 's355' to int". The mobile client sent the purchase key with a stray `s` prefix; the procedure compares it to the integer `ProductNum`, so the whole buy aborted. The discount was never the problem.
+- **Server (live, DB-only):** `SOURCE/DB/FIX_16_purkey_strip.sql` strips the key to its digits before use (`s355`→`355`). Makes the server tolerant of every already-installed client. Verified: `s355` buys, clean `355` unchanged, a digit-less key refused.
+- **Client:** `RanShop_PurKey` read one byte early (`nSize-(PURKEY_LENGTH+2)`) and caught a printable padding byte. Now reads the exact offset `nSize-(PURKEY_LENGTH+1)` and takes the numeric run (SOURCE `9d2d3e7`). Mobile-only path; PC untouched.
+- **Also `FIX_17`:** the discount now applies to vote-point (currency 1) items too, not only cash. Verified a 100%-off vote item buys at 0 vote points.
+- **Released as store 571:** APK **162** + iOS **1.0.162** (CI run 36340733394). minIos raised to 162. Upload `native/out/upload` (1 blob + ios/ + android/ + manifest). Supersedes the un-uploaded store 569/570.
 
 ## 2026-09-27 (2) — Keyboard duplicated text; GUI tiny on 1080-row phones
 
