@@ -85,6 +85,18 @@ static inline float RanGL_ChooseUIScale(int panelW, int panelH) {
     if (s > 4) s = 4;
     float f = (float)s;
     if (panelH / f < (float)kMinHWhole) f = (float)panelH / (float)kMinH;
+
+    //  ...and never TOO MANY rows on a phone. The scale above is chosen from
+    //  the width, so a phone narrower than 2200 stayed at 1 however tall it
+    //  was: 1920x1080 and 2160x1080 laid out 1080 rows and drew the GUI at 59%
+    //  of every other phone's size, an iPhone 11 (1792x828) at 77% ("some
+    //  phones, the GUI is too small" - 2026-09-27). A phone-shaped panel (16:9
+    //  or wider) with more than kMaxH rows is fitted to kMinH like the rest.
+    //  720-row panels and 1440-row ones at a whole 2x keep their crisp whole
+    //  scale; tablets (16:10, 4:3) are laid out as before.
+    const int kMaxH = 720;
+    if (panelW * 9 >= panelH * 16 && panelH / f > (float)kMaxH)
+        f = (float)panelH / (float)kMinH;
     return f < 1.0f ? 1.0f : f;
 }
 //  Seconds spent inside eglSwapBuffers since the last call, and reset.

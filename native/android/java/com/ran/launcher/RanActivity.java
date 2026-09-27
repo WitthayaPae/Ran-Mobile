@@ -10,7 +10,13 @@ import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.text.Editable;
+import android.text.Selection;
+import android.text.SpannableStringBuilder;
 import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.CompletionInfo;
+import android.view.inputmethod.CorrectionInfo;
+import android.view.inputmethod.TextAttribute;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
@@ -146,6 +152,7 @@ public class RanActivity extends NativeActivity {
             if (imm != null) imm.hideSoftInputFromWindow(mIme.getWindowToken(), 0);
             mIme.clearFocus();
             mIme.setVisibility(View.INVISIBLE);
+            mConn = null;
             detach();
         }});
     }
@@ -173,10 +180,15 @@ public class RanActivity extends NativeActivity {
          *  nothing. Handling them here makes typing work with no IME involved,
          *  on any device, and costs a real keyboard nothing.  */
         @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
-            if (keyCode == KeyEvent.KEYCODE_DEL)   { nativeBackspace(); return true; }
-            if (keyCode == KeyEvent.KEYCODE_ENTER) { nativeEnter();     return true; }
+            final RanInputConnection c = mConn;
+            if (keyCode == KeyEvent.KEYCODE_DEL)   { if (c != null) c.backspace(); else nativeBackspace(); return true; }
+            if (keyCode == KeyEvent.KEYCODE_ENTER) { if (c != null) c.enter();     else nativeEnter();     return true; }
             final int u = event.getUnicodeChar();
-            if (u > 0) { nativeCommitText(String.valueOf((char) u)); return true; }
+            if (u > 0) {
+                final String t = new String(Character.toChars(u));
+                if (c != null) c.type(t); else nativeCommitText(t);
+                return true;
+            }
             return super.onKeyDown(keyCode, event);
         }
 
@@ -184,7 +196,10 @@ public class RanActivity extends NativeActivity {
          *  characters attached rather than as separate key codes.  */
         @Override public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
             final String chars = event.getCharacters();
-            if (chars != null && chars.length() > 0) { nativeCommitText(chars); return true; }
+            if (chars != null && chars.length() > 0) {
+                if (mConn != null) mConn.type(chars); else nativeCommitText(chars);
+                return true;
+            }
             return super.onKeyMultiple(keyCode, repeatCount, event);
         }
 
@@ -199,92 +214,180 @@ public class RanActivity extends NativeActivity {
                            | EditorInfo.IME_FLAG_NO_EXTRACT_UI;
             out.initialSelStart = 0;
             out.initialSelEnd = 0;
-            return new RanInputConnection(this);
+            mConn = new RanInputConnection(this);
+            return mConn;
         }
     }
 
+    /*  The connection the keyboard is typing through, for keys that reach the
+     *  view directly (injected by a test) so they go through the same mirror. */
+    private RanInputConnection mConn;
+
+    /*  A mirror of the field, which the keyboard edits however it likes, and a
+     *  diff of it into the client.
+     *
+     *  The client's edit box can do two things: insert at the caret and delete
+     *  before it. The caret is always at the end on mobile (RanIME_CaretToEnd;
+     *  nothing moves it). Keyboards do much more than append: at a word break
+     *  - an '@' or '.' in an email - they reach back and REPLACE the word they
+     *  already sent (setComposingRegion + commitText, replaceText, a
+     *  correction). The old connection kept no text, so each of those was
+     *  forwarded as an append and the word appeared twice; and every call it
+     *  did not override fell into BaseInputConnection's "dummy editor", which
+     *  re-sends its buffer as key events - more text the client never lost.
+     *
+     *  Here BaseInputConnection runs as a full editor on mText, so every IME
+     *  operation - replace, recompose, delete around the cursor - lands on real
+     *  text exactly as it would in an EditText. After each one, sync() sends the
+     *  client the difference: backspace to where the old and new text part,
+     *  then type the rest. Right whatever the keyboard did, because the result
+     *  is compared, not the operation.
+     *
+     *  Text the field held before the keyboard opened is not in the mirror; a
+     *  delete with nothing in the mirror goes straight to the client, as it
+     *  always did, so that text can still be erased.                        */
     private class RanInputConnection extends BaseInputConnection {
+        private final SpannableStringBuilder mText = new SpannableStringBuilder();
+        /*  What the client holds of the mirror, as of the last sync. */
+        private String mSent = "";
+        private int mBatch = 0;
+
         RanInputConnection(View target) {
-            /*  fullEditor=false: there is no Editable behind this, we forward
-             *  everything to the client instead of maintaining a local buffer. */
-            super(target, false);
+            super(target, true);
         }
 
-        /*  What the client is currently holding from the composition in flight.
-         *
-         *  A soft keyboard does not send the letter just typed: it sends the
-         *  WHOLE composition again on every keystroke. Appending each one was
-         *  the bug - pressing x twice sent "x" and then "xx", the client
-         *  appended both and ended up holding "xxx". A composition has to
-         *  REPLACE the previous one, and the client has no notion of composing
-         *  text - it has an edit buffer and a backspace and nothing else - so
-         *  the last composition is remembered here and taken back a character
-         *  at a time before the new one goes in.                             */
-        private String mComposing = "";
+        @Override public Editable getEditable() { return mText; }
 
-        /*  Code points, not String.length(): nativeBackspace removes one whole
-         *  UTF-8 character, while length() counts UTF-16 units and would leave
-         *  half of any character outside the BMP behind.                     */
-        private void dropComposing() {
-            final int n = mComposing.codePointCount(0, mComposing.length());
-            for (int i = 0; i < n; i++) nativeBackspace();
-            mComposing = "";
+        @Override public boolean beginBatchEdit() { mBatch++; return true; }
+        @Override public boolean endBatchEdit() {
+            if (mBatch > 0) mBatch--;
+            if (mBatch == 0) sync();
+            return mBatch > 0;
         }
+
+        private boolean changed(boolean r) { if (mBatch == 0) sync(); return r; }
 
         @Override public boolean commitText(CharSequence text, int newCursorPosition) {
-            dropComposing();
-            if (text != null && text.length() > 0) nativeCommitText(text.toString());
-            return true;
+            return changed(super.commitText(text, newCursorPosition));
         }
-
-        /*  Most keyboards send each keystroke as composing text and only commit
-         *  on a word break, so this is the path ordinary typing runs through. */
         @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            dropComposing();
-            if (text != null && text.length() > 0) {
-                nativeCommitText(text.toString());
-                mComposing = text.toString();
-            }
-            return true;
+            return changed(super.setComposingText(text, newCursorPosition));
         }
-
-        /*  The IME is editing around the composition, so what is remembered no
-         *  longer describes what the client holds.                           */
+        @Override public boolean setComposingRegion(int start, int end) {
+            return changed(super.setComposingRegion(start, end));
+        }
+        @Override public boolean finishComposingText() {
+            return changed(super.finishComposingText());
+        }
+        @Override public boolean setSelection(int start, int end) {
+            return changed(super.setSelection(start, end));
+        }
+        @Override public boolean commitCompletion(CompletionInfo text) {
+            return changed(super.commitCompletion(text));
+        }
+        @Override public boolean commitCorrection(CorrectionInfo info) {
+            return changed(super.commitCorrection(info));
+        }
+        @Override public boolean replaceText(int start, int end, CharSequence text,
+                                             int newCursorPosition, TextAttribute attr) {
+            return changed(super.replaceText(start, end, text, newCursorPosition, attr));
+        }
+        @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+            if (mText.length() == 0) { for (int i = 0; i < beforeLength; i++) nativeBackspace(); return true; }
+            return changed(super.deleteSurroundingTextInCodePoints(beforeLength, afterLength));
+        }
         @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-            mComposing = "";
-            for (int i = 0; i < beforeLength; i++) nativeBackspace();
-            return true;
+            if (mText.length() == 0) { for (int i = 0; i < beforeLength; i++) nativeBackspace(); return true; }
+            return changed(super.deleteSurroundingText(beforeLength, afterLength));
         }
 
         @Override public boolean sendKeyEvent(KeyEvent event) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                final int k = event.getKeyCode();
-                //  A real backspace ends the composition: what it removes is a
-                //  character the client already has, not one to take back again.
-                if (k == KeyEvent.KEYCODE_DEL) { mComposing = ""; nativeBackspace(); return true; }
-                /*  Send it, and leave the keyboard alone: CUIEditBox::EndEdit
-                  *  calls RanIME_Hide itself once the client closes the line,
-                  *  so hiding here as well only fought with it - and hiding
-                  *  *instead* of sending is what dropped the message. */
-                if (k == KeyEvent.KEYCODE_ENTER) { mComposing = ""; nativeEnter(); return true; }
-                final int u = event.getUnicodeChar();
-                if (u > 0) { nativeCommitText(String.valueOf((char) u)); return true; }
-            }
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+            final int k = event.getKeyCode();
+            if (k == KeyEvent.KEYCODE_DEL)   { backspace(); return true; }
+            /*  Send it, and leave the keyboard alone: CUIEditBox::EndEdit calls
+             *  RanIME_Hide itself once the client closes the line. */
+            if (k == KeyEvent.KEYCODE_ENTER) { enter(); return true; }
+            final int u = event.getUnicodeChar();
+            if (u > 0) type(new String(Character.toChars(u)));
             return true;
         }
 
-        /*  Most keyboards deliver their action key as an editor action rather
-         *  than as a KeyEvent, so this is the path that actually runs for the
-         *  blue Done/Send key. Without it the button did nothing at all. */
-        @Override public boolean performEditorAction(int actionCode) {
-            mComposing = "";
+        /*  Most keyboards deliver the blue Done/Send key this way. */
+        @Override public boolean performEditorAction(int actionCode) { enter(); return true; }
+
+        void type(String t) {
+            int a = Selection.getSelectionStart(mText), b = Selection.getSelectionEnd(mText);
+            if (a < 0 || b < 0) { a = b = mText.length(); }
+            mText.replace(Math.min(a, b), Math.max(a, b), t);
+            changed(true);
+        }
+
+        void backspace() {
+            int a = Selection.getSelectionStart(mText), b = Selection.getSelectionEnd(mText);
+            if (a < 0 || b < 0) { a = b = mText.length(); }
+            if (a != b) { mText.delete(Math.min(a, b), Math.max(a, b)); changed(true); return; }
+            if (a > 0)  { mText.delete(Character.offsetByCodePoints(mText, a, -1), a); changed(true); return; }
+            nativeBackspace();          //  text from before the keyboard opened
+        }
+
+        /*  Return sends the line and the client empties the field, so the
+         *  mirror starts again from nothing - otherwise the next line would be
+         *  diffed against the last one. */
+        void enter() {
+            mText.clear();
+            mText.clearSpans();
+            mSent = "";
             nativeEnter();
-            return true;
+            report();
         }
 
-        /*  The composition is settled text now as far as the IME is concerned.
-         *  The client already holds those characters, so nothing is sent - only
-         *  the memory of what could still have been taken back is dropped.    */
-        @Override public boolean finishComposingText() { mComposing = ""; return true; }
+        private void sync() {
+            final String now = mText.toString();
+            int p = 0;
+            final int n = Math.min(now.length(), mSent.length());
+            while (p < n && now.charAt(p) == mSent.charAt(p)) p++;
+            if (p > 0 && Character.isHighSurrogate(now.charAt(p - 1))) p--;
+
+            final int dels = clientChars(mSent.substring(p));
+            for (int i = 0; i < dels; i++) nativeBackspace();
+            final String add = now.substring(p);
+            if (add.length() > 0) nativeCommitText(add);
+            mSent = now;
+            report();
+        }
+
+        /*  Tell the keyboard where the cursor and composition are, as an
+         *  EditText would. Without it a keyboard works from its own guess of the
+         *  cursor, which is what made reaching back go wrong.                 */
+        private void report() {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm == null) return;
+            imm.updateSelection(mIme,
+                Selection.getSelectionStart(mText), Selection.getSelectionEnd(mText),
+                getComposingSpanStart(mText), getComposingSpanEnd(mText));
+        }
+    }
+
+    /*  How many characters the client keeps of a string. RanIME_InsertUtf8
+     *  (shell_mobile.cpp, appendCp874) drops what CP874 cannot hold - an emoji,
+     *  a CJK character - so a backspace is sent only for those it kept. The
+     *  old code counted every code point and deleted a neighbour instead.     */
+    static int clientChars(String s) {
+        int n = 0;
+        for (int i = 0; i < s.length(); ) {
+            final int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp < 0x80 || (cp >= 0x0E01 && cp <= 0x0E5B)) { n++; continue; }
+            switch (cp) {
+                case 0x20AC: case 0x00A0: case 0x2026: case 0x2018: case 0x2019:
+                case 0x201C: case 0x201D: case 0x2022: case 0x2013: case 0x2014:
+                    n++;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return n;
     }
 }
