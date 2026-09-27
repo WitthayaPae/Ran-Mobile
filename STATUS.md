@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-26
+- **Last updated:** 2026-09-27
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,27 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-09-27 (1) — Passwords: case, reset PIN, and a regression sweep of everything since the audit
+
+SOURCE `2bd969a`, `7baf13c`, `de3e831`. DB FIX_09, FIX_10, FIX_11 are live. Built 12:30: ServerAgent, ServerField, MiniA and GM_Tool are in `CLIENT/`.
+
+- **"Registered, then cannot log in."** The register page lowercases the password and PIN, and the login page does not. Since FIX_03 compares hashes, any password with a capital failed.
+  - Fixes: FIX_09 stores and checks the lowercase form; the client hashes the lowercase password for the challenge; the agent leaves a mismatched challenge unanswered, so an older app falls back to the classic login after 5 s.
+  - FIX_10: an exact-case hash from before FIX_09 is re-stored lowercase on the next correct login.
+  - FIX_11: a leading space at login is the same password (register trims both ends).
+- **Reset PIN had never worked on hashed accounts.** The server showed a number but stored the MD5 of it, cut to 25 characters. It now stores the number itself, from the OS generator, and no longer prints the PIN or email.
+- **GM tool:** "convert to MD5" would have made the MD5 text the password, so it now only explains. User points were cut to WORD on every save. The shop page shows ItemList in place of the dropped Category/Comment columns.
+- **Regressions from my own commits, now fixed (`7baf13c`):**
+  - buy orders over 65,535 refused
+  - one GM-made stack blocked all stall trade of that item
+  - filling a buy order was refused while your own stall listed the item
+  - a phone whose salt answer was late was refused by the PC block (it is now marked a phone at the salt request)
+  - the level-up log: one row per card, not one per level above 20
+- **Verified:** 42/42 checks of every password/PIN procedure on the live RanUser, in a rolled-back transaction. Every page → agent → procedure path was read.
+- **Not verified in game:** the stall fixes and the PIN reset through the page. Both need the new ServerAgent/ServerField.
+
+**Released:** store **567**: APK 160 + iOS 1.0.160 (CI run 36297834062, built from SOURCE `de3e831`). Android is not forced (minApk 1); iOS minIos 160 (raised by make-manifest to the published iOS build). Old apps still log in through the 5 s classic fallback once the new ServerAgent is deployed.
 
 ## 2026-09-26 (3) — HP flicker after a level-up card, upgrade window, ขาย row, PC login block
 
