@@ -12,6 +12,20 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-09-27 (2) — Keyboard duplicated text; GUI tiny on 1080-row phones
+
+MOBILE `d3cc498`. Released as store **569**: APK 161 + iOS 1.0.161 (CI run 36310576693). Android is not forced; minIos is 161.
+
+- **Keyboard duplicated text** (reported while typing an email on the register page).
+  - Android's InputConnection kept no text. A keyboard replacing a word it had already sent (at '@' or '.') was forwarded as an append, and calls it did not override fell into the dummy editor, which re-sends as key events.
+  - Now it is a full editor on a mirror of the field, and the client gets the diff. Only CP874-kept characters are counted.
+  - iOS needs no change: it refuses every edit and forwards the replacement as typed.
+  - Verified on LDPlayer (abc@gmail.com, 3 backspaces, xyz → abc@gmail.xyz). **Not reproduced with the reporting phone's keyboard.**
+- **GUI too small on some phones.** `RanGL_ChooseUIScale` chose the scale from the width, so 1920x1080 and 2160x1080 laid out 1080 rows (59% size), iPhone 11 77%, SE 85%.
+  - Phone-shaped panels with more than 720 rows are now fitted to 640.
+  - Verified at 2160x1080 on LDPlayer: laid out 1280x640.
+  - Unchanged: 720-row panels, 1440-row panels at 2x, iPhone 15/Pro Max, tablets.
+
 ## 2026-09-27 (1) — Passwords: case, reset PIN, and a regression sweep of everything since the audit
 
 SOURCE `2bd969a`, `7baf13c`, `de3e831`. DB FIX_09, FIX_10, FIX_11 are live. Built 12:30: ServerAgent, ServerField, MiniA and GM_Tool are in `CLIENT/`.
