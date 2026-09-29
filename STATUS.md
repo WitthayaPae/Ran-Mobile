@@ -221,6 +221,12 @@ mobile inventory layout is exactly as it was before this session.
   part-stacks. Fix: restart the walk after a delete (`goto merge_restart`); overflow keeps the rest
   in the source (`wTurnNum` + DRUG_UPDATE). Whole solution rebuilt 00:26, CLIENT\Emulator.exe and
   MiniA.exe replaced. NOT yet re-tested by clicking Sort.
+- **Names flickering top-left (2026-09-30)**: measured with a corner-draw log: every plate there was
+  `disp0 vis1` - a plate just handed out from the pool (authored rect 0,0) for an owner off
+  screen, flagged not-to-display but still visible until UpdateHold ran after the draw. Bursts of
+  11 and 30+ per frame with 250 fakes. Fix (NameDisplayMan.cpp, RAN_MOBILE): new plates start
+  hidden; a plate whose owner leaves the screen is hidden at once (was drawn one more frame at its
+  last spot). LDPlayer after: 0 plates at 0,0, 16-frame burst clean, names still on everyone.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
   code (SOURCE + shim) and ship with the next patch/iOS build.
 
