@@ -205,6 +205,22 @@ mobile inventory layout is exactly as it was before this session.
   replaced; packed copy was byte-identical to loose before) and pushed to LDPlayer. Measured: right
   end now `.. 42, 0, 0, bg` like the left `bg, 0, 0, 42 ..`. **DATA change: Gui.rcc must go in
   the patch** (it is not in the APK).
+- **Released as patch v573**: Android APK versionCode 163 (V140), iOS 1.0.163 (CI run 36601663387,
+  binary grepped for the new shader string). Upload set in `native/out/upload`. Also in this patch
+  from the tree: auto-lock (GLCharacter) and minimap drag (LargeMapWindow) - never run on a device.
+- **Random box pile (server, 2026-09-30)**: opening one box of a stack deleted the whole stack and
+  gave one reward (`MsgReqInvenRandomBoxOpen` called `DeleteItem`). Now takes one off the pile
+  (`wTurnNum--` + `SNETPC_INVEN_DRUG_UPDATE`), deletes only the last - same as `DoUseQItemInven`.
+  The empty-roll ("miss") path still deletes the whole stack: that edit was refused by the
+  permission check and is left for the user. ServerField/ServerAgent rebuilt 2026-09-30 00:09,
+  NOT deployed, NOT tested in game.
+- **Sort crash (server, 2026-09-30)**: Emulator ACCESS_VIOLATION in `GLChar::MsgReqHoldArray`
+  (GLCharInvenMsg.cpp, pile-merge loop). Merging one part-stack into another deleted the stack the
+  middle iterator stood on, then `++iter_comp` walked the freed map node; the overflow branch also
+  DeleteItem'd the freed source once per new stack. Old code, exposed now that random boxes leave
+  part-stacks. Fix: restart the walk after a delete (`goto merge_restart`); overflow keeps the rest
+  in the source (`wTurnNum` + DRUG_UPDATE). Whole solution rebuilt 00:26, CLIENT\Emulator.exe and
+  MiniA.exe replaced. NOT yet re-tested by clicking Sort.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
   code (SOURCE + shim) and ship with the next patch/iOS build.
 

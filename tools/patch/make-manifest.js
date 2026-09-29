@@ -874,6 +874,70 @@ const UP = path.join(path.dirname(OUT), 'upload');
       if (kept)
         console.log('upload   : ' + kept + ' blob(s) the live manifest claims are up are NOT on the server - kept');
     }
+
+    /*  Audit: is every blob THIS manifest names really on the server?
+     *
+     *  Both guards above trust something. The landed check trusts the live
+     *  manifest's version - when it is at the last build, the whole staged set
+     *  is assumed up and deleted - and the HEAD above only covers what is still
+     *  staged. On 2026-09-30 manifest 573 reached the server without two of its
+     *  four blobs (Gui.rcc and an icon); the 574 run saw version 573 live,
+     *  threw the set away, and published a store that answered 404 for both.
+     *  iOS hit it first.
+     *
+     *  So the server is asked about every needed blob. The store is append-only,
+     *  so a blob seen once stays there: confirmed hashes are remembered in
+     *  out/.server-blobs and only the rest are checked - all ~22k the first
+     *  time (about a minute, 24 at once), a handful after that. A failed or
+     *  unreachable HEAD counts as missing: re-sending is harmless, a hole is
+     *  not. Skipped when the live manifest could not be read at all, which
+     *  would otherwise stage the whole store.                                   */
+    if (liveHave) {
+      const CONF = path.join(path.dirname(OUT), '.server-blobs');
+      const confirmed = new Set(fs.existsSync(CONF)
+        ? fs.readFileSync(CONF, 'utf8').split(/\s+/).filter(Boolean) : []);
+      const upBlobs = path.join(UP, 'blobs');
+      const toCheck = [...NEEDED].filter(h => !confirmed.has(h) && !fs.existsSync(path.join(upBlobs, h)));
+      let missing = [];
+      if (toCheck.length) {
+        const r = spawnSync(process.execPath, ['-e', [
+          'const base = process.argv[1];',
+          'const hs = require("fs").readFileSync(0, "utf8").split(/\\s+/).filter(Boolean);',
+          'const miss = []; let i = 0;',
+          //  Two tries: at 24 in flight the odd HEAD fails in transit (measured:
+          //  1 of 21822, present on a re-ask). Only a second failure counts.
+          'const ask = async h => { try { const r = await fetch(base + h + "?cb=" + Date.now(),',
+          '  { method: "HEAD", cache: "no-store" }); return r.ok; } catch (e) { return false; } };',
+          'const one = async h => { if (!(await ask(h)) && !(await ask(h))) miss.push(h); };',
+          'const worker = async () => { while (i < hs.length) await one(hs[i++]); };',
+          'Promise.all(Array.from({ length: 24 }, worker))',
+          '  .then(() => process.stdout.write(miss.join("\\n")));',
+        ].join('\n'), LIVE + 'blobs/'],
+          { input: toCheck.join('\n'), timeout: 30 * 60000, maxBuffer: 64 * 1024 * 1024 });
+        if (r.status !== 0) {
+          //  The checker itself failed: trust nothing it did not say.
+          missing = toCheck;
+        } else {
+          missing = r.stdout.toString('utf8').split(/\s+/).filter(Boolean);
+        }
+      }
+      const missSet = new Set(missing);
+      for (const h of toCheck) if (!missSet.has(h)) confirmed.add(h);
+      let restaged = 0, restagedBytes = 0, lost = 0;
+      for (const h of missing) {
+        const src = path.join(OUT, 'blobs', h);
+        if (!fs.existsSync(src)) { lost++; console.log('upload   : MISSING on the server and not in the local store: ' + h); continue; }
+        fs.copyFileSync(src, path.join(upBlobs, h));
+        restaged++; restagedBytes += fs.statSync(src).size;
+      }
+      //  Only hashes this manifest still names: the file stays the size of the store.
+      fs.writeFileSync(CONF, [...confirmed].filter(h => NEEDED.has(h)).join('\n') + '\n');
+      console.log('audit    : ' + toCheck.length + ' blob(s) checked on the server, ' +
+                  (restaged ? restaged + ' MISSING (' + mb(restagedBytes) + ') - staged again'
+                            : 'all present') +
+                  (lost ? ', ' + lost + ' missing everywhere - do NOT upload the manifest' : ''));
+      if (lost) process.exitCode = 1;
+    }
     //  Only the newest manifest matters - it is the one the client reads.
     for (const n of ['manifest.json', 'manifest.sig']) {
       const src = path.join(OUT, n);

@@ -225,7 +225,10 @@ function sweepOut() {
                         //  and is cleared only by --uploaded, so sweeping it
                         //  here would silently drop blobs that are in the
                         //  manifest but not yet on the server.
-                        'upload', 'UPLOAD.txt']),
+                        'upload', 'UPLOAD.txt',
+                        //  Blobs make-manifest's audit has seen on the server.
+                        //  Losing it only costs one full re-check.
+                        '.server-blobs']),
                'out/');
 }
 

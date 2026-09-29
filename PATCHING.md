@@ -1089,3 +1089,19 @@ The summary line says which it is:
 
 `out/upload` and `out/UPLOAD.txt` are in the sweep's keep-set for this reason -
 sweeping them would drop exactly the pending blobs.
+
+### Every publish audits the server
+
+The "server already has version N" check trusts the manifest's version. On
+2026-09-30 manifest 573 reached the server without two of its blobs (`Gui.rcc`
+and an icon); the 574 run saw 573 live, cleared the set, and the store answered
+404 for both - iOS hit it first. So after staging, `make-manifest.js` now HEADs
+**every blob the new manifest names** and stages any the server does not have:
+
+    audit    : 21822 blob(s) checked on the server, 2 MISSING (51.5 MB) - staged again
+
+Confirmed hashes are remembered in `out/.server-blobs` (the store is
+append-only, so a blob seen once stays), so only the first run checks all ~22k;
+later runs check the new ones. A HEAD is tried twice before it counts as missing.
+"missing everywhere" (not even in the local store) fails the run - do not upload
+that manifest.
