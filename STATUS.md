@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-28
+- **Last updated:** 2026-09-29
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,330 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-09-29 (3) — Bigger game windows on mobile (fit the screen)
+
+Windows are authored at PC pixel sizes and only ever centred, never scaled, so on
+a wide phone screen a ~400-wide panel floats with big side margins ("GUI still
+small"). New: enlarge the big windows to use the screen.
+
+- **`CInnerInterface::MobileFitWindowsFrame`** (`InnerInterface.cpp`/`.h`, called
+  each frame from `DxGameStage` after the interface has placed windows). Scales an
+  allowlist of 15 windows (inventory, shop, storage, item bank, market, exchange,
+  character, club, club storage, friend, quest, private market, item-shop search,
+  auction, auction storage) by **one factor about the screen centre**. Single
+  factor + single pivot = an affine, so windows that abut (the shop/storage/bank
+  end exactly where the inventory's equip column begins) keep their shared seam,
+  and a lone centred window stays centred. Factor is capped so the tallest/widest
+  visible window still fits (tall windows are already ~600 in a ~640-row layout,
+  so height usually caps it). Uses `ReSizeControl` (incremental; `CUIGroup`
+  recurses into the art) and is idempotent — reissued only when a window isn't
+  already at its target, so the open reset → scale → rest cycle is stable.
+- **Setting** Settings > Function > "ขนาดหน้าต่าง": ปิด / กลาง / ใหญ่ / ใหญ่มาก =
+  `dwMobileWndFit` 100 / 125 / 140 / 160 (percent multiplier, 100 = off).
+  `RANPARAM::dwMobileWndFit` added (default **140**), clamped 100..200, saved with
+  the other GRAPHIC OPTION mobile fields. All plumbing `#ifdef RAN_MOBILE`.
+
+Verified: RANPARAM, RANPARAM_OPTION, InnerInterface, FunctionOption, DxGameStage
+all compile clean on arm64 (0 errors).
+
+### LDPlayer test 2026-09-29 — the setting works, the scaling does NOT (for the windows that matter)
+
+Built arm64 + **x86_64** (LDPlayer runs x86_64), packaged, installed, logged into
+the world (Lv.150), opened windows.
+
+- ✅ **Setting is live end to end.** Settings > Function shows "ขนาดหน้าต่าง"
+  with ปิด/กลาง/ใหญ่/ใหญ่มาก; selecting a value applies and saves. No crash.
+- ❌ **The window scaling has no visible effect on the inventory.** Inventory at
+  "ใหญ่" (140) is pixel-identical to "ปิด" (100), and the bag only fills ~58% of
+  a 720-row screen (so it is NOT a height-cap no-op — there was headroom).
+- **Root cause (code):** the mobile-rebuilt windows run their own bespoke layout
+  every frame — `CInventoryWindow` lines 770–1152 set child `SetLocalPos`
+  absolutely, **re-anchor the drawn tree** ("a child's drawn rect is not moved by
+  SetLocalPos - it is re-anchored", 1012/1143) and call their own `SetGlobalPos`.
+  That overrides the `MobileFitWindowsFrame` `ReSizeControl`, so the container
+  scales but the drawn grid does not. Shop/storage/bank are the same family.
+
+**First cut** used one factor about the screen centre with a user setting, and a
+cross-window cap that collapsed to ~1.0 (a tall "visible" window zeroed everyone's
+headroom) → nothing scaled. Also learned the inventory is authored-size (239x598 in
+2x space) and tall-and-narrow: already near full screen height, so uniform scaling
+is height-bound (~10-20%); it can never fill a wide screen without distorting icons.
+
+**Redesign (per user: no setting, global, windows only, keep chat + the on-screen
+joystick/skill overlay untouched, don't break window dragging, keep icons crisp):**
+
+- `dwMobileWndFit` setting **removed** entirely (RANPARAM field, load/save, and the
+  Settings > Function combo all reverted). Enlargement is **always on** for mobile.
+- `MobileFitWindowsFrame` rewritten: **per-window uniform factor** = largest that
+  still fits the screen (min of width/height ratios × 0.95), capped 2.0, floor 1.0,
+  grown **about each window's own centre** (opens where it always did, just bigger).
+  Uniform → icons/text keep shape; the modest factors + the UI's linear sampling
+  keep them smooth (verify on device).
+- **Drag-safe:** applied only while the window is at its authored (unscaled) size.
+  A drag moves position, not size, so a dragged window is never re-touched; a
+  re-laid-out window (reopen / tab switch) is scaled again. No per-frame fighting.
+- Chat box deliberately **not** in the list. Native overlay (joystick/skills) is a
+  separate system (touch_ui.cpp, panel pixels) and is untouched by design.
+- Added a `RanWndFit` log line per scale (id, authored size, factor, result) to
+  read back the exact factors on device.
+
+Compiles clean on arm64 (RANPARAM, RANPARAM_OPTION, InnerInterface, FunctionOption).
+
+### LDPlayer retest 2026-09-29 (2) — WORKS
+
+Rebuilt x86_64, packaged, installed, logged in, opened the inventory.
+- `RanWndFit` log: `scale id=19 authored=239x435 f=1.57 -> 376x684 at (904,18)
+  screen=1280x720`. Inventory (INVENTORY_WINDOW, incl. the equip doll child) grew
+  ×1.57 to fill ~95% of the 720-tall screen. Icons crisp (linear, not blocky).
+- Item slots still clickable at the scaled size (tapping a weapon slot showed its
+  item-info tooltip).
+- Dragged the window by its title: it moved and **stayed** — no snap-back, and the
+  log shows **no second scale** after the drag (size-guard: a drag changes position
+  not size, so it is never re-touched). Dragging preserved.
+- Chat box and the native joystick/skill overlay unchanged, as intended.
+
+arm64 rebuild in progress so both platforms ship the same code. Not yet packaged
+into a patch / uploaded.
+
+### 2026-09-29 (3) — REVERTED at user request
+
+On device the scaled inventory showed the limits of geometry-only scaling:
+`ReSizeControl` stretches boxes and icon textures but **not fonts** (the item
+count is a fixed 8-pt font, and CD3DFontX has no draw-time scale), so numbers
+stayed tiny and mis-placed in the enlarged cells, and low-res (~32px) icons blown
+up 1.57x soften (non-integer upscale; real sharpness needs higher-res art).
+
+Offered: (a) bigger number font + linear icons, (b) whole-UI scale (clean but also
+scales chat), (c) revert. **User chose revert.**
+
+All window-scaling code removed: `MobileFitWindowsFrame` (method, declaration, and
+the DxGameStage call), and the earlier `dwMobileWndFit` setting (RANPARAM field,
+load/save, Settings > Function combo). Verified: no `MobileFitWindowsFrame` /
+`dwMobileWndFit` / `RanWndFit` references remain; InnerInterface, FunctionOption,
+DxGameStage, RANPARAM compile clean. Window sizes are back to the shipped
+behaviour. (LDPlayer still has the test APK that contained the scaling; rebuild
+before any ship.)
+
+Untouched by the revert and still in the tree (compiled, not yet on-device
+tested): the ROV-style auto-lock switch and the map drag-to-pan.
+
+**Revert confirmed on-device 2026-09-29:** rebuilt reverted x86_64, packaged,
+installed, logged in, opened inventory → back to original authored size (matches
+the pre-scaling baseline), and no `RanWndFit` log fired. Scaling is gone from the
+running build.
+
+## 2026-09-29 (8) — Mobile inventory: equipment panel flush with the bag (no seam)
+
+Reported misplacement of header / equipment / buttons. Measured the TRUE on-screen
+rects (temporary logging in `CInventoryWindow::Update`, after the align pass, read
+off LDPlayer):
+- title L770 R1245  (= plate-left → window-right)  → header already aligned.
+- plate R1005, window L1006, bag grid L1018        → the equipment plate's right
+  border and the window's left border stacked into a ~13px double-border seam, so
+  the equipment read as a separate box bolted to the bag.
+- ย่อย/money/point/Sort all within authored insets → buttons already aligned.
+
+Fix (`MobileSideBySide`): place the doll off the bag's own left edge instead of a
+fixed 6px gap — `fDollX = rcPage.left - fPAD - rcDoll.sizeX` — so the plate's right
+edge lands exactly on the bag grid (`plate-right = rcPage.left`). The equipment and
+bag now share one divider and read as one window; the title (spans plate-left →
+window-right) follows automatically. Data-driven, no magic numbers. Verified on
+LDPlayer: the seam is gone. Client-only, `RAN_MOBILE`; temp logging removed.
+
+**Bottom row alignment (same session):** the money + cash-point backgrounds are
+authored 215 wide against a 225 bag grid, and ยอย/Sort sit at that 215 right edge —
+so the whole bottom row stopped 10px short of the grid. Added handles
+(`m_pMobileMoneyBack` / `m_pMobilePointBack`) and, in `MobileSideBySide`, widen both
+bars to the grid width (`rcPage.sizeX`) and shift ยอย/Sort by Sort's shortfall so
+Sort's right edge lands on the grid. Verified on LDPlayer: bottom row now flush with
+the bag. Client-only, `RAN_MOBILE`.
+
+**The actual eyesore — equipment column too short (same session):** the seam and
+button fixes measured right but the window still looked wrong because the equipment
+plate ended after the ~4 rows of equip slots while the bag ran ~10 rows deep,
+leaving the whole lower-left as empty street — a lopsided L, not one window. Fix
+(`MobileSideBySide`): extend the plate to the bag grid's full height
+(`fPH = (rcDoll.top + rcPage.sizeY) - fBY`), and since the backdrop art only covers
+~44px per band, compute the band count (`nBands = ceil(fPH/44)`, ≤16) and split the
+height evenly. `m_nMobileDollBands` shares that count with `MobileShowWear` so
+re-showing the doll restores every band, not just four. Now both columns are equal
+height = one clean rectangle. Verified on LDPlayer. Client-only, `RAN_MOBILE`.
+
+(Upload service returned 500 on the after-screenshots during this session, so they
+were described rather than delivered; captures are in `MOBILE/native/out/ld_fullh*`.)
+
+**REVERTED at user request:** all three inventory-layout changes above (seam /
+`fDollX`, bottom-row alignment + `m_pMobileMoneyBack`/`m_pMobilePointBack`, and the
+full-height plate + `m_nMobileDollBands`) were undone — `MobileSideBySide`,
+`MobileShowWear`, `CreateSubControl`, the constructor and `InventoryWindow.h` are
+back to their pre-session state. Verified: no leftover refs, compiles clean. The
+mobile inventory layout is exactly as it was before this session.
+
+**Then three targeted fixes (after the revert), verified on LDPlayer (`out/ld_fix5_inv.png`):**
+- Header now spans the doll plate: `MobileSpanTitle ( fDollX - 7 )` (pad 5 + edge 2), was -5.
+  Title's left edge is now at the plate's outer edge (panel col 56 = plate col 56).
+- Doll plate darker than PC: the plate used `BASIC_WINDOW_BODY_MAIN_BLACK`, but the inventory
+  body is `CreateBaseWindowLightGray`. It now uses `..._LIGHTGRAY`, the same skin as the body.
+- ย่อย/Sort outline stepped: the window was centred to y 142.5 (odd height 435), so the button
+  sat at 547.5. Caps and stretched centre rounded the half texel opposite ways. Fix in
+  `AlignMainControl` (UIControlEx.cpp, `RAN_MOBILE`): floor left/top to whole pixels, so the
+  button now sits at 547.00. Measured: the cap and centre outline rows are identical.
+  This affects every top-level window, and all of them now land on whole pixels.
+- Still stepped after that. Reference = the ย่อย page's own buttons (same skin, 80 wide, straight).
+  Cause: in the UI shader (shim/gl/gl_render.cpp) the D3D9 pixel-grid snap applied only when BOTH
+  axes were magnified. A 40-wide button's centre strip is squeezed across (59 texels into 26), so it
+  fell back to GL half-pixel sampling vertically too and sat 1 screen row off its caps. Now the
+  choice is made per axis. Measured: every column of the inventory ย่อย/Sort (caps + centre) has
+  row values identical to the reference button (`out/btn_cmp2.png`).
+- Black top edge on the bag column, like the equipment plate's (user meant the dark edge under the
+  title, not a light line - a first light-line attempt was replaced). `m_pMobileListTop` =
+  `BASIC_WINDOW_BODY_UP` (the plate's own edge piece), 2 units, between the window's side borders,
+  at rcDoll.top-6: one unit below the plate's edge because the plate covers the title's last row
+  and the bag side's body starts under it. Measured: both columns now go title -> dark edge
+  (23-27) -> body (126-129) with no title strip between.
+- Chat macro button (and chat channel tabs) bottom outline cut to half: the chat was placed at
+  y 550.6 (`MobileArrangeInterface`: edge margin / keyboard inset are screen fractions), so the
+  macro bar sat at 529.6 / x 416.5 and the art's last row straddled pixels. Chat position now
+  floored (DxGameStage.cpp). Measured: chat 550.0, bar 529.0/416.0, bottom outline 2 screen rows
+  on both the macro button and the tabs (was 1).
+- Chat macro button / chat tabs still "cut at the end": the RIGHT cap had no black outline. Data
+  bug: `BASIC_TEXT_BUTTON_IMAGE_RIGHT191` / `_RIGHT_F191` (uiextcfg.xml, both copies) took
+  TEXTURE_POS X=506 W=5, but in interface_main.dds the cap is 507-511 with its black border at 511
+  (mirror of the left cap 465-469, black at 465). Now X=507. Gui.rcc repacked (only uiextcfg.xml
+  replaced; packed copy was byte-identical to loose before) and pushed to LDPlayer. Measured: right
+  end now `.. 42, 0, 0, bg` like the left `bg, 0, 0, 42 ..`. **DATA change: Gui.rcc must go in
+  the patch** (it is not in the APK).
+- Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
+  code (SOURCE + shim) and ship with the next patch/iOS build.
+
+## 2026-09-29 (7) — NPC exchange (Spender): tap a box reward to preview its contents
+
+On the NPC item-exchange window the reward items are boxes (gacha / random / choice).
+Tapping them showed only the item-info tooltip; the "what's inside the box" preview
+was behind ALT+right-click (`ShowBoxContents`), which a phone has no gesture for.
+
+Fix (`NPCItemExchangeSlot.cpp`, `RAN_MOBILE`, client-only): on a plain tap of a
+result OR require icon, if the item is a box (`ITEM_BOX` / `ITEM_PREMIUMSET` /
+`sRandomBox.VALID()`) call `ShowBoxContents` — the same preview the PC opens and the
+inventory's option panel offers. Non-box items keep just the info tooltip.
+
+Client rebuild only (no server change). Compiles clean on arm64.
+
+## 2026-09-29 (6) — Load-test: bigger spawn counts (500 / 1000)
+
+The fake-player spawn was capped at 50 per request (command rejected >50; the agent
+clamped a request to one 50-id field message). Raised for real crowd tests.
+
+- **Client GM window** (`GMGenItemWindow.cpp`): MOB tab now has **Fake +10 / +50 /
+  +500 / +1000 / Clear** (was +10/+50/Clear). Buttons run `/fake_pc N`.
+- **Command** (`dxincommand.cpp`): `/fake_pc` now accepts 0..5000 (was 0..50).
+- **Agent** (`GLAgentServerMsg.cpp`, `MsgGmFakePC`): reserves the whole requested
+  count (bounded by the cap + free-id list) and **splits it into 50-id field
+  messages** instead of clamping to one. Buffer is 2048, so the message array stays
+  at 50 and the batch is sent as several messages.
+- Safety unchanged: total live fakes still capped at **m_dwMaxClient / 4**. To
+  actually reach 1000 fakes the field server must be configured for **≥4000 max
+  clients**; on a smaller server it spawns as many as fit and stops.
+
+Rebuild needed: **mobile client** (buttons + command cap) and **ServerAgent**
+(batching). ServerField already carries the skill-cast change. Compiles clean on
+arm64; ServerAgent MSVC build in progress. Not deployed.
+
+**2026-09-29 build-bug fix:** the first MSVC server builds (ServerField 12:39,
+ServerAgent 13:44) linked a **stale `Lib_Client.lib`** (Sep-27) — building the
+server .vcxproj did NOT rebuild the lib that holds the changed `GLGaeaServerMsg`
+/ `GLAgentServerMsg` objects, so the deployed binaries had **neither** the skill
+cast nor the batching (user saw: gen 500 → capped 50, no skills). Fix: build
+`Lib_Client.vcxproj` FIRST (objs + `_Bin/Data/Lib_Client.lib` → 14:00), then relink
+`ServerField.exe` / `ServerAgent.exe` (→ 14:01). Timestamp chain obj→lib→exe now
+confirms the code is in. **Lesson: after editing a server TU in Lib_Client, build
+Lib_Client.vcxproj before the server projects — the server projects don't rebuild
+the lib.** Corrected binaries at `SOURCE/_Bin/Tool/`; user must REDEPLOY these.
+
+## 2026-09-29 (5) — Load-test fakes now cast skills (skill-effect stress)
+
+The GM load-test crowd (`RAN_GM_LOADTEST`) spawned running, geared fakes but never
+used skills — so it didn't stress the part that actually costs phone frames, the
+skill-effect rendering. Added random skill casting.
+
+Server-side only (`GLGaeaServerMsg.cpp`, in `FrameMoveFakePC` / `GMCtrolFakePC`):
+- `FakePCCollectSkills()` builds, per fake char class, the pool of that class's
+  active skills — `GetCharSkillClassIndex` gives the four skill-tree indices, then
+  `GLSkillMan::GetData(skillclass, idx)` enumerates them; passive and Editor-
+  disabled skills are skipped. Collected once, like the gear pool.
+- Each second, ~1/3 of fakes move (as before) and, independently, ~1/3 cast: the
+  server broadcasts `SNETPC_REQ_SKILL_BRD` (random skill of the fake's class, random
+  level 1..max, TARPOS = the fake) via `SendMsgViewAround`. That is the exact
+  message a real cast sends to onlookers, so every client in range plays the
+  animation + effect. **No learn / mana / target needed** — broadcast only.
+- `SFAKEPC` gained `nClass` to index the pool.
+
+**Client needs no change** — it already renders skill BRDs from other players; the
+fakes just originate them. **Only the FIELD SERVER must be rebuilt + redeployed**
+(the agent and login are untouched). Compiles clean on arm64; MSVC ServerField
+build in progress. Not deployed (live-server deploy is the user's to do).
+
+## 2026-09-29 (4) — LDPlayer test of map-drag (verified) and auto-lock (pending)
+
+Tested on the live LDPlayer session (build from 11:33, which contains both).
+
+- **Map drag-to-pan: VERIFIED.** Opened the large map, did a plain short swipe on
+  the map body (no long press) — it panned: coords `072 024` → `060 017`, labels
+  shifted (หอคอย Secret Gate / Right Dragon P... scrolled in). Works as intended.
+- **Auto-lock: NOT verified on device.** Its defining behaviour (switch target when
+  the locked one leaves range) needs staged combat, and the AUTO toggle could not
+  be hit reliably via scripted taps (log stayed `auto=0`). Code compiles and the
+  logic was reviewed; on-device combat verification is still pending — best
+  confirmed hands-on in a real fight, or in a later dedicated combat test.
+
+## 2026-09-29 (2) — Map: drag to pan, no long press
+
+The world map (opened from the minimap) only scrolled while the **right/middle**
+button was held down (`CLargeMapWindow::TranslateMeg`, `CHECK_RB_DOWN_LIKE ||
+CHECK_MB_DOWN_LIKE`). On a phone the right button is the 450ms long-press, so
+panning the map meant press-and-hold, then drag. Left = tap-to-move-there
+(`OnLButtonUp`).
+
+Fix (`LargeMapWindow.cpp`/`.h`, `RAN_MOBILE`-guarded — shared, both platforms;
+server build untouched): left-down on the map body now arms the same pan as the
+right button. On release, a finger that actually scrolled (`m_bMapDragged`, set in
+`Update` when the held map moved) eats the release; a finger that only tapped
+falls through to `OnLButtonUp` and still moves the character there. So: **drag =
+pan, tap = move-to**, long-press no longer needed.
+
+Verified: `LargeMapWindow.cpp.o` compiles clean on arm64 (0 errors). iOS = same
+shared TU, **not separately built/run** (no iPhone). On-device **not tested**;
+not shipped in a patch.
+
+## 2026-09-29 — ROV-style auto-lock: switch off a target that runs out of range
+
+Before: auto-target/PK latched a target and dropped it only on death or when it
+left the client's knowledge. A mob or player kiting away held the lock, and the
+character chased it across the map on every press. ROV instead re-locks onto the
+nearest thing you can actually reach.
+
+Changed (all in `SOURCE/Lib_Client/G-Logic/`, `RAN_MOBILE`-guarded — one edit,
+both platforms; server build untouched):
+
+- **In-range-preferred selection** (`GLCharacter.cpp`, `MobileRate`/`MobileBetter`
+  + both finders `MobileFindNearestMob`/`MobileFindNearestPvP`). A candidate in
+  attack reach now beats one out of reach before the priority rule
+  (`dwMobileTargetPriority`: nearest / lowest-HP / lowest-HP%) is applied, so the
+  lock goes to a reachable priority target and only reaches a distant one when
+  nothing is in range — ROV's "in range first, then slightly out of range."
+- **Out-of-range switch** (`MobileTargetTick`). While auto/PK is on and the held
+  enemy passes `SWITCH` (1.75× reach), if a fresh finder pick is inside `SELECT`
+  (1.25× reach) the lock swaps to it. Two thresholds so a target hovering at the
+  edge does not flip the lock every frame; nothing in range → current target
+  kept and the press path closes distance as before. Covers mob and player (the
+  `m_bMobilePK` finder split).
+- `m_fMobileLastPickDist` (new member, `GLCharacter.h` + reset in ResetData): the
+  chosen candidate's distance, so the switch can tell a nearby pick from a far one.
+
+Verified: `GLCharacter.cpp.o` compiles clean on arm64 (0 errors). Shared TU, so
+iOS compiles the identical path — **not separately built/run here** (no iPhone).
+On-device behaviour (LDPlayer/tablet) **not yet tested**; not shipped in a patch.
 
 ## 2026-09-28 — Item mall: buying failed for every item
 

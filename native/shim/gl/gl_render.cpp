@@ -369,8 +369,28 @@ const char *kFS =
     "        //  rasterised at the drawn size (one texel a pixel) and keep sharpUV.\n"
     "        highp vec2 dUx = dFdx(vUV);\n"
     "        highp vec2 dUy = dFdy(vUV);\n"
-    "        highp float tpp = max(length(dUx * uTexSize), length(dUy * uTexSize));\n"
-    "        if (uPanelH > 0.0 && tpp < 0.75) {\n"
+    //  Per axis. A button's centre strip is squeezed across (59 texels into
+    //  26) but drawn 1:1 down; judged on both axes at once it lost the snap
+    //  vertically too and sat one screen row off its end caps, a stepped
+    //  outline on every narrow text button.
+    "        highp float tpx = length(dUx * uTexSize);\n"
+    "        highp float tpy = length(dUy * uTexSize);\n"
+    "        highp float tpp = max(tpx, tpy);\n"
+    "        if (uPanelH > 0.0 && tpp >= 0.75 && min(tpx, tpy) < 0.75) {\n"
+    "            highp float s = uUiSharpen;\n"
+    "            highp vec2 lg = vec2(gl_FragCoord.x, uPanelH - gl_FragCoord.y) / s;\n"
+    "            highp float hp = 0.5 / s;\n"
+    "            highp vec2 c = floor(lg + hp);\n"
+    "            highp vec2 w = clamp((lg + hp - c) * s, 0.0, 1.0);\n"
+    "            highp vec2 d = (c - 1.0 + w) - lg;\n"
+    "            highp vec2 m = vec2(tpx < 0.75 ? 1.0 : 0.0, tpy < 0.75 ? 1.0 : 0.0);\n"
+    "            highp vec2 sh = sharpUV(vUV);\n"
+    "            uvS = vUV + dUx * (d.x * s * m.x) - dUy * (d.y * s * m.y);\n"
+    //  The squeezed axis keeps sharpUV. Interface quads are axis-aligned, so
+    //  texture u runs with screen x and v with screen y.
+    "            if (m.x < 0.5) uvS.x = sh.x;\n"
+    "            if (m.y < 0.5) uvS.y = sh.y;\n"
+    "        } else if (uPanelH > 0.0 && tpp < 0.75) {\n"
     "            highp float s = uUiSharpen;\n"
     "            highp vec2 lg = vec2(gl_FragCoord.x, uPanelH - gl_FragCoord.y) / s;\n"
     //  Where a logical-pixel edge falls inside this screen pixel, sample
