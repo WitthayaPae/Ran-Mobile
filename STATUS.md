@@ -227,6 +227,28 @@ mobile inventory layout is exactly as it was before this session.
   11 and 30+ per frame with 250 fakes. Fix (NameDisplayMan.cpp, RAN_MOBILE): new plates start
   hidden; a plate whose owner leaves the screen is hidden at once (was drawn one more frame at its
   last spot). LDPlayer after: 0 plates at 0,0, 16-frame burst clean, names still on everyone.
+- **iPhone crash with 250 fakes + show-all-players = memory kill (2026-09-30)**. iOS syslog:
+  footprint 483 -> 2,829 MB in 7 s, headroom 243 MB, log ends; no crash/jetsam report saved.
+  Counters covered ~1.2 GB (GPU textures 773, texture RAM copies 385, VB/IB 27). The rest measured
+  on LDPlayer with malloc debug backtraces (`LIBC_DEBUG_MALLOC_OPTIONS=backtrace=12`, debuggable
+  APK, `am dumpheap -n`, symbolized with llvm-symbolizer; scripts in native/out/heap/): native
+  heap 1,046 MB =
+  texture RAM copies 168 + font atlas 88 | mesh CPU copies (RanMesh) 140 | per-character 125
+  (`new DxSkinChar` 198,848 B x 250 = 47 MB; ANIMCONTNODE 640 B x 115,048 = 70 MB, ~460 per
+  char, one per class animation with its sound data copied) | game data 96 | animation data 91 |
+  effects 75 | sound PCM 68 | UI 61 | name plates 32 | other ~90.
+  iOS = that heap + GPU copies (773 MB) + driver. NEXT: memory budget for other players (both
+  platforms) + half-size costume textures on phones; per-char anim nodes are a cheap cut.
+- **Other players' costumes at half size on phones (2026-09-30)** - first fix for the iPhone crowd
+  kill. A texture whose FIRST upload happens inside GLCharClient's render/shadow scope, in a 3D
+  draw, from textures/char|item|bike|vehicle, 512+ wide, goes up at half: mipped = chain starts
+  at level 1; single-level = 2x2 box (RGBA formats, and DXT only where it is CPU-decoded - iOS).
+  On only with <= 8 GB RAM; diag `fullcostume` / `halfcostume` (in the DATA root, not /sdcard/ran).
+  Own character, mobs, map, UI untouched. LDPlayer A/B, 4 interleaved rounds, same 250 crowd:
+  GPU textures 513/517 MB full vs 275/275 MB half (-47%), 133 costumes halved; renders normal.
+  Files: shim d3d9_impl.cpp + gl_render.cpp, TextureManager.cpp (source path), GLCharClient.cpp.
+  Not yet measured on the iPhone (needs the patch). Next if still short: free texture/mesh RAM
+  copies (#3), share ANIMCONTNODEs (#4), player memory budget (#1).
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
   code (SOURCE + shim) and ship with the next patch/iOS build.
 

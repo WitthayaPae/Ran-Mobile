@@ -21,6 +21,9 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3d9.h>
 #include <d3dx9.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
+extern "C" int RanGLR_CanHalveLevel(int d3dFormat);
+extern "C" unsigned RanGLR_UploadTextureLevelHalf(unsigned existing, int level, int width, int height,
+                                                  int d3dFormat, const void *bits, unsigned dataSize);
 //  The tap ring (touch_ui.cpp): drawn over the whole finished frame.
 extern "C" void RanTouch_RenderTapFx(void);
 #include <vector>
@@ -30,6 +33,7 @@ extern "C" void RanTouch_RenderTapFx(void);
 #include <map>
 #include <algorithm>
 #include <string.h>
+#include <unistd.h>
 
 #include "d3d9_gen.h"
 #include "dxut_compat.h"
@@ -49,6 +53,51 @@ struct Stats {
     unsigned long long textureBytes = 0, vbBytes = 0, ibBytes = 0;
 } g_stats;
 
+//  Other players' costumes at half size, on a phone.
+//
+//  250 players in costume killed an iPhone at 2.8 GB: 773 MB of it was their
+//  textures on the GPU, every one of them RGBA8 because iOS cannot sample DXT.
+//  Half the width and height is a quarter of that. The player's own character,
+//  mobs, the map and the interface keep full size; only a texture whose FIRST
+//  upload happens while another player is being drawn (GLCharClient sets the
+//  scope), in a 3D draw, from a costume folder, 512 or wider, is halved.
+//
+//  Phones only: a device with more than 8 GB has the room, and a tablet shows
+//  the detail. Diagnostics: "fullcostume" turns it off, "halfcostume" forces
+//  it on (LDPlayer reports the host's memory).
+int  g_otherCharScope = 0;      // render thread only
+bool g_bindIsUi = false;        // the draw binding textures right now is pre-transformed
+int  g_halfCostumes = -1;       // -1 = not decided yet
+
+bool halfCostumesOn() {
+    if (g_halfCostumes < 0) {
+        const long long pages = (long long)sysconf(_SC_PHYS_PAGES);
+        const long long psize = (long long)sysconf(_SC_PAGESIZE);
+        const long long mb = (pages > 0 && psize > 0) ? pages * psize / 1048576 : 0;
+        bool on = mb > 0 && mb <= 8192;
+        if (RanPlat_DiagExists("halfcostume")) on = true;
+        if (RanPlat_DiagExists("fullcostume")) on = false;
+        g_halfCostumes = on ? 1 : 0;
+        RanPlat_Log(RANLOG_INFO, "RanD3D", "other players' costume textures: %s (%lld MB RAM)",
+                    on ? "half size" : "full size", mb);
+    }
+    return g_halfCostumes == 1;
+}
+
+bool isCostumeFile(const std::string &f) {
+    std::string s(f);
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '\\') c = '/';
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        s[i] = c;
+    }
+    return s.find("textures/char/") != std::string::npos ||
+           s.find("textures/item/") != std::string::npos ||
+           s.find("textures/bike/") != std::string::npos ||
+           s.find("textures/vehicle/") != std::string::npos;
+}
+
 //  What is ALIVE right now, not what was ever made. g_stats only ever adds, so it
 //  cannot say where a 3 GB footprint went - an iPhone crowd test was killed at
 //  3,050 MB with ~170 players in view and nothing here could name the owner.
@@ -59,6 +108,7 @@ struct Live {
     std::atomic<long long> vbBytes{0};      // vertex buffer RAM copies
     std::atomic<long long> ibBytes{0};      // index buffer RAM copies
     std::atomic<long>      textures{0}, vbs{0}, ibs{0};
+    std::atomic<long>      texHalved{0};        // costume textures uploaded at half size, ever
 } g_live;
 
 //  Every live texture, so the once-a-second report can say WHICH decoded copies
@@ -238,6 +288,8 @@ public:
     //  Where this texture came from. A GL texture id on its own cannot be
     //  matched to a file, which is what every texture question eventually asks.
     std::string m_srcPath;
+    //  The resolved file, folder included (m_srcPath is often a bare name).
+    std::string m_srcFile;
     long long   m_bytesAll = 0;             // all levels, counted into g_live
     //  Made by an image loader (D3DXCreateTextureFrom*), with or without a file
     //  path. Such a texture is filled once and then only drawn.
@@ -401,17 +453,37 @@ public:
         }
 
         if (m_dirty && !m_isRenderTarget && !m_surfaces.empty()) {
+            //  Another player's costume on a phone goes up at half size (see
+            //  halfCostumesOn). Only on the first upload: a texture already on
+            //  the GPU keeps the size it was given.
+            size_t first = 0;
+            bool boxHalf = false;
+            if (!m_glTex && !m_glyphAtlas && !(m_usage & D3DUSAGE_RENDERTARGET) &&
+                g_otherCharScope > 0 && !g_bindIsUi && !m_srcFile.empty() &&
+                (m_surfaces[0]->m_width >= 512 || m_surfaces[0]->m_height >= 512) &&
+                isCostumeFile(m_srcFile) && halfCostumesOn()) {
+                //  With mips the half size is level 1 already: start there.
+                if (m_surfaces.size() > 1 && !m_surfaces[1]->m_bits.empty()) first = 1;
+                else boxHalf = RanGLR_CanHalveLevel((int)m_format) != 0;
+            }
             //  The whole chain, not just level 0: the shipped DDS files carry
             //  their mips and the map shimmers without them.
-            for (size_t i = 0; i < m_surfaces.size(); ++i) {
+            for (size_t i = first; i < m_surfaces.size(); ++i) {
                 RanSurface *s = m_surfaces[i];
                 if (s->m_bits.empty()) break;
-                m_glTex = RanGLR_UploadTextureLevel(m_glTex, (int)i, (int)s->m_width,
-                                                    (int)s->m_height, (int)m_format,
-                                                    s->m_bits.data(),
-                                                    (unsigned)s->m_bits.size());
+                if (boxHalf)
+                    m_glTex = RanGLR_UploadTextureLevelHalf(m_glTex, (int)i, (int)s->m_width,
+                                                            (int)s->m_height, (int)m_format,
+                                                            s->m_bits.data(),
+                                                            (unsigned)s->m_bits.size());
+                else
+                    m_glTex = RanGLR_UploadTextureLevel(m_glTex, (int)(i - first), (int)s->m_width,
+                                                        (int)s->m_height, (int)m_format,
+                                                        s->m_bits.data(),
+                                                        (unsigned)s->m_bits.size());
             }
-            RanGLR_FinishTexture(m_glTex, (int)m_surfaces.size(), (int)m_format);
+            if (first || boxHalf) ++g_live.texHalved;
+            RanGLR_FinishTexture(m_glTex, (int)(m_surfaces.size() - first), (int)m_format);
             if (m_glyphAtlas) RanGLR_SampleAsWhiteAlpha(m_glTex);
             if (!m_srcPath.empty()) {
                 LOGI("texture %u = %s (%ux%u, %u levels)", m_glTex, m_srcPath.c_str(),
@@ -478,6 +550,14 @@ public:
 //  The loaders know the path; the texture object is where it has to live.
 extern "C" void RanD3D_NoteTexturePath(IDirect3DTexture9 *pTex, const char *szPath) {
     if (pTex && szPath) ((RanTexture *)pTex)->m_srcPath = szPath;
+}
+extern "C" void RanD3D_NoteTextureSource(IDirect3DTexture9 *pTex, const char *szFile) {
+    if (pTex && szFile) ((RanTexture *)pTex)->m_srcFile = szFile;
+}
+//  GLCharClient brackets its draws with this: 1 going in, 0 coming out.
+extern "C" void RanD3D_OtherCharScope(int bIn) {
+    if (bIn) ++g_otherCharScope;
+    else if (g_otherCharScope > 0) --g_otherCharScope;
 }
 
 // ---------------------------------------------------------- cube texture
@@ -1644,6 +1724,8 @@ public:
             return 0;
         }
         // Only 2D textures are wired for now; cube/volume come with the world pass.
+        //  An interface draw never halves a costume texture on its first upload.
+        g_bindIsUi = (m_fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
         const unsigned gl = ((RanTexture *)m_texture[0])->GlTexture();
         if (!gl && RanGLR_DiagArmed()) {
             LOGW("texture %p is bound but has no GL name", (void *)m_texture[0]);
@@ -2451,10 +2533,11 @@ extern "C" long long RanGLR_TexGpuBytes(void);
 extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
     const double MB = 1048576.0;
     snprintf(out, cap,
-             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB",
+             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB | costumes halved %ld",
              (long)g_live.textures, g_live.texBytes / MB, RanGLR_TexGpuBytes() / MB,
              g_live.texCpuBytes / MB,
-             (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB);
+             (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB,
+             (long)g_live.texHalved);
 }
 
 //  Where the decoded RAM copies are, by why they were not freed.

@@ -4645,6 +4645,62 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
     return tex;
 }
 
+//  Half-size uploads, for other players' costumes on a phone (d3d9_impl.cpp,
+//  RanTexture::GlTexture decides when).
+//
+//  A texture with mips needs none of this - its level 1 IS the half size, and
+//  the caller just starts the chain there. This is for the single-level ones:
+//  about a third of a crowd's costume pixels ship with no mips, mostly .png
+//  and 1024-2048 wide. A 2x2 box of 4-byte pixels, the same filter a mip
+//  chain uses.
+//
+//  DXT only where the GPU cannot take it anyway: decoded, a DXT texture is 4
+//  bytes a pixel, so a quarter of that is a real saving. On a GPU that samples
+//  DXT natively the decoded half would be as large as the compressed original
+//  (DXT5) or twice it (DXT1), so it stays as it is.
+extern "C" int RanGLR_CanHalveLevel(int d3dFormat) {
+    if (isDXT(d3dFormat)) return haveS3TC() ? 0 : 1;
+    switch (d3dFormat) {
+        case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8:
+        case D3DFMT_A8B8G8R8: case D3DFMT_X8B8G8R8: return 1;
+        default: return 0;
+    }
+}
+
+extern "C" unsigned RanGLR_UploadTextureLevelHalf(unsigned existing, int level, int width, int height,
+                                                  int d3dFormat, const void *bits, unsigned dataSize) {
+    if (!bits || width <= 0 || height <= 0 || !RanGLR_CanHalveLevel(d3dFormat))
+        return RanGLR_UploadTextureLevel(existing, level, width, height, d3dFormat, bits, dataSize);
+
+    std::vector<GLubyte> dec;
+    const GLubyte *src = (const GLubyte *)bits;
+    int outFmt = d3dFormat;
+    if (isDXT(d3dFormat)) {
+        if (!decodeDXT(d3dFormat, width, height, src, dataSize, dec))
+            return RanGLR_UploadTextureLevel(existing, level, width, height, d3dFormat, bits, dataSize);
+        src = &dec[0];
+        outFmt = D3DFMT_A8B8G8R8;   //  decodeDXT writes R,G,B,A - that format's byte order
+    } else if (dataSize < (unsigned)width * (unsigned)height * 4u) {
+        return RanGLR_UploadTextureLevel(existing, level, width, height, d3dFormat, bits, dataSize);
+    }
+
+    const int w2 = width > 1 ? width / 2 : 1, h2 = height > 1 ? height / 2 : 1;
+    std::vector<GLubyte> half((size_t)w2 * h2 * 4);
+    for (int y = 0; y < h2; ++y) {
+        const int y0 = y * 2, y1 = (y * 2 + 1 < height) ? y * 2 + 1 : y * 2;
+        for (int x = 0; x < w2; ++x) {
+            const int x0 = x * 2, x1 = (x * 2 + 1 < width) ? x * 2 + 1 : x * 2;
+            const GLubyte *a = src + ((size_t)y0 * width + x0) * 4;
+            const GLubyte *b = src + ((size_t)y0 * width + x1) * 4;
+            const GLubyte *c = src + ((size_t)y1 * width + x0) * 4;
+            const GLubyte *d = src + ((size_t)y1 * width + x1) * 4;
+            GLubyte *o = &half[((size_t)y * w2 + x) * 4];
+            for (int k = 0; k < 4; ++k) o[k] = (GLubyte)((a[k] + b[k] + c[k] + d[k] + 2) >> 2);
+        }
+    }
+    return RanGLR_UploadTextureLevel(existing, level, w2, h2, outFmt, &half[0], (unsigned)half.size());
+}
+
 //  Replace one rectangle of an existing texture, converting the same way the
 //  full upload does. No mip regeneration: this runs many times a frame for the
 //  font atlas, and rebuilding a chain each time is what made a glyph cost more
