@@ -22,6 +22,7 @@ extern "C" void RanD3D_NoteTexture(unsigned glTex, const char *name);
 #include <d3dx9.h>
 extern "C" void RanGLR_ResetShadowBudget(void);
 extern "C" int RanGLR_CanHalveLevel(int d3dFormat);
+extern "C" long long RanGLR_TexGpuBytes(void);
 extern "C" unsigned RanGLR_UploadTextureLevelHalf(unsigned existing, int level, int width, int height,
                                                   int d3dFormat, const void *bits, unsigned dataSize);
 //  The tap ring (touch_ui.cpp): drawn over the whole finished frame.
@@ -34,6 +35,9 @@ extern "C" void RanTouch_RenderTapFx(void);
 #include <algorithm>
 #include <string.h>
 #include <unistd.h>
+#include <chrono>
+#include <stdlib.h>
+#include "image_decode.h"
 
 #include "d3d9_gen.h"
 #include "dxut_compat.h"
@@ -84,6 +88,17 @@ bool halfCostumesOn() {
     return g_halfCostumes == 1;
 }
 
+long long nowMs() {
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+//  Reads a texture file back for the budget. The engine registers it
+//  (TextureManager.cpp): encrypted .mtf textures need its decrypt, which the
+//  shim cannot do. Returns malloc'd bytes, freed here.
+typedef int (*RanTexReloadFn)(const char *path, unsigned char **ppData, unsigned *pSize);
+RanTexReloadFn g_texReload = NULL;
+
 bool isCostumeFile(const std::string &f) {
     std::string s(f);
     for (size_t i = 0; i < s.size(); ++i) {
@@ -109,6 +124,7 @@ struct Live {
     std::atomic<long long> ibBytes{0};      // index buffer RAM copies
     std::atomic<long>      textures{0}, vbs{0}, ibs{0};
     std::atomic<long>      texHalved{0};        // costume textures uploaded at half size, ever
+    std::atomic<long>      texEvicted{0}, texReloads{0}, texReloadFails{0};   // the budget, ever
 } g_live;
 
 //  Every live texture, so the once-a-second report can say WHICH decoded copies
@@ -290,6 +306,14 @@ public:
     std::string m_srcPath;
     //  The resolved file, folder included (m_srcPath is often a bare name).
     std::string m_srcFile;
+    //  Texture budget (see texBudgetPass): when this was made and last drawn,
+    //  whether its pixels were dropped to be re-read from m_srcFile on the next
+    //  draw, and the size decision of its first upload, so a reload comes back
+    //  the same size: -1 not uploaded yet, 0 full, 1 chain from level 1, 2 box.
+    long long m_bornMs = 0;
+    long long m_lastUseMs = 0;
+    bool      m_evicted = false;
+    int       m_halfMode = -1;
     long long   m_bytesAll = 0;             // all levels, counted into g_live
     //  Made by an image loader (D3DXCreateTextureFrom*), with or without a file
     //  path. Such a texture is filled once and then only drawn.
@@ -300,6 +324,7 @@ public:
 
     RanTexture(IDirect3DDevice9 *dev, UINT w, UINT h, UINT levels, D3DFORMAT fmt)
         : m_format(fmt), m_device(dev) {
+        m_bornMs = m_lastUseMs = nowMs();
         if (levels == 0) {                    // 0 means "full chain"
             levels = 1;
             UINT mw = w, mh = h;
@@ -371,6 +396,60 @@ public:
         return m_glTex;
     }
 
+    //  The budget's two halves, both on the render thread.
+    bool m_reloadedOnce = false;
+    bool m_noEvict = false;         // a reload failed once: never take this one again
+
+    //  Drop everything this texture holds - the GL copy and the decoded pixels -
+    //  and keep the object, so every pointer the engine has stays good.
+    void evictPixels() {
+        if (m_glTex) { RanGLR_DeleteTexture(m_glTex); m_glTex = 0; }
+        for (size_t i = 0; i < m_surfaces.size(); ++i) {
+            std::vector<BYTE> empty;
+            g_live.texCpuBytes -= (long long)m_surfaces[i]->m_bits.size();
+            m_surfaces[i]->m_bits.swap(empty);
+            m_surfaces[i]->clearDirty();
+            m_surfaces[i]->m_freedAfterUpload = true;
+        }
+        m_evicted = true;
+        m_dirty = true;
+        ++g_live.texEvicted;
+    }
+
+    //  And back: the same file, decoded the same way the loader did, into the
+    //  same surfaces. Anything that does not match exactly is refused rather
+    //  than drawn wrong.
+    bool reloadPixels() {
+        m_evicted = false;
+        unsigned char *data = NULL;
+        unsigned size = 0;
+        RanImage img;
+        bool ok = g_texReload && !m_srcFile.empty() &&
+                  g_texReload(m_srcFile.c_str(), &data, &size) && data;
+        if (ok) ok = RanImage_Decode(data, size, img);
+        if (data) free(data);
+        if (ok) ok = img.format == m_format && img.levels.size() >= m_surfaces.size();
+        for (size_t i = 0; ok && i < m_surfaces.size(); ++i)
+            ok = img.levels[i].size() == surfaceBytes(m_surfaces[i]->m_width,
+                                                      m_surfaces[i]->m_height, m_format);
+        if (!ok) {
+            m_noEvict = true;
+            ++g_live.texReloadFails;
+            LOGW("texture reload FAILED, it stays blank: %s", m_srcFile.c_str());
+            return false;
+        }
+        for (size_t i = 0; i < m_surfaces.size(); ++i) {
+            RanSurface *s = m_surfaces[i];
+            s->ensureBits();
+            memcpy(s->m_bits.data(), img.levels[i].data(), s->m_bits.size());
+            s->markDirty(NULL);
+        }
+        m_dirty = true;
+        m_reloadedOnce = true;
+        ++g_live.texReloads;
+        return true;
+    }
+
     unsigned GlTexture() {
         //  The client draws its loading screen from a background thread, which has
         //  no EGL context: glGenTextures there produces nothing and the upload is
@@ -379,6 +458,11 @@ public:
         //  why the loading art, the hint icon and the map-name plate never
         //  appeared. Leave it dirty and upload later, on the right thread.
         if (!RanGLR_OnRenderThread()) return m_glTex;
+
+        m_lastUseMs = nowMs();
+        //  Given back to the budget (texBudgetPass): read the file again. The
+        //  texture object never went away, so nothing in the engine noticed.
+        if (m_evicted && !reloadPixels()) return 0;
 
         //  A render target nothing has drawn into yet. The port does not run
         //  every one of the engine's off-screen passes, so the refraction and
@@ -458,14 +542,21 @@ public:
             //  the GPU keeps the size it was given.
             size_t first = 0;
             bool boxHalf = false;
-            if (!m_glTex && !m_glyphAtlas && !(m_usage & D3DUSAGE_RENDERTARGET) &&
-                g_otherCharScope > 0 && !g_bindIsUi && !m_srcFile.empty() &&
-                (m_surfaces[0]->m_width >= 512 || m_surfaces[0]->m_height >= 512) &&
-                isCostumeFile(m_srcFile) && halfCostumesOn()) {
-                //  With mips the half size is level 1 already: start there.
-                if (m_surfaces.size() > 1 && !m_surfaces[1]->m_bits.empty()) first = 1;
-                else boxHalf = RanGLR_CanHalveLevel((int)m_format) != 0;
+            if (m_halfMode < 0) {
+                m_halfMode = 0;
+                if (!m_glTex && !m_glyphAtlas && !(m_usage & D3DUSAGE_RENDERTARGET) &&
+                    g_otherCharScope > 0 && !g_bindIsUi && !m_srcFile.empty() &&
+                    (m_surfaces[0]->m_width >= 512 || m_surfaces[0]->m_height >= 512) &&
+                    isCostumeFile(m_srcFile) && halfCostumesOn()) {
+                    //  With mips the half size is level 1 already: start there.
+                    if (m_surfaces.size() > 1 && !m_surfaces[1]->m_bits.empty()) m_halfMode = 1;
+                    else if (RanGLR_CanHalveLevel((int)m_format)) m_halfMode = 2;
+                }
             }
+            //  A reload after the budget took the texture back comes up exactly
+            //  as it first did.
+            if (m_halfMode == 1 && m_surfaces.size() > 1) first = 1;
+            else if (m_halfMode == 2) boxHalf = true;
             //  The whole chain, not just level 0: the shipped DDS files carry
             //  their mips and the map shimmers without them.
             for (size_t i = first; i < m_surfaces.size(); ++i) {
@@ -482,7 +573,7 @@ public:
                                                         s->m_bits.data(),
                                                         (unsigned)s->m_bits.size());
             }
-            if (first || boxHalf) ++g_live.texHalved;
+            if ((first || boxHalf) && !m_reloadedOnce) ++g_live.texHalved;
             RanGLR_FinishTexture(m_glTex, (int)(m_surfaces.size() - first), (int)m_format);
             if (m_glyphAtlas) RanGLR_SampleAsWhiteAlpha(m_glTex);
             if (!m_srcPath.empty()) {
@@ -554,6 +645,94 @@ extern "C" void RanD3D_NoteTexturePath(IDirect3DTexture9 *pTex, const char *szPa
 extern "C" void RanD3D_NoteTextureSource(IDirect3DTexture9 *pTex, const char *szFile) {
     if (pTex && szFile) ((RanTexture *)pTex)->m_srcFile = szFile;
 }
+extern "C" void RanD3D_SetTextureReloader(int (*fn)(const char *, unsigned char **, unsigned *)) {
+    g_texReload = fn;
+}
+
+namespace {
+//  The texture budget, once a second from Present, render thread.
+//
+//  The engine never unloads a costume: DxSkinMeshMan keeps every skin mesh it
+//  has ever loaded, and with it every texture. On a PC that is the design. On
+//  an iPhone a second crowd of 250 added ~830 MB on top of the first (1,510 ->
+//  2,691 textures with the same 250 players on screen) and left 317 MB of
+//  headroom. Unloading through the engine means shared ownership across the
+//  piece, mesh and texture caches; getting one of those wrong is a crash.
+//
+//  So the budget works on the texture objects themselves, which the engine
+//  holds pointers to but never looks inside: the pixels go, the object stays,
+//  and the next draw reads the file again. Two kinds:
+//    - decoded copies nothing has drawn for 15 s (a costume's damage face and
+//      the like): 253 MB of them on the iPhone after the second crowd;
+//    - GPU textures over the budget, least recently drawn first, only ones not
+//      drawn for 10 s, down to 80% of it.
+//  Low-memory devices only (the half-costume rule); "notexbudget" turns it off.
+void texBudgetPass() {
+    static long long s_last = 0;
+    const long long now = nowMs();
+    if (now - s_last < 1000) return;
+    s_last = now;
+    if (!g_texReload || !halfCostumesOn() || RanPlat_DiagExists("notexbudget")) return;
+
+    //  384 MB of GPU textures: the iPhone's whole first crowd fit in 339.
+    //  "texbudgetmb" (a number) overrides it, to test eviction on a device
+    //  that never gets near it.
+    static long long s_budget = -1;
+    if (s_budget < 0) {
+        s_budget = 384LL * 1048576LL;
+        FILE *f = RanPlat_DiagExists("texbudgetmb") ? RanPlat_DiagOpen("texbudgetmb") : NULL;
+        if (f) {
+            char buf[16] = { 0 };
+            if (fread(buf, 1, sizeof(buf) - 1, f) > 0 && atoi(buf) > 0)
+                s_budget = (long long)atoi(buf) * 1048576LL;
+            fclose(f);
+        }
+        LOGI("texture budget: %lld MB of GPU textures", s_budget / 1048576);
+    }
+    const long long kBudget = s_budget;
+    long nUndrawn = 0, nIdle = 0;
+    long long bUndrawn = 0;
+    const long long gpuBefore = RanGLR_TexGpuBytes();
+    {
+        std::lock_guard<std::mutex> lk(g_texSetLock);
+        std::vector<RanTexture *> idle;
+        for (std::set<RanTexture *>::iterator it = g_texSet.begin(); it != g_texSet.end(); ++it) {
+            RanTexture *t = *it;
+            //  Costume folders only: those are loose files a reload can always
+            //  read. Interface art comes out of Gui.rcc, and a failed reload
+            //  would leave a window blank for the rest of the session.
+            if (t->m_evicted || t->m_noEvict || !t->m_fromLoader || t->m_srcFile.empty() ||
+                t->m_glyphAtlas || t->m_isRenderTarget || (t->m_usage & D3DUSAGE_RENDERTARGET) ||
+                t->m_surfaces.empty() || !isCostumeFile(t->m_srcFile))
+                continue;
+            if (!t->m_glTex) {
+                if (!t->m_surfaces[0]->m_bits.empty() && now - t->m_lastUseMs > 15000) {
+                    for (size_t i = 0; i < t->m_surfaces.size(); ++i)
+                        bUndrawn += (long long)t->m_surfaces[i]->m_bits.size();
+                    t->evictPixels();
+                    ++nUndrawn;
+                }
+            } else if (now - t->m_lastUseMs > 10000) {
+                idle.push_back(t);
+            }
+        }
+        if (gpuBefore > kBudget && !idle.empty()) {
+            std::sort(idle.begin(), idle.end(),
+                      [](const RanTexture *a, const RanTexture *b) { return a->m_lastUseMs < b->m_lastUseMs; });
+            for (size_t i = 0; i < idle.size(); ++i) {
+                if (RanGLR_TexGpuBytes() <= kBudget * 8 / 10) break;
+                idle[i]->evictPixels();
+                ++nIdle;
+            }
+        }
+    }
+    if (nUndrawn || nIdle)
+        LOGI("texture budget: dropped %ld undrawn copies (%.0f MB), %ld idle GPU textures "
+             "(GPU %.0f -> %.0f MB)", nUndrawn, bUndrawn / 1048576.0, nIdle,
+             gpuBefore / 1048576.0, RanGLR_TexGpuBytes() / 1048576.0);
+}
+} // namespace
+
 //  GLCharClient brackets its draws with this: 1 going in, 0 coming out.
 extern "C" void RanD3D_OtherCharScope(int bIn) {
     if (bIn) ++g_otherCharScope;
@@ -1396,6 +1575,7 @@ public:
     HRESULT Present(const RECT *, const RECT *, HWND, const RGNDATA *) override {
         flushUIBatch();
         ++g_stats.frames;
+        texBudgetPass();
         //  "uiflushlog" report: sites that ended a submitted UI batch, per frame,
         //  with one known function's address so the log can be symbolised
         //  against the unstripped library (llvm-addr2line).
@@ -2533,11 +2713,12 @@ extern "C" long long RanGLR_TexGpuBytes(void);
 extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
     const double MB = 1048576.0;
     snprintf(out, cap,
-             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB | costumes halved %ld",
+             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB | costumes halved %ld | budget evicted %ld reloaded %ld FAILED %ld",
              (long)g_live.textures, g_live.texBytes / MB, RanGLR_TexGpuBytes() / MB,
              g_live.texCpuBytes / MB,
              (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB,
-             (long)g_live.texHalved);
+             (long)g_live.texHalved, (long)g_live.texEvicted, (long)g_live.texReloads,
+             (long)g_live.texReloadFails);
 }
 
 //  Where the decoded RAM copies are, by why they were not freed.

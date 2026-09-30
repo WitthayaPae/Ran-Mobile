@@ -249,6 +249,19 @@ mobile inventory layout is exactly as it was before this session.
   Files: shim d3d9_impl.cpp + gl_render.cpp, TextureManager.cpp (source path), GLCharClient.cpp.
   Not yet measured on the iPhone (needs the patch). Next if still short: free texture/mesh RAM
   copies (#3), share ANIMCONTNODEs (#4), player memory budget (#1).
+- **iPhone after half costumes (build 166)**: first crowd steady 1.88 GB (headroom 1.2 GB, GPU tex
+  339 MB); Fake Clear + respawn -> 2.70 GB (peak 2,755, headroom 317) and survived. Cause of the
+  climb: the engine NEVER unloads costumes - DxSkinMeshMan has no in-game release (CleanUp
+  commented out, DisRef uncalled) and DxSkinPiece::m_dwRef is read from the file, never
+  incremented (release wraps to 0xFFFFFFFF). Textures 1,510 -> 2,691 with the same 250 on screen.
+- **Texture budget (2026-09-30)**, shim only, engine untouched: RanTexture keeps its object but
+  drops pixels (GL copy + decoded bits) and re-reads the file on the next draw
+  (`RanD3D_SetTextureReloader`, registered by TextureManager.cpp - decrypts .mtf). Once a second
+  from Present: decoded copies undrawn 15 s, and GPU textures idle 10 s when over 384 MB (to 80%).
+  Costume folders only (Gui.rcc art cannot be re-read). Reload keeps the first size decision.
+  Low-RAM devices only; diag `notexbudget`, `texbudgetmb` (N MB, for testing). MEM owners line now
+  ends `budget evicted N reloaded N FAILED N`. LDPlayer (test budget 150): evicted 687, reloaded
+  96, FAILED 0, held RAM copies 265 -> 164 MB, no upload hitches in SLOW frames, costumes normal.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
   code (SOURCE + shim) and ship with the next patch/iOS build.
 

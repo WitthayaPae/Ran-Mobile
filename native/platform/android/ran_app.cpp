@@ -494,7 +494,7 @@ extern "C" void RanProf_Frame(double fUpdate, double fRender, double fPresent) {
     {
         //  Live texture and buffer memory by owner - the same line iOS prints
         //  beside its footprint, so a crowd's cost can be split on either.
-        char own[200];
+        char own[400];
         RanD3D_LiveMemLine(own, sizeof(own));
         LOGI("MEM owners: %s", own);
         char held[600];
