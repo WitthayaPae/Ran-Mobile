@@ -262,6 +262,19 @@ mobile inventory layout is exactly as it was before this session.
   Low-RAM devices only; diag `notexbudget`, `texbudgetmb` (N MB, for testing). MEM owners line now
   ends `budget evicted N reloaded N FAILED N`. LDPlayer (test budget 150): evicted 687, reloaded
   96, FAILED 0, held RAM copies 265 -> 164 MB, no upload hitches in SLOW frames, costumes normal.
+- **iPhone 1.0.167 results (2026-09-30)**: first crowd 1,713 MB (headroom 1,359; was 1,875 on 166).
+  After a relaunch + Fake Clear/+1000: peak 2,489, then flat ~2,290 MB (headroom ~780) for 3+ min,
+  251 drawn, GPU ~540 MB ALL in use (budget "over" line: 1-11 idle) - this crowd's costumes are
+  bigger, not leftovers. LDPlayer Clear/+1000 with the budget: GPU 417 -> 200 (606 idle evicted)
+  -> 440, RAM copies flat 161; native heap 1,104 -> 1,024 -> 1,217 (+113 MB/respawn = engine
+  mesh/anim data the engine never frees - the remaining leak). Budget "over" breakdown log added.
+- **AltStore launch crash (iOS only)**: `ran-2026-09-30-092711/100940.ips` = SIGABRT at launch in
+  -[UIApplication _applicationOpenURLAction:], after each AltStore update (it re-signs with a URL
+  scheme and opens through it). Delegate now implements application:openURL:options: (returns
+  YES). Not verified until the next AltStore update launches without a new ran-*.ips.
+  No Android counterpart (Android has no such launch path).
+- login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
+  file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
   code (SOURCE + shim) and ship with the next patch/iOS build.
 

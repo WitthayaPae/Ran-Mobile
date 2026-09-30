@@ -693,11 +693,26 @@ void texBudgetPass() {
     long nUndrawn = 0, nIdle = 0;
     long long bUndrawn = 0;
     const long long gpuBefore = RanGLR_TexGpuBytes();
+    //  Why the GPU half could not get under budget, when it could not: every
+    //  uploaded texture by the first rule that kept it. The iPhone sat at 509 MB
+    //  over a 384 MB budget reporting "0 idle" after a crowd was replaced.
+    long kNotCostume = 0, kNoFile = 0, kNotLoader = 0, kRecent = 0, kIdle = 0;
+    long long bNotCostume = 0, bRecent = 0;
     {
         std::lock_guard<std::mutex> lk(g_texSetLock);
         std::vector<RanTexture *> idle;
         for (std::set<RanTexture *>::iterator it = g_texSet.begin(); it != g_texSet.end(); ++it) {
             RanTexture *t = *it;
+            if (t->m_glTex && gpuBefore > kBudget) {
+                long long b = 0;
+                for (size_t i = 0; i < t->m_surfaces.size(); ++i)
+                    b += surfaceBytes(t->m_surfaces[i]->m_width, t->m_surfaces[i]->m_height, t->m_format);
+                if (t->m_srcFile.empty()) ++kNoFile;
+                else if (!isCostumeFile(t->m_srcFile)) { ++kNotCostume; bNotCostume += b; }
+                else if (!t->m_fromLoader) ++kNotLoader;
+                else if (now - t->m_lastUseMs <= 10000) { ++kRecent; bRecent += b; }
+                else ++kIdle;
+            }
             //  Costume folders only: those are loose files a reload can always
             //  read. Interface art comes out of Gui.rcc, and a failed reload
             //  would leave a window blank for the rest of the session.
@@ -730,6 +745,15 @@ void texBudgetPass() {
         LOGI("texture budget: dropped %ld undrawn copies (%.0f MB), %ld idle GPU textures "
              "(GPU %.0f -> %.0f MB)", nUndrawn, bUndrawn / 1048576.0, nIdle,
              gpuBefore / 1048576.0, RanGLR_TexGpuBytes() / 1048576.0);
+    static long long s_lastWhy = 0;
+    if (gpuBefore > kBudget && now - s_lastWhy >= 5000) {
+        s_lastWhy = now;
+        //  Sizes are the full-size file levels, an upper bound for halved ones.
+        LOGI("texture budget over (%.0f MB): uploaded = %ld not costume (%.0f MB) | %ld no file | "
+             "%ld not loader | %ld drawn <10s (%.0f MB) | %ld idle", gpuBefore / 1048576.0,
+             kNotCostume, bNotCostume / 1048576.0, kNoFile, kNotLoader, kRecent,
+             bRecent / 1048576.0, kIdle);
+    }
 }
 } // namespace
 

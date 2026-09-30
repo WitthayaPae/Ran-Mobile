@@ -76,7 +76,7 @@ t 1792 919 8                               # connect
 #  delivering no keys - so the taps entered an empty string and the client
 #  answered "please enter name and password". Typing with `input text` needs no
 #  IME at all; RanActivity.ImeView handles injected key events for exactly this.
-CRED="$HERE/.login"
+CRED="${RAN_CRED:-$HERE/.login}"
 if [ ! -f "$CRED" ]; then
   echo "  no $CRED - create it with two lines: id, then password"
   exit 1

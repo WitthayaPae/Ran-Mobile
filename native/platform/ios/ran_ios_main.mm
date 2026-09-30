@@ -1105,6 +1105,20 @@ static NSString *RanPatchReasonCode ( NSString *error )
 - (void)applicationDidEnterBackground:(UIApplication *)app { RanAudioSink_Pause ( 1 ); }
 - (void)applicationWillEnterForeground:(UIApplication *)app { RanAudioSink_Pause ( 0 ); }
 
+//  AltStore / SideStore add a URL scheme when they re-sign the app and launch
+//  it through that URL ("Open" after an update). With no handler here UIKit
+//  asserted inside -[UIApplication _applicationOpenURLAction:] and the app
+//  aborted at launch: two crash reports on the test iPhone, 09:27 (1.0.166)
+//  and 10:09 (1.0.167), each right after an update. The URL carries nothing
+//  the game needs; accepting it is all UIKit wants.
+- (BOOL)application:(UIApplication *)app openURL:(NSURL *)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options
+{
+    RanPlat_Log ( RANLOG_INFO, "RanApp", "opened with URL %s",
+                  url.absoluteString ? url.absoluteString.UTF8String : "(none)" );
+    return YES;
+}
+
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)opts
 {
     //  Before anything in the shim runs, so it never goes looking for
