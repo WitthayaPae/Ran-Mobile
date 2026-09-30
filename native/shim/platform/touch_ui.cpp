@@ -1314,7 +1314,58 @@ void tapFxPush(float x, float y) {
     g_tapFxNext = (g_tapFxNext + 1) % kTapFxMax;
 }
 
+//  The bot score's device half (RanTouch_TakeBotStats): presses on the attack
+//  button and the skill circles, how many different pixels they landed on,
+//  and how evenly they were spaced. A thumb never lands on the same pixel
+//  twice in a row for long; an auto-clicker lands on nothing else.
+const int kBotSpotMax = 64;
+int    g_botTaps = 0;
+int    g_botSpots = 0;
+int    g_botSpotX[kBotSpotMax], g_botSpotY[kBotSpotMax];
+double g_botLastTap = -1.0;
+int    g_botGapN = 0;
+double g_botGapSum = 0.0, g_botGapSq = 0.0;
+
+void botNoteTap(float x, float y) {
+    ++g_botTaps;
+    const int ix = (int)floorf(x), iy = (int)floorf(y);
+    bool seen = false;
+    for (int i = 0; i < g_botSpots; ++i)
+        if (g_botSpotX[i] == ix && g_botSpotY[i] == iy) { seen = true; break; }
+    //  Past the cap every further press counts as new: the figure only
+    //  matters when it is small.
+    if (!seen && g_botSpots < kBotSpotMax) {
+        g_botSpotX[g_botSpots] = ix; g_botSpotY[g_botSpots] = iy; ++g_botSpots;
+    }
+    const double now = tapFxNow();
+    if (g_botLastTap >= 0.0) {
+        const double gap = now - g_botLastTap;
+        if (gap > 0.0 && gap <= 10.0) { ++g_botGapN; g_botGapSum += gap; g_botGapSq += gap * gap; }
+    }
+    g_botLastTap = now;
+}
+
 }   // namespace
+
+extern "C" void RanTouch_TakeBotStats(int *taps, int *spots, int *gapCV1000) {
+    //  Spots past the cap: every press beyond it was a different pixel too.
+    int s = g_botSpots;
+    if (s >= kBotSpotMax && g_botTaps > s) s = g_botTaps;
+    int cv = 0;
+    if (g_botGapN >= 20) {
+        const double mean = g_botGapSum / g_botGapN;
+        double var = g_botGapSq / g_botGapN - mean * mean;
+        if (var < 0.0) var = 0.0;
+        if (mean > 0.0) cv = (int)(sqrt(var) / mean * 1000.0 + 0.5);
+        if (cv < 1) cv = 1;         //  0 means "too few"; a perfect macro reads 1
+        if (cv > 65535) cv = 65535;
+    }
+    if (taps)      *taps = g_botTaps;
+    if (spots)     *spots = s;
+    if (gapCV1000) *gapCV1000 = cv;
+    g_botTaps = 0; g_botSpots = 0;
+    g_botGapN = 0; g_botGapSum = g_botGapSq = 0.0;
+}
 
 // ------------------------------------------------------------------- API
 void RanTouch_Init(int w, int h) {
@@ -1512,6 +1563,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
             b.down = true;
             b.pressedEdge = true;
             if (t) t->claimed = true;
+            if (b.slot == kSlotAttack) botNoteTap(x, y);
             return 1;
         }
     }
@@ -1522,7 +1574,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
     for (int i = 0; i < g_skillCircleCount; ++i) {
         SkillCircle &c = g_skillCircles[i];
         if (!c.filled) continue;
-        if (len(x - c.x, y - c.y) <= c.r) { c.press = 0.0f; break; }
+        if (len(x - c.x, y - c.y) <= c.r) { c.press = 0.0f; botNoteTap(x, y); break; }
     }
 
     //  Not ours. Two unclaimed fingers mean a pinch, which we do watch - but we

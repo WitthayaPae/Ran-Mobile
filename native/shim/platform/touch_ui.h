@@ -127,6 +127,10 @@ extern "C" void RanTouch_SetTapEffect(int on);
 extern "C" void RanTouch_RenderTapFx(void);
 /*  1 while the attack button is held: the client shows the attack range. */
 extern "C" int  RanTouch_AttackHeld(void);
+/*  The bot score's device half, taken (and cleared) once a minute: presses
+    on attack and the skill circles, distinct pixels they hit, and the
+    spread of the gaps between them x1000 (0 = too few to say).           */
+extern "C" void RanTouch_TakeBotStats(int *taps, int *spots, int *gapCV1000);
 
 extern "C" void RanTouch_SetChatButton(float cx, float cy, float r, int mode);
 

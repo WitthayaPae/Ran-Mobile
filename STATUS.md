@@ -315,6 +315,28 @@ mobile inventory layout is exactly as it was before this session.
   ServerField. Open idea (user undecided on AUTO): behaviour signals (timing regularity,
   skill-order repeats, movement loops) to bring the question sooner - the built-in mobile AUTO
   looks exactly like a macro to the server, so that needs the AUTO rule decided first.
+- **Bot score, log only (2026-09-30), NOT SHIPPED**: field writes `_botscore.txt`, one line per
+  5 min of fighting: atk/skl request counts, actcv/sklcv (std/mean of request gaps; macros ~0),
+  order (skill-rotation predictability, ~1.0 = loop), streak (fighting minutes without a 5-min
+  break), and the device report: auto-target seconds, taps on attack+skills, distinct tap
+  pixels (auto-clicker = 1), tap-gap cv. Device report is PULLED: field sends
+  ANTIBOT_REPORT_REQ (3931) every 60 s, the mobile client answers with ANTIBOT_REPORT (3930).
+  Never unasked - an old field treats an unknown message as spam (SetSpam) and then drops
+  everything that player sends. "client none" = old build or not our client. Built-in AUTO is
+  auto-target only (player still taps attack/skills), so it cannot farm unattended.
+  Next: a week of real data, then thresholds that bring the question sooner.
+- **Dead / anti-bot question = input locked (2026-09-30), NOT SHIPPED**: research: PC blocks
+  death in the character (PlayerUpdate only runs with IsValidBody) not the UI; mobile stick /
+  attack / skills called ActionMoveTo / MobileAttackNearest / MobileCastRunSkill directly, and
+  TurnAction lets GLAT_DIE go to MOVE - a dead character could walk off and hide the revive
+  dialog. The anti-bot window blocked nothing on PC or mobile. Now: CInnerInterface::
+  IsGameInputLocked (anti-bot pending or IsDie) gates the touch pad (only chat fold + camera
+  lock pass); IsValidBody guards in ActionMoveTo (also closes the PC large-map move while
+  dead), MobileAttackNearest, MobileStopHere, MobileCastRunSkill, ReqSkillRunSet's arm;
+  anti-bot window sends UIMSG_MODAL_ON (other windows lose the mouse), and is in the keyboard
+  block, move block, potion keys, skill-page keys and R/X. LDPlayer: with the question up,
+  stick/attack/skill/I/fist/menu all did nothing; after the right answer walking worked.
+  Death lock NOT device-tested (needs a real death on the live server).
 - login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
   file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
