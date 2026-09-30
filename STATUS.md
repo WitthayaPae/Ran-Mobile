@@ -286,6 +286,12 @@ mobile inventory layout is exactly as it was before this session.
   no crash. One valid round each (round 2 did not log in - stopped to avoid the server's
   connect ban). diag `noloadthrottle`. MEM line: `undrawn costume N MB, loader paused N`.
   First version crashed: `goto _RETURN` skipped std::string's ctor (see memory goto-past-init).
+- **iPhone 1.0.169 (patch 584) - accepted by the user as good enough (2026-09-30)**: crowd + Clear/+1000
+  peak 2,297 MB (headroom 775), settled ~2.23 GB, 250 drawn; loader paused 5x, budget evicted
+  1,163 / reloaded 294 / FAILED 0. Peaks by build: 163 2,829 (killed) -> 166 2,755 -> 167 2,569 ->
+  169 2,297. No new launch crash report after the AltStore update (openURL fix, likely working).
+  Left open, deliberately: engine heap +113 MB per crowd turnover (mesh/anim data never freed),
+  heat reaches "serious" in a 250-player crowd.
 - login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
   file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
