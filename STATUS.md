@@ -306,6 +306,15 @@ mobile inventory layout is exactly as it was before this session.
   **Open (compatibility)**: an old APK with the new 1280x1536 sheet squashes its HUD. iOS
   is safe (minIos auto-raised); Android players who skip the APK update would be affected.
   Options: minApk, a separate mobile_hud2.dds, or one cell. User said "not for now".
+- **Anti-bot counts fighting only (server, 2026-09-30)**: the user was asked while standing in a
+  school map. Cause: "safe zone" is a land-effect patch (EMLANDEFFECT_SAFE_ZONE, per school), not
+  the whole map, and the clock counted any time outside it - standing still included. Now the
+  clock runs only while m_fAntiBotFight > 0: set to 60 s by GLChar::AttackProcess and
+  GLChar::SkillProc. AFK anywhere never counts. MSVC Release 0 errors, all exes copied to
+  CLIENT/ 15:48. NOT run-tested (needs 40-80 min of fighting on a server); user must deploy
+  ServerField. Open idea (user undecided on AUTO): behaviour signals (timing regularity,
+  skill-order repeats, movement loops) to bring the question sooner - the built-in mobile AUTO
+  looks exactly like a macro to the server, so that needs the AUTO rule decided first.
 - login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
   file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared
