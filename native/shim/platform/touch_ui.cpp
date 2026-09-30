@@ -68,7 +68,13 @@ float g_unit = 100.0f;
 //  group: it hangs off the attack button, so moving the attack button moves it,
 //  and its own offset moves it relative to the button.
 enum { kGrpStick, kGrpAttack, kGrpSkill, kGrpPage, kGrpAuto, kGrpPK,
-       kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCorner, kGrpCount };
+       kGrpPickup, kGrpCamera, kGrpMenu, kGrpPotion, kGrpCorner,
+       //  Added after the slot data existed: saved AFTER the slots, not with
+       //  the groups above (RanTouch_GetHudLayout), so an older file keeps its
+       //  slot offsets.
+       kGrpVehicle, kGrpFist, kGrpCount };
+//  The groups saved in the first block of the layout file.
+const int kGrpLegacy = kGrpCorner + 1;
 //  Defaults live on the members, not in a list beside the array.
 //
 //  The list had eight rows for an array that had grown to eleven, so the last
@@ -163,6 +169,7 @@ const int kSlotCamLock  = RANTOUCH_SLOT_CAMLOCK;
 const int kSlotVehicle  = RANTOUCH_SLOT_VEHICLE;
 const int kSlotMenu     = RANTOUCH_SLOT_MENU;
 const int kSlotChat     = RANTOUCH_SLOT_CHAT;
+const int kSlotFist     = RANTOUCH_SLOT_FIST;
 
 //  Attack, four skill-page buttons, the auto-target and PK toggles, pick-up,
 //  camera lock, the ride button, and the menu.
@@ -171,10 +178,12 @@ const int kSlotChat     = RANTOUCH_SLOT_CHAT;
 //  indices of the buttons below them are written out in half a dozen places -
 //  the group table, the outline table, the layout. Their ORDER on screen comes
 //  from layout(), not from their position here.
-const int kButtonCount = 12;
+const int kButtonCount = 13;
 const int kBtnF1 = 1, kBtnF2 = 2, kBtnF3 = 9, kBtnF4 = 10;
 //  The chat button, placed by the client like the ride button below it.
 const int kBtnChat = 11;
+//  Peace / battle (X), placed straight above the ride button and shown with it.
+const int kBtnFist = 12;
 
 //  The ride button is placed by the client, not by layout(): it lives beside
 //  the chat window, which the player drags. Hidden until the client says where.
@@ -798,6 +807,45 @@ void placeChatButton() {
     g_buttons[kBtnChat].centre.y = g_chatFracY * (float) g_height;
 }
 
+//  The ride button and the peace / battle button beside it.
+//
+//  The client says where the ride button goes (beside the chat, which the
+//  player drags), every frame; the fist sits to its left, level with it. Each
+//  then takes the player's own offset, size and opacity from the HUD editor,
+//  like every other button. Called from layout() and from
+//  RanTouch_SetVehicleButton, because the client position changes without a
+//  relayout.
+float g_modeR = 0.0f;
+void placeRideButtons() {
+    if (g_modeR <= 0.0f) return;
+    const float W = (float)g_width, H = (float)g_height;
+    const float bx = g_vehFracX * W, by = g_vehFracY * H;
+    Button &veh  = g_buttons[7];
+    Button &fist = g_buttons[kBtnFist];
+    const HudAdj &av = g_adj[kGrpVehicle];
+    const HudAdj &af = g_adj[kGrpFist];
+
+    veh.radius   = g_modeR * av.scale;
+    veh.centre.x = bx + av.dx * g_unit;
+    veh.centre.y = by + av.dy * g_unit;
+
+    //  From the ride button's own place, not where the player moved it: the
+    //  two are arranged separately.
+    fist.radius   = g_modeR * af.scale;
+    fist.centre.x = bx - g_modeR * 2.3f + af.dx * g_unit;
+    fist.centre.y = by + af.dy * g_unit;
+
+    //  Kept on screen, like the others.
+    Button *bb[2] = { &veh, &fist };
+    for (int k = 0; k < 2; ++k) {
+        Button &b = *bb[k];
+        if (b.centre.x < b.radius)     b.centre.x = b.radius;
+        if (b.centre.x > W - b.radius) b.centre.x = W - b.radius;
+        if (b.centre.y < b.radius)     b.centre.y = b.radius;
+        if (b.centre.y > H - b.radius) b.centre.y = H - b.radius;
+    }
+}
+
 void layout() {
     const float shortEdge = (float)(g_width < g_height ? g_width : g_height);
     g_unit = shortEdge * 0.14f;             // the layout module
@@ -902,11 +950,11 @@ void layout() {
     g_buttons[5].slot     = kSlotPickup;
 
     //  Same radius as the mode toggles, so it is the same button; only its
-    //  centre comes from somewhere else.
-    g_buttons[7].radius = modeR;
-    g_buttons[7].slot   = kSlotVehicle;
-    g_buttons[7].centre.x = g_vehFracX * (float) g_width;
-    g_buttons[7].centre.y = g_vehFracY * (float) g_height;
+    //  centre comes from somewhere else (placeRideButtons).
+    g_buttons[7].slot        = kSlotVehicle;
+    g_buttons[kBtnFist].slot = kSlotFist;
+    g_modeR = modeR;
+    placeRideButtons();
 
     //  The chat fold button. Open, the client places it on the chat's top right
     //  corner and sizes it, because it is that window's own frame control.
@@ -1010,6 +1058,8 @@ int groupOfButton(int i) {
         case 5: return kGrpPickup;
         case 6: return kGrpCamera;
         case 8: return kGrpMenu;
+        case 7: return kGrpVehicle;
+        case kBtnFist: return kGrpFist;
         default: return -1;
     }
 }
@@ -1099,6 +1149,11 @@ bool groupCircle(int g, Vec2 &c, float &r) {
         case kGrpPickup: c = g_buttons[5].centre; r = g_buttons[5].radius * 1.35f; return true;
         case kGrpCamera: c = g_buttons[6].centre; r = g_buttons[6].radius * 1.35f; return true;
         case kGrpMenu:   c = g_buttons[8].centre; r = g_buttons[8].radius * 1.35f; return true;
+        //  Only while the client shows them (beside the chat).
+        case kGrpVehicle: if (!g_vehShow) return false;
+                          c = g_buttons[7].centre; r = g_buttons[7].radius * 1.35f; return true;
+        case kGrpFist:    if (!g_vehShow) return false;
+                          c = g_buttons[kBtnFist].centre; r = g_buttons[kBtnFist].radius * 1.35f; return true;
         case kGrpPage: {
             c.x = (g_buttons[kBtnF1].centre.x + g_buttons[kBtnF4].centre.x) * 0.5f;
             c.y = g_buttons[kBtnF1].centre.y;
@@ -1158,7 +1213,8 @@ bool groupCircle(int g, Vec2 &c, float &r) {
 //  bigger group can still be picked; the skill slots before the stick.
 int groupAt(float x, float y) {
     static const int order[] = { -2, -3, -4, kGrpPickup, kGrpPage, kGrpAuto, kGrpPK,
-                                 kGrpCamera, kGrpMenu, kGrpAttack, kGrpStick };
+                                 kGrpCamera, kGrpMenu, kGrpVehicle, kGrpFist,
+                                 kGrpAttack, kGrpStick };
     g_editSlot = -1;
     for (size_t k = 0; k < sizeof(order) / sizeof(order[0]); ++k) {
         const int g = order[k];
@@ -1419,9 +1475,23 @@ int RanTouch_PointerDown(int id, float x, float y) {
     //  55% of the height - which swallowed touches that had nothing to do with
     //  it, well into the middle of the screen. A pad around the ring is enough
     //  to catch a thumb landing loosely and leaves the rest of the screen alone.
+    //
+    //  That pad is loose on purpose, so a button the player moved beside the
+    //  stick in the HUD editor sat inside it and could never be pressed. A
+    //  touch squarely on a button is the button's; the stick keeps its own
+    //  ring and the rest of its pad.
     const float stickReach = g_stick.radius * 1.9f;
-    if (g_stick.pointer < 0 &&
-        len(x - g_stick.centre.x, y - g_stick.centre.y) < stickReach) {
+    const float stickDist  = len(x - g_stick.centre.x, y - g_stick.centre.y);
+    bool onButton = false;
+    if (stickDist >= g_stick.radius && stickDist < stickReach) {
+        for (int i = 0; i < kButtonCount && !onButton; ++i) {
+            const Button &b = g_buttons[i];
+            if ((b.slot == kSlotVehicle || b.slot == kSlotFist) && !g_vehShow) continue;
+            if (b.slot == kSlotChat) continue;
+            onButton = b.pointer < 0 && hit(b.centre, b.radius, x, y);
+        }
+    }
+    if (g_stick.pointer < 0 && !onButton && stickDist < stickReach) {
         g_stick.pointer = id;
         g_stick.held = true;
         g_stick.origin.x = x; g_stick.origin.y = y;
@@ -1434,7 +1504,7 @@ int RanTouch_PointerDown(int id, float x, float y) {
 
     for (int i = 0; i < kButtonCount; ++i) {
         Button &b = g_buttons[i];
-        if (b.slot == kSlotVehicle && !g_vehShow) continue;
+        if ((b.slot == kSlotVehicle || b.slot == kSlotFist) && !g_vehShow) continue;
         //  Already answered above, by its own shape, before the window rule.
         if (b.slot == kSlotChat) continue;
         if (b.pointer < 0 && hit(b.centre, b.radius, x, y)) {
@@ -1858,7 +1928,9 @@ enum {
     //  The chat pair: the round icon that brings the chat back, and the plate
     //  on its frame that folds it away. The plate is the one cell that is not
     //  round art - see the draw below.
-    kCellChat,      kCellChatClose,
+    kCellChat,      kCellChatClose, kCellFist,
+    //  Sixth row: the peace / battle (X) button's lit state.
+    kCellFistOn,
 };
 
 bool hudSheet() { return g_hudTex != 0 && g_hudTexW > 1.0f; }
@@ -1870,7 +1942,10 @@ void drawHudCell(int cell, float cx, float cy, float half, float alpha) {
     if (!g_texProg) return;
 
     const float cw = 1.0f / (float)kHudCols;
-    const float ch = cw;                       //  the sheet is square, 5 x 5
+    //  Cells are square in pixels, so a cell's height in UV is its width scaled
+    //  by the sheet's aspect. The sheet was square (5 x 5) until the peace /
+    //  battle button needed a sixth row; an older square sheet still reads right.
+    const float ch = cw * g_hudTexW / g_hudTexH;
     const float u0 = (float)(cell % kHudCols) * cw;
     const float v0 = (float)(cell / kHudCols) * ch;
 
@@ -1932,6 +2007,16 @@ int hudCellFor(int slot, bool on) {
         case kSlotF2:      return on ? kCellF2On : kCellF2;
         case kSlotF3:      return on ? kCellF3On : kCellF3;
         case kSlotF4:      return on ? kCellF4On : kCellF4;
+        case kSlotFist:
+        {
+            //  Its cells are the sheet's sixth row. An older 5 x 5 sheet has no
+            //  such row, and sampling past it wraps to the top row (the attack
+            //  art) - so on that sheet it takes the drawn shape instead.
+            const int cell = on ? kCellFistOn : kCellFist;
+            const float cellPx = g_hudTexW / (float)kHudCols;
+            if (cellPx <= 0.0f || (float)(cell / kHudCols + 1) * cellPx > g_hudTexH + 0.5f) return -1;
+            return cell;
+        }
     }
     return -1;
 }
@@ -2975,7 +3060,7 @@ void RanTouch_Render(void) {
     for (int i = 0; i < kButtonCount; ++i) {
         const Button &b = g_buttons[i];
         //  Not placed by the client yet - outside the world, or no chat.
-        if (b.slot == kSlotVehicle && !g_vehShow) continue;
+        if ((b.slot == kSlotVehicle || b.slot == kSlotFist) && !g_vehShow) continue;
         if (b.slot == kSlotChat) continue;     //  drawn in RanTouch_RenderChatTop
         {
             const int grp = groupOfButton(i);
@@ -3038,7 +3123,9 @@ void RanTouch_Render(void) {
         //  pass after the cache is replayed; all that is left here is the
         //  bloom under a lit toggle, which is flat colour and caches happily.
         if (hudSheet() && hudCellFor(b.slot, b.toggled) >= 0) {
-            if (b.toggled) bloom(b.centre.x, b.centre.y, R, state, 0.26f);
+            //  Not under the fist: its lit cell is painted with its own fire,
+            //  and a flat bloom on top washed out half of it.
+            if (b.toggled && b.slot != kSlotFist) bloom(b.centre.x, b.centre.y, R, state, 0.26f);
             continue;
         }
 
@@ -3098,7 +3185,7 @@ void RanTouch_Render(void) {
     if (hudSheet()) {
         for (int i = 0; i < kButtonCount; ++i) {
             const Button &b = g_buttons[i];
-            if (b.slot == kSlotVehicle && !g_vehShow) continue;
+            if ((b.slot == kSlotVehicle || b.slot == kSlotFist) && !g_vehShow) continue;
             if (b.slot == kSlotChat) continue;     //  drawn in RanTouch_RenderChatTop
             const int grp = groupOfButton(i);
             const float ga = (grp >= 0) ? g_adj[grp].alpha : 1.0f;
@@ -3361,10 +3448,7 @@ extern "C" void RanTouch_SetVehicleButton(float cx, float cy, int show) {
     g_vehShow  = show != 0;
     g_vehFracX = cx;
     g_vehFracY = cy;
-    if (g_inited) {
-        g_buttons[7].centre.x = cx * (float) g_width;
-        g_buttons[7].centre.y = cy * (float) g_height;
-    }
+    if (g_inited) placeRideButtons();
 }
 
 extern "C" void RanTouch_SetSkillPage(int page) {
@@ -3425,19 +3509,27 @@ extern "C" int RanTouch_IsEditMode(void) { return g_edit ? 1 : 0; }
 //  (dx, dy, size): the skill slots, the potion slots and the corner icons.
 //  Appended, never reordered - a shorter file is an older one.
 extern "C" int RanTouch_GetHudLayout(float *out, int max) {
-    const int n = kGrpCount * 4
-                + (RANTOUCH_MAX_SKILL_CIRCLES + kPotMax + kCornerMax) * 3;
+    //  The groups that existed before the slots were saved, then the slots,
+    //  then every group added since. A new group put in the FIRST block would
+    //  move every slot, and a saved file would load them scrambled.
+    const int n = kGrpLegacy * 4
+                + (RANTOUCH_MAX_SKILL_CIRCLES + kPotMax + kCornerMax) * 3
+                + (kGrpCount - kGrpLegacy) * 4;
     if (!out || max < n) return n;
-    for (int i = 0; i < kGrpCount; ++i) {
+    for (int i = 0; i < kGrpLegacy; ++i) {
         out[i * 4]     = g_adj[i].dx;    out[i * 4 + 1] = g_adj[i].dy;
         out[i * 4 + 2] = g_adj[i].scale; out[i * 4 + 3] = g_adj[i].alpha;
     }
-    int w = kGrpCount * 4;
+    int w = kGrpLegacy * 4;
     #define PUT(A, N) for (int i = 0; i < (N); ++i) {         out[w++] = (A)[i].dx; out[w++] = (A)[i].dy; out[w++] = (A)[i].scale; }
     PUT(g_slotAdj,   RANTOUCH_MAX_SKILL_CIRCLES)
     PUT(g_potAdj,    kPotMax)
     PUT(g_cornerAdj, kCornerMax)
     #undef PUT
+    for (int i = kGrpLegacy; i < kGrpCount; ++i) {
+        out[w++] = g_adj[i].dx;    out[w++] = g_adj[i].dy;
+        out[w++] = g_adj[i].scale; out[w++] = g_adj[i].alpha;
+    }
     return n;
 }
 
@@ -3452,7 +3544,7 @@ extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
     //  first time the corner icons joined the editor. The groups are appended,
     //  never reordered, so a short file is simply an older one: read what is
     //  there and leave the rest at its default.
-    const int nGrp = (n / 4 < kGrpCount) ? n / 4 : kGrpCount;
+    const int nGrp = (n / 4 < kGrpLegacy) ? n / 4 : kGrpLegacy;
     for (int i = 0; i < nGrp; ++i) {
         float dx = in[i * 4], dy = in[i * 4 + 1], sc = in[i * 4 + 2], al = in[i * 4 + 3];
         if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
@@ -3461,13 +3553,26 @@ extern "C" void RanTouch_SetHudLayout(const float *in, int n) {
         if (!(al >= 0.2f && al <= 1.0f)) al = 1.0f;
         g_adj[i].dx = dx; g_adj[i].dy = dy; g_adj[i].scale = sc; g_adj[i].alpha = al;
     }
-    if (nGrp == kGrpCount) {
-        int r = kGrpCount * 4;
+    if (nGrp == kGrpLegacy) {
+        int r = kGrpLegacy * 4;
         #define TAKE(A, N) for (int i = 0; i < (N); ++i) {             if (r + 2 >= n) break;             float dx = in[r++], dy = in[r++], sc = in[r++];             if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;             if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;             if (!(sc >= 0.6f && sc <= 1.6f))  sc = 1.0f;             (A)[i].dx = dx; (A)[i].dy = dy; (A)[i].scale = sc; }
         TAKE(g_slotAdj,   RANTOUCH_MAX_SKILL_CIRCLES)
         TAKE(g_potAdj,    kPotMax)
         TAKE(g_cornerAdj, kCornerMax)
         #undef TAKE
+        //  The groups added after the slots. A file written before them ends
+        //  here, or carries zeros (the client's array is zero-filled); either
+        //  way they stay at their defaults - zero size and opacity are out of
+        //  range and reset below.
+        for (int i = kGrpLegacy; i < kGrpCount; ++i) {
+            if (r + 3 >= n) break;
+            float dx = in[r++], dy = in[r++], sc = in[r++], al = in[r++];
+            if (!(dx > -40.0f && dx < 40.0f)) dx = 0.0f;
+            if (!(dy > -40.0f && dy < 40.0f)) dy = 0.0f;
+            if (!(sc >= 0.6f && sc <= 1.6f)) sc = 1.0f;
+            if (!(al >= 0.2f && al <= 1.0f)) al = 1.0f;
+            g_adj[i].dx = dx; g_adj[i].dy = dy; g_adj[i].scale = sc; g_adj[i].alpha = al;
+        }
     }
     if (g_inited) layout();
 }

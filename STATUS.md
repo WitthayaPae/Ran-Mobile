@@ -292,6 +292,20 @@ mobile inventory layout is exactly as it was before this session.
   169 2,297. No new launch crash report after the AltStore update (openURL fix, likely working).
   Left open, deliberately: engine heap +113 MB per crowd turnover (mesh/anim data never freed),
   heat reaches "serious" in a 250-player crowd.
+- **Fist button (peace/battle = X) (2026-09-30), NOT SHIPPED - waiting on the user**: HUD cells 24/25
+  (fist_peace/fist_battle from Downloads/RanIcon/fist.png) make mobile_hud.dds 1280x1536; the
+  client now reads the sheet's real size (GetLevelDesc) - the hardcoded 1024x1024 squashed every
+  icon on the first try. The tap sends the X release (PlayerUpdate reacts to DXKEY_UP); the lit
+  state is read from EM_ACT_PEACEMODE every frame. It sits left of the vehicle button, and both
+  are HUD-editor groups now (kGrpVehicle/kGrpFist: move, size, opacity), saved AFTER the slot
+  block so older layouts keep their slots (fMobileHud 110 -> 118; the loader takes either).
+  LDPlayer: dragged the fist, vehicle at 120%/90%, saved, relogged - all kept, the other groups
+  unchanged; the tap toggles battle/peace/battle. Found on the way: a button moved next to the
+  stick fell inside its loose 1.9x catch pad and could not be pressed - a direct button hit
+  now beats the pad (the stick's own ring still wins; stick still drives from the pad).
+  **Open (compatibility)**: an old APK with the new 1280x1536 sheet squashes its HUD. iOS
+  is safe (minIos auto-raised); Android players who skip the APK update would be affected.
+  Options: minApk, a separate mobile_hud2.dds, or one cell. User said "not for now".
 - login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
   file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared

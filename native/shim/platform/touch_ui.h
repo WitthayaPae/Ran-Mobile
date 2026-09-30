@@ -63,6 +63,9 @@ extern "C" int RanTouch_ConsumeButton(int *outSlot);
 #define RANTOUCH_SLOT_F3          (-10)
 #define RANTOUCH_SLOT_F4          (-11)
 #define RANTOUCH_SLOT_CHAT        (-12)
+//  Peace / battle mode - what the X key toggles. Lit in battle mode; the client
+//  sets that from the character's own state (RanTouch_SetToggle).
+#define RANTOUCH_SLOT_FIST        (-13)
 
 //  Where the client put its quick-skill slots, as fractions of the surface, so
 //  the overlay can draw a round rim over each one.
