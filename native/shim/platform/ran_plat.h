@@ -58,6 +58,10 @@ int         RanPlat_DiagExists ( const char *name );
 //  ACTION_VIEW on Android, openURL: on iOS.
 void        RanPlat_OpenURL ( const char *url );
 
+//  MB left before the platform starts killing: iOS the app's own limit
+//  (os_proc_available_memory), Android the system's MemAvailable. -1 unknown.
+int         RanPlat_MemHeadroomMB ( void );
+
 //  Watch the resident size and, if it runs away, abort the thread that armed
 //  this - so the runaway loop shows up as a backtrace instead of a SIGKILL.
 void        RanPlat_WatchdogArm ( int limitMB );

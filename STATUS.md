@@ -273,6 +273,19 @@ mobile inventory layout is exactly as it was before this session.
   scheme and opens through it). Delegate now implements application:openURL:options: (returns
   YES). Not verified until the next AltStore update launches without a new ran-*.ips.
   No Android counterpart (Android has no such launch path).
+- **Crowd-arrival spike (2026-09-30)**. iPhone peak 2,569 vs settled 2,262 MB: +210 MB of it was
+  decoded costume textures waiting for a first draw (900 textures, 267 MB, in ~3 s).
+  (a) Pressure mode: below 1 GB headroom (RanPlat_MemHeadroomMB: iOS os_proc_available_memory,
+  Android /proc/meminfo MemAvailable) the budget runs every 250 ms and drops undrawn copies after
+  2 s / idle GPU after 5 s. LDPlayer A/B (diag texpressure): NO measurable peak change (259/315 vs
+  237/307 - crowd noise), no harm. Kept, not counted as the fix.
+  (b) Loader throttle: TextureManager's LoadThread asks RanD3D_TextureLoaderShouldWait() before
+  each file; waits while undrawn COSTUME pixels > 96 MB (only costumes count - droppable, so it
+  cannot wait forever; map textures during a loading screen would deadlock). LDPlayer Clear/+1000:
+  off peak RAM copies 395 MB / undrawn 229 MB; on 260 MB / 96 MB (paused 49x), slow frames same,
+  no crash. One valid round each (round 2 did not log in - stopped to avoid the server's
+  connect ban). diag `noloadthrottle`. MEM line: `undrawn costume N MB, loader paused N`.
+  First version crashed: `goto _RETURN` skipped std::string's ctor (see memory goto-past-init).
 - login-ld.sh takes RAN_CRED=<file> (id, password) to log in another account (the GM account's
   file is kept outside the repo and deleted after use). GM Tool = KEYCODE_Y on a Master account.
 - Android only so far (x86_64 test build). No iOS counterpart needed: all changes are in shared

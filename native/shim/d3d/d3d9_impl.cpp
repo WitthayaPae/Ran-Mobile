@@ -125,6 +125,10 @@ struct Live {
     std::atomic<long>      textures{0}, vbs{0}, ibs{0};
     std::atomic<long>      texHalved{0};        // costume textures uploaded at half size, ever
     std::atomic<long>      texEvicted{0}, texReloads{0}, texReloadFails{0};   // the budget, ever
+    //  Decoded costume pixels no draw has taken yet - what a crowd's arrival
+    //  piles up. The loading thread waits while this is over its cap.
+    std::atomic<long long> texUndrawnCostume{0};
+    std::atomic<long>      loaderPauses{0};
 } g_live;
 
 //  Every live texture, so the once-a-second report can say WHICH decoded copies
@@ -313,6 +317,13 @@ public:
     long long m_bornMs = 0;
     long long m_lastUseMs = 0;
     bool      m_evicted = false;
+    //  Counted into g_live.texUndrawnCostume (loader thread adds, render
+    //  thread removes on upload or eviction, either on destruction).
+    std::atomic<bool> m_countedUndrawn{false};
+    long long m_undrawnBytes = 0;
+    void uncountUndrawn() {
+        if (m_countedUndrawn.exchange(false)) g_live.texUndrawnCostume -= m_undrawnBytes;
+    }
     int       m_halfMode = -1;
     long long   m_bytesAll = 0;             // all levels, counted into g_live
     //  Made by an image loader (D3DXCreateTextureFrom*), with or without a file
@@ -345,6 +356,7 @@ public:
         g_texSet.insert(this);
     }
     ~RanTexture() {
+        uncountUndrawn();
         g_live.texBytes -= m_bytesAll; --g_live.textures;
         {
             std::lock_guard<std::mutex> lk(g_texSetLock);
@@ -403,6 +415,7 @@ public:
     //  Drop everything this texture holds - the GL copy and the decoded pixels -
     //  and keep the object, so every pointer the engine has stays good.
     void evictPixels() {
+        uncountUndrawn();
         if (m_glTex) { RanGLR_DeleteTexture(m_glTex); m_glTex = 0; }
         for (size_t i = 0; i < m_surfaces.size(); ++i) {
             std::vector<BYTE> empty;
@@ -629,6 +642,7 @@ public:
                     m_surfaces[i]->m_freedAfterUpload = true;
                 }
                 ++g_stats.texturesFreedCPU;
+                uncountUndrawn();
             }
             m_dirty = false;
         }
@@ -643,7 +657,41 @@ extern "C" void RanD3D_NoteTexturePath(IDirect3DTexture9 *pTex, const char *szPa
     if (pTex && szPath) ((RanTexture *)pTex)->m_srcPath = szPath;
 }
 extern "C" void RanD3D_NoteTextureSource(IDirect3DTexture9 *pTex, const char *szFile) {
-    if (pTex && szFile) ((RanTexture *)pTex)->m_srcFile = szFile;
+    if (!pTex || !szFile) return;
+    RanTexture *t = (RanTexture *)pTex;
+    t->m_srcFile = szFile;
+    //  Loaded and not on the GPU yet: a costume's pixels now wait for a draw.
+    if (!t->m_glTex && !t->m_surfaces.empty() && !t->m_surfaces[0]->m_bits.empty() &&
+        isCostumeFile(t->m_srcFile) && !t->m_countedUndrawn.load()) {
+        long long b = 0;
+        for (size_t i = 0; i < t->m_surfaces.size(); ++i) b += (long long)t->m_surfaces[i]->m_bits.size();
+        t->m_undrawnBytes = b;
+        g_live.texUndrawnCostume += b;
+        t->m_countedUndrawn = true;
+    }
+}
+
+//  The texture loading thread asks before each file (TextureManager.cpp).
+//
+//  A crowd arriving decodes every costume at once: on the iPhone 900 textures,
+//  267 MB, in about three seconds, most of them waiting for a first draw and
+//  some never getting one. That wave was the peak. Past the cap the loader
+//  waits; draws take pixels to the GPU and the budget drops the undrawn ones,
+//  and it goes again. Only costume textures count, and those can always be
+//  dropped, so the count always falls and the loader never waits for good.
+//  Low-memory devices only, like the rest of the budget.
+namespace { std::atomic<bool> g_loaderWaiting{false}; }
+extern "C" int RanD3D_TextureLoaderShouldWait(void) {
+    const long long kCap = 96LL * 1048576LL;
+    const bool wait = halfCostumesOn() && g_texReload && g_live.texUndrawnCostume > kCap &&
+                      !RanPlat_DiagExists("noloadthrottle");
+    if (wait && !g_loaderWaiting) {
+        LOGI("texture loader paused: %.0f MB of costume pixels waiting for a first draw",
+             g_live.texUndrawnCostume / 1048576.0);
+        ++g_live.loaderPauses;
+    }
+    g_loaderWaiting = wait;
+    return wait ? 1 : 0;
 }
 extern "C" void RanD3D_SetTextureReloader(int (*fn)(const char *, unsigned char **, unsigned *)) {
     g_texReload = fn;
@@ -670,8 +718,27 @@ namespace {
 void texBudgetPass() {
     static long long s_last = 0;
     const long long now = nowMs();
-    if (now - s_last < 1000) return;
+    //  Under pressure the pass runs four times as often and waits far less.
+    //
+    //  A crowd arriving is the peak, not the crowd itself: on the iPhone the
+    //  whole 250 came in within about 3 s and the footprint went 1,634 ->
+    //  2,569 MB, of which ~210 MB was decoded costume textures waiting for a
+    //  first draw many never get (damage faces and the like). At the relaxed
+    //  15 s they were all still held at the peak, 503 MB from the limit. Below
+    //  1 GB of headroom an undrawn copy goes after 2 s and an idle GPU texture
+    //  after 5 s.
+    static int       s_headroom = -1;
+    static long long s_headroomAt = 0;
+    if (now - s_headroomAt >= 250) { s_headroom = RanPlat_MemHeadroomMB(); s_headroomAt = now; }
+    //  "texpressure" forces it, to test on a device that never gets there.
+    const bool pressure = (s_headroom >= 0 && s_headroom < 1024) || RanPlat_DiagExists("texpressure");
+    //  A paused loader is waiting on exactly the copies this drops, so it gets
+    //  the short wait too.
+    const bool tight = pressure || g_loaderWaiting.load();
+    if (now - s_last < (tight ? 250 : 1000)) return;
     s_last = now;
+    const long long kUndrawnMs = tight ? 2000 : 15000;
+    const long long kIdleMs = pressure ? 5000 : 10000;
     if (!g_texReload || !halfCostumesOn() || RanPlat_DiagExists("notexbudget")) return;
 
     //  384 MB of GPU textures: the iPhone's whole first crowd fit in 339.
@@ -710,7 +777,7 @@ void texBudgetPass() {
                 if (t->m_srcFile.empty()) ++kNoFile;
                 else if (!isCostumeFile(t->m_srcFile)) { ++kNotCostume; bNotCostume += b; }
                 else if (!t->m_fromLoader) ++kNotLoader;
-                else if (now - t->m_lastUseMs <= 10000) { ++kRecent; bRecent += b; }
+                else if (now - t->m_lastUseMs <= kIdleMs) { ++kRecent; bRecent += b; }
                 else ++kIdle;
             }
             //  Costume folders only: those are loose files a reload can always
@@ -721,13 +788,13 @@ void texBudgetPass() {
                 t->m_surfaces.empty() || !isCostumeFile(t->m_srcFile))
                 continue;
             if (!t->m_glTex) {
-                if (!t->m_surfaces[0]->m_bits.empty() && now - t->m_lastUseMs > 15000) {
+                if (!t->m_surfaces[0]->m_bits.empty() && now - t->m_lastUseMs > kUndrawnMs) {
                     for (size_t i = 0; i < t->m_surfaces.size(); ++i)
                         bUndrawn += (long long)t->m_surfaces[i]->m_bits.size();
                     t->evictPixels();
                     ++nUndrawn;
                 }
-            } else if (now - t->m_lastUseMs > 10000) {
+            } else if (now - t->m_lastUseMs > kIdleMs) {
                 idle.push_back(t);
             }
         }
@@ -743,8 +810,9 @@ void texBudgetPass() {
     }
     if (nUndrawn || nIdle)
         LOGI("texture budget: dropped %ld undrawn copies (%.0f MB), %ld idle GPU textures "
-             "(GPU %.0f -> %.0f MB)", nUndrawn, bUndrawn / 1048576.0, nIdle,
-             gpuBefore / 1048576.0, RanGLR_TexGpuBytes() / 1048576.0);
+             "(GPU %.0f -> %.0f MB)%s", nUndrawn, bUndrawn / 1048576.0, nIdle,
+             gpuBefore / 1048576.0, RanGLR_TexGpuBytes() / 1048576.0,
+             pressure ? " [pressure]" : "");
     static long long s_lastWhy = 0;
     if (gpuBefore > kBudget && now - s_lastWhy >= 5000) {
         s_lastWhy = now;
@@ -2737,12 +2805,12 @@ extern "C" long long RanGLR_TexGpuBytes(void);
 extern "C" void RanD3D_LiveMemLine(char *out, int cap) {
     const double MB = 1048576.0;
     snprintf(out, cap,
-             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB | costumes halved %ld | budget evicted %ld reloaded %ld FAILED %ld",
+             "tex %ld = %.0f MB, on GPU as uploaded %.0f MB (RAM copies %.0f MB) | VB %ld = %.0f MB | IB %ld = %.0f MB | costumes halved %ld | budget evicted %ld reloaded %ld FAILED %ld | undrawn costume %.0f MB, loader paused %ld",
              (long)g_live.textures, g_live.texBytes / MB, RanGLR_TexGpuBytes() / MB,
              g_live.texCpuBytes / MB,
              (long)g_live.vbs, g_live.vbBytes / MB, (long)g_live.ibs, g_live.ibBytes / MB,
              (long)g_live.texHalved, (long)g_live.texEvicted, (long)g_live.texReloads,
-             (long)g_live.texReloadFails);
+             (long)g_live.texReloadFails, g_live.texUndrawnCostume / MB, (long)g_live.loaderPauses);
 }
 
 //  Where the decoded RAM copies are, by why they were not freed.

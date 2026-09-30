@@ -31,6 +31,16 @@ extern "C" void RanPlat_OpenURL ( const char *url )
     } );
 }
 #include "../../shim/platform/ran_plat.h"
+#include <os/proc.h>
+
+//  What is left of this app's own memory limit - the number iOS kills at 0.
+//  The texture budget tightens when it is low (d3d9_impl.cpp texBudgetPass).
+extern "C" int RanPlat_MemHeadroomMB ( void )
+{
+    if ( @available(iOS 13.0, *) )
+        return (int)( os_proc_available_memory() / 1048576 );
+    return -1;
+}
 
 static NSString *EnsureDir(NSSearchPathDirectory what, NSString *leaf)
 {

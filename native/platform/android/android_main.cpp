@@ -24,6 +24,8 @@
 #include <android/keycodes.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <jni.h>
@@ -311,6 +313,26 @@ Java_com_ran_launcher_RanActivity_nativeCommitText(JNIEnv *env, jclass, jstring 
         RanIME_InsertUtf8(sz);
         env->ReleaseStringUTFChars(text, sz);
     }
+}
+
+//  How much memory is left, for the texture budget (d3d9_impl.cpp texBudgetPass),
+//  which tightens when it is low. The iOS side answers with the app's own limit;
+//  Android has no per-app ceiling, so this is the system's MemAvailable - the
+//  point where the low-memory killer starts choosing processes.
+//  open/read, not fopen: fopen may be the shim's resolver (windows.h), which
+//  rewrites paths for the game's data tree.
+extern "C" int RanPlat_MemHeadroomMB(void) {
+    const int fd = open("/proc/meminfo", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[1024];
+    const ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    const char *p = strstr(buf, "MemAvailable:");
+    if (!p) return -1;
+    const long kb = strtol(p + 13, NULL, 10);
+    return kb > 0 ? (int)(kb / 1024) : -1;
 }
 
 //  Hand a link to the browser, through the activity.
