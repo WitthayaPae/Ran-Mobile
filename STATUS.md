@@ -3,7 +3,7 @@
 **This is the living document. It is updated at the end of every working session.**
 If anything here disagrees with another file, this file wins.
 
-- **Last updated:** 2026-09-29
+- **Last updated:** 2026-10-02
 - **Approach:** compile the real PC client (`SOURCE/`) for mobile. Decided 2026-08-24.
 - **Current phase:** 1 complete · 2 complete · **3 in progress — login works end to end; character-select scene and models remain**
 - **Builds:** `cd MOBILE/native && ./build.sh` → 0 errors, produces `out/arm64-v8a/libran.so`
@@ -11,6 +11,22 @@ If anything here disagrees with another file, this file wins.
   APKs: `out/ran-phase3.apk` (current), `out/ran-phase2.apk` (headless, kept for comparison).
 
 ---
+
+## 2026-10-02 — PK button = Z held; AUTO locks enemy players in events (v171)
+
+* **Bug (user):** PK lock on, press attack, nothing - PC attacks a player with Z held.
+* **Cause:** `MobileFindNearestPvP` asked `IsPK_TAR(pCHAR, bBRIGHTEVENT)`, i.e. "hittable
+  WITHOUT Z". Outside PK map / club war / hostile list that is false for everyone, so PK
+  found nobody. A tap on a player also resolved PC_ANY, because `FindActionTarget` read
+  the real Z key.
+* **Fix (all `RAN_MOBILE`, PC/servers untouched):** `m_bMobilePK` ORs `DXKEY_DOWNED` into
+  dwKeyZ in `FindActionTarget`; the PvP search takes `bFORCED` (PK button passes true).
+  New `MobileFindNearestAuto`: AUTO inside Guild War / CDM / Tyranny / school wars / CTF
+  (`MobileInEventBattle`, same branches as IsPK_TAR) picks the nearer of mob and legal
+  enemy player (unforced rules, so guildmates stay safe). Used by select, attack,
+  out-of-range switch and skill auto-pick.
+* **Verified:** both ABIs compile, 0 errors. **Not verified on device**: needs a second
+  player in a PK zone / event; nobody available solo.
 
 ## 2026-09-29 (3) — Bigger game windows on mobile (fit the screen)
 
