@@ -12,6 +12,18 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (2) — Moving slot 1 no longer drags F1-F4; key settings gone from the menu (v176)
+
+* **Bug (user):** dragging skill slot 1 in the HUD editor moved the page row too.
+  `placePageRow` anchored the row under `g_skillCircles[0]`, which is the slot as drawn -
+  including the player's own offset and size for that slot. It now takes `g_slotAdj[0]`
+  back off (offset and scale), so the row follows the arc and its group, never one slot.
+  LDPlayer: slot 1 dragged up-left, F1-F4 unmoved; cancel restored.
+* **ตั้งปุ่มกด removed on mobile** (`BasicEscMenu.cpp`, RAN_MOBILE): Help and Exit are
+  created at the XML slots of the button above each; the frame loses one 32 px row through
+  `AlignSubControl` (SetGlobalPos alone never resizes children - first try left an empty
+  row). LDPlayer: four buttons, even margins, วิธีเล่นเกม opens Help. PC unchanged.
+
 ## 2026-10-03 — HUD editor: F1-F4 page row no longer swallows skill slot 1 (v175)
 
 * **Bug (user):** in ปรับแต่งปุ่ม HUD the page row F1-F4 looked joined to skill slot 1.

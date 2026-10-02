@@ -1022,9 +1022,21 @@ void placePageRow() {
     //  falls back to the bottom right, where it used to be.
     float cx, cy;
     if (g_skillCircleCount > 0) {
+        //  Slot 1 where the ARC puts it, not where the player dragged it.
+        //
+        //  The circle the client hands over is the slot as drawn, which already
+        //  carries the player's own offset and size for that one slot. Anchoring
+        //  to it tied the page row to slot 1: dragging slot 1 in the HUD editor
+        //  dragged F1-F4 along with it. Take the slot's own adjustment back off,
+        //  so the row follows the arc (and the arc's group offset and size) but
+        //  never a single slot.
         const SkillCircle &c = g_skillCircles[0];
-        cx = c.x;
-        cy = c.y + c.r * 1.32f + r * 1.15f;
+        const SlotAdj &s = g_slotAdj[0];
+        const float baseX = c.x - s.dx * g_unit;
+        const float baseY = c.y - s.dy * g_unit;
+        const float baseR = s.scale > 0.0f ? c.r / s.scale : c.r;
+        cx = baseX;
+        cy = baseY + baseR * 1.32f + r * 1.15f;
     } else {
         cx = W - g_unit * 0.42f - step * 1.5f;
         cy = H - g_unit * 0.40f;
