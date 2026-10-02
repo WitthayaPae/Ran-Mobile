@@ -4522,6 +4522,24 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
 
     if (level == 0) g_texDims[tex] = std::make_pair(width, height);
 
+    //  Every row this function is handed is packed tight - no padding to four
+    //  bytes. Said on every upload rather than trusted from init, because GL
+    //  keeps it as global state and anything can have changed it.
+    //
+    //  It was changed, by this function: the R8G8B8 case below used to put the
+    //  alignment back to 4 when it finished. From then on every 16-bit and
+    //  8-bit texture was read as if its rows were padded, so a small mip level
+    //  (R5G6B5 1x2, A8 2x2) made the driver read a few bytes past the end of
+    //  the data. Mostly that lands on readable memory and nobody sees it; on a
+    //  Galaxy S25 Ultra the buffer ended on a page boundary and glTexImage2D
+    //  faulted in the Adreno driver on entering the world:
+    //
+    //      SIGSEGV code 2 (SEGV_ACCERR) fault addr 0x706280d000
+    //      #11 glTexImage2D  #12 RanGLR_UploadTextureLevel  ... DxMeshes::RenderOctree
+    //
+    //  (crash report, app 172, 2026-10-02 22:48).
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     {
         const size_t px = (size_t)width * (size_t)height;
         size_t b = px * 4;
@@ -4586,12 +4604,11 @@ extern "C" unsigned RanGLR_UploadTextureLevel(unsigned existing, int level, int 
         //  texture as opaque black. That is every black item icon.
         case D3DFMT_R8G8B8: {
             //  Three bytes a pixel, B,G,R - straight up as GL_RGB with the
-            //  same sampler swap. A row of an odd width is not a multiple of
-            //  four, so the unpack alignment has to say so.
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            //  same sampler swap. Rows are tight (alignment 1, set above), and
+            //  it is NOT put back to 4 afterwards: that restore is what made
+            //  every later 16- and 8-bit upload over-read.
             glTexImage2D(GL_TEXTURE_2D, level, GL_RGB, width, height, 0, GL_RGB,
                          GL_UNSIGNED_BYTE, bits);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
             texSwizzle(true, true);
             break;
         }
