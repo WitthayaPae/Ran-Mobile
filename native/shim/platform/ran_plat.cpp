@@ -1021,3 +1021,37 @@ extern "C" void RanCrash_CleanExit ( void )
 {
     if ( g_run && g_run->state != RUN_CRASHED ) g_run->state = RUN_CLEAN;
 }
+
+//  The gallery pick, handed from the platform's thread to the game's.
+//  (RanPlat_PickImage / RanPlat_ImagePicked / RanPlat_TakePickedImage.)
+namespace {
+const int        kPickMax = 64 * 64;
+unsigned int     g_pickPx[kPickMax];
+int              g_pickW = 0, g_pickH = 0;
+int              g_pickReady = 0;
+pthread_mutex_t  g_pickLock = PTHREAD_MUTEX_INITIALIZER;
+}
+
+extern "C" void RanPlat_ImagePicked ( const unsigned int *argb, int w, int h )
+{
+    if ( !argb || w <= 0 || h <= 0 || w * h > kPickMax ) return;
+    pthread_mutex_lock ( &g_pickLock );
+    for ( int i = 0; i < w * h; ++i ) g_pickPx[i] = argb[i] | 0xFF000000u;  //  opaque, as the PC's BMP loader makes it
+    g_pickW = w; g_pickH = h;
+    g_pickReady = 1;
+    pthread_mutex_unlock ( &g_pickLock );
+    RanPlat_Log ( RANLOG_INFO, "RanPick", "image picked: %dx%d", w, h );
+}
+
+extern "C" int RanPlat_TakePickedImage ( unsigned int *argb, int w, int h )
+{
+    int got = 0;
+    pthread_mutex_lock ( &g_pickLock );
+    if ( g_pickReady && argb && g_pickW == w && g_pickH == h ) {
+        memcpy ( argb, g_pickPx, sizeof(unsigned int) * (size_t)( w * h ) );
+        got = 1;
+    }
+    g_pickReady = 0;
+    pthread_mutex_unlock ( &g_pickLock );
+    return got;
+}

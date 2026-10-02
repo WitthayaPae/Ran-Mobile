@@ -386,6 +386,35 @@ extern "C" void RanPlat_Quit(void) {
     if (!called) _exit(0);
 }
 
+//  The gallery picker, for the club emblem (RanActivity.ranPickImage). Same
+//  attach/call/detach as RanPlat_OpenURL; the picture comes back through
+//  nativeImagePicked below, already cropped and shrunk to w x h.
+extern "C" void RanPlat_PickImage(int w, int h) {
+    if (!g_app || !g_app->activity) return;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+
+    jobject act  = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+    if (cAct) {
+        jmethodID m = env->GetMethodID(cAct, "ranPickImage", "(II)V");
+        if (m) env->CallVoidMethod(act, m, (jint)w, (jint)h);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cAct);
+    }
+    g_app->activity->vm->DetachCurrentThread();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_ran_launcher_RanActivity_nativeImagePicked(JNIEnv *env, jclass, jintArray px, jint w, jint h) {
+    if (!px || w <= 0 || h <= 0 || env->GetArrayLength(px) < w * h) return;
+    jint *p = env->GetIntArrayElements(px, NULL);
+    if (!p) return;
+    RanPlat_ImagePicked((const unsigned int *)p, (int)w, (int)h);
+    env->ReleaseIntArrayElements(px, p, JNI_ABORT);
+}
+
 //  Send crash_pending/*.txt home. The work is in Java - HttpURLConnection, on
 //  its own thread (RanActivity.ranUploadCrashReports) - because the native
 //  side has no HTTPS of its own. Same attach/call/detach as RanPlat_OpenURL.

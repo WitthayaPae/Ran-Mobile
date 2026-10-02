@@ -12,6 +12,27 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (4) — Club emblem from the phone's gallery (v178)
+
+* **Request (user):** change the club emblem by picking a picture on the phone, not by
+  typing a BMP file name (the PC way: My Documents, exactly 16x11 24bpp).
+* **Client:** ClubWindow's change-mark button calls `RanPlat_PickImage(16, 11)` on mobile.
+  Android `RanActivity.ranPickImage` (ACTION_GET_CONTENT, EXIF upright, centre-crop,
+  halving shrink) / iOS `RanImagePick` in ran_ios_main.mm (UIImagePickerController,
+  aspect-fill draw). Pixels -> `RanPlat_ImagePicked` -> `DxGameStage::MobileTouchControls`
+  takes them and sends `ReqClubMarkChangePixels` = the PC's SNET_CLUB_MARK_CHANGE.
+  `NET_MSG_GCTRL_CLUB_MARK_CHANGE_FB` (never routed on PC: refusals were silent) now routed
+  on mobile -> "เปลี่ยนตราคลับไม่สำเร็จ" on FAIL.
+* **LDPlayer:** picker opens, image arrives 16x11, request sent (club 2, centre pixel =
+  the picture's yellow).
+* **OPEN - server does not apply it:** no FB and no _2CLT came back; after re-login the
+  emblem is still the stored green cross (club_nomark is a blue "?", so display works).
+  Full path traced (agent forwards MARK_CHANGE to GLCharAG::MsgClubMarkChange; master and
+  EMCLUB_SUBMASTER_MARK pass; every refusal replies). Remaining silent drops are on the
+  agent (GLAgentServerMsg.cpp:6060-6061) or a deployed agent not built from this source.
+  Needs a server-side check: `SELECT GuMarkVer FROM GuildInfo WHERE GuNum=2` before/after,
+  or the same change from the PC client.
+
 ## 2026-10-03 (3) — Crash entering Tyranny fixed (v177)
 
 * **From the crash report** (app 176, LDPlayer): SIGSEGV fault addr 0 in

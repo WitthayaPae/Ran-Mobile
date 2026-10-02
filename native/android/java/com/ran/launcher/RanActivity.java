@@ -229,6 +229,104 @@ public class RanActivity extends NativeActivity {
         }});
     }
 
+    /*  The club emblem from the gallery (native RanPlat_PickImage).
+     *
+     *  The PC asks for a BMP file name in the game folder, which a phone has no
+     *  way to fill. This opens the system picker instead; the picture is
+     *  turned upright, centre-cropped to the emblem's shape, shrunk in halving
+     *  steps (one jump from a 4000-pixel photo to 16 pixels keeps only a few
+     *  source pixels and comes out noisy) and handed to native as ARGB.
+     *  iOS: ran_ios_main.mm RanPlat_PickImage does the same with UIKit.      */
+    private static final int REQ_PICK_IMAGE = 0x5241;
+    private int mPickW, mPickH;
+    private static native void nativeImagePicked(int[] argb, int w, int h);
+
+    public void ranPickImage(final int w, final int h) {
+        mPickW = w; mPickH = h;
+        runOnUiThread(new Runnable() { public void run() {
+            try {
+                Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                i.setType("image/*");
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                startActivityForResult(i, REQ_PICK_IMAGE);
+            } catch (Exception e) {
+                Log.e("RanPick", "no picker: " + e);
+            }
+        }});
+    }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_PICK_IMAGE) return;
+        if (res != RESULT_OK || data == null || data.getData() == null) {
+            Log.i("RanPick", "picker cancelled");
+            return;
+        }
+        final Uri uri = data.getData();
+        final int w = mPickW, h = mPickH;
+        new Thread(new Runnable() { public void run() {
+            try {
+                int[] px = shrinkPicked(uri, w, h);
+                if (px != null) nativeImagePicked(px, w, h);
+            } catch (Throwable t) {
+                Log.e("RanPick", "could not read the picture: " + t);
+            }
+        }}, "RanPick").start();
+    }
+
+    private int[] shrinkPicked(Uri uri, int w, int h) throws Exception {
+        android.content.ContentResolver cr = getContentResolver();
+
+        //  Bounds first, so a 50-megapixel photo is decoded small.
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        java.io.InputStream in = cr.openInputStream(uri);
+        android.graphics.BitmapFactory.decodeStream(in, null, o);
+        in.close();
+        if (o.outWidth <= 0 || o.outHeight <= 0) return null;
+        int sample = 1;
+        while (o.outWidth / (sample * 2) >= w * 8 && o.outHeight / (sample * 2) >= h * 8) sample *= 2;
+        o = new android.graphics.BitmapFactory.Options();
+        o.inSampleSize = sample;
+        in = cr.openInputStream(uri);
+        android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeStream(in, null, o);
+        in.close();
+        if (bm == null) return null;
+
+        //  Upright: a phone photo is stored sideways with an EXIF note.
+        int deg = 0;
+        try {
+            in = cr.openInputStream(uri);
+            android.media.ExifInterface ex = new android.media.ExifInterface(in);
+            in.close();
+            switch (ex.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
+                case android.media.ExifInterface.ORIENTATION_ROTATE_90:  deg = 90;  break;
+                case android.media.ExifInterface.ORIENTATION_ROTATE_180: deg = 180; break;
+                case android.media.ExifInterface.ORIENTATION_ROTATE_270: deg = 270; break;
+            }
+        } catch (Exception e) { /* no EXIF: as stored */ }
+        if (deg != 0) {
+            android.graphics.Matrix m = new android.graphics.Matrix();
+            m.postRotate(deg);
+            bm = android.graphics.Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+        }
+
+        //  Centre-crop to the emblem's shape.
+        int bw = bm.getWidth(), bh = bm.getHeight();
+        int cw = bw, ch = bh;
+        if ((long)bw * h > (long)bh * w) cw = Math.max(1, (int)((long)bh * w / h));
+        else                             ch = Math.max(1, (int)((long)bw * h / w));
+        android.graphics.Bitmap cur = android.graphics.Bitmap.createBitmap(bm, (bw - cw) / 2, (bh - ch) / 2, cw, ch);
+
+        while (cur.getWidth() / 2 >= w * 2 && cur.getHeight() / 2 >= h * 2)
+            cur = android.graphics.Bitmap.createScaledBitmap(cur, cur.getWidth() / 2, cur.getHeight() / 2, true);
+        android.graphics.Bitmap fin = android.graphics.Bitmap.createScaledBitmap(cur, w, h, true);
+
+        int[] px = new int[w * h];
+        fin.getPixels(px, 0, w, 0, 0, w, h);
+        return px;
+    }
+
     public void ranHideKeyboard() {
         runOnUiThread(new Runnable() { public void run() {
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);

@@ -85,6 +85,17 @@ void        RanCrash_CleanExit ( void );
 //  Android finishes and removes the task, then ends the process; iOS exits.
 void        RanPlat_Quit ( void );
 
+//  A picture from the phone's gallery, made w x h (the club emblem: 16 x 11).
+//
+//  RanPlat_PickImage (each platform) opens the system picker and returns at
+//  once. When the player picks, the platform centre-crops the image to w:h,
+//  shrinks it and calls RanPlat_ImagePicked with opaque 0xAARRGGBB pixels,
+//  top row first - from any thread. The game thread collects them with
+//  RanPlat_TakePickedImage, which answers 1 once per pick (ran_plat.cpp).
+void        RanPlat_PickImage ( int w, int h );
+void        RanPlat_ImagePicked ( const unsigned int *argb, int w, int h );
+int         RanPlat_TakePickedImage ( unsigned int *argb, int w, int h );
+
 //  Each platform layer: POST every *.txt in dir to the crash endpoint on a
 //  background thread, deleting each one the server accepts.
 void        RanPlat_UploadCrashReports ( const char *dir );

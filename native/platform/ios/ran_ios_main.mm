@@ -13,6 +13,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <mach/mach.h>
 #include <os/proc.h>
+#include <vector>
 #import <QuartzCore/CAEAGLLayer.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
@@ -570,6 +571,77 @@ extern "C" void RanIME_Hide ( void )
 {
     RanGesture_SetImeActive ( 0 );
     dispatch_async ( dispatch_get_main_queue(), ^{ [g_vc.imeField resignFirstResponder]; } );
+}
+
+//  The club emblem from the photo library (native RanPlat_PickImage) - the
+//  same job as RanActivity.ranPickImage on Android: upright, centre-cropped
+//  to w:h, shrunk, handed over as opaque ARGB, top row first. UIImage's
+//  drawInRect applies the photo's orientation; UIImagePickerController runs
+//  out of process, so the library needs no permission prompt.
+@interface RanImagePick : NSObject <UIImagePickerControllerDelegate, UINavigationControllerDelegate>
+@property (nonatomic) int w;
+@property (nonatomic) int h;
+@end
+
+static RanImagePick *g_imagePick = nil;     //  the picker keeps only a weak delegate
+
+@implementation RanImagePick
+- (void)imagePickerController:(UIImagePickerController *)picker
+didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey, id> *)info
+{
+    UIImage *img = info[UIImagePickerControllerOriginalImage];
+    const int w = self.w, h = self.h;
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    g_imagePick = nil;
+    if ( !img || w <= 0 || h <= 0 || img.size.width <= 0 || img.size.height <= 0 ) return;
+
+    //  Aspect-fill: scale so the short side fits, centre the rest off the edges.
+    const CGFloat sx = (CGFloat)w / img.size.width, sy = (CGFloat)h / img.size.height;
+    const CGFloat s  = sx > sy ? sx : sy;
+    const CGFloat dw = img.size.width * s, dh = img.size.height * s;
+    const CGRect  rc = CGRectMake ( ((CGFloat)w - dw) * 0.5f, ((CGFloat)h - dh) * 0.5f, dw, dh );
+
+    std::vector<unsigned char> rgba ( (size_t)w * h * 4, 0 );
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+    CGContextRef ctx = CGBitmapContextCreate ( rgba.data(), w, h, 8, w * 4, cs,
+                                               kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big );
+    CGColorSpaceRelease ( cs );
+    if ( !ctx ) return;
+    CGContextSetInterpolationQuality ( ctx, kCGInterpolationHigh );
+    //  UIKit draws top-down; a bitmap context is bottom-up.
+    CGContextTranslateCTM ( ctx, 0, h );
+    CGContextScaleCTM ( ctx, 1, -1 );
+    UIGraphicsPushContext ( ctx );
+    [img drawInRect:rc];
+    UIGraphicsPopContext ();
+    CGContextRelease ( ctx );
+
+    std::vector<unsigned int> argb ( (size_t)w * h );
+    for ( size_t i = 0; i < argb.size(); ++i )
+        argb[i] = 0xFF000000u | ((unsigned)rgba[i*4] << 16) | ((unsigned)rgba[i*4+1] << 8) | rgba[i*4+2];
+    RanPlat_ImagePicked ( argb.data(), w, h );
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
+{
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    g_imagePick = nil;
+    RanPlat_Log ( RANLOG_INFO, "RanPick", "picker cancelled" );
+}
+@end
+
+extern "C" void RanPlat_PickImage ( int w, int h )
+{
+    dispatch_async ( dispatch_get_main_queue(), ^{
+        if ( !g_vc || g_imagePick ) return;
+        if ( ![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary] ) return;
+        g_imagePick = [RanImagePick new];
+        g_imagePick.w = w; g_imagePick.h = h;
+        UIImagePickerController *p = [UIImagePickerController new];
+        p.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+        p.delegate = g_imagePick;
+        [g_vc presentViewController:p animated:YES completion:nil];
+    } );
 }
 
 extern "C" void RanIME_SetNumeric ( int numeric )
