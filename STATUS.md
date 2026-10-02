@@ -12,6 +12,34 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-02 (2) — Crash reports sent home (v172)
+
+* **Why:** user reported "crash entering the world" on Android 171; LDPlayer could not
+  reproduce it and the phone was out of reach. Every future crash now reports itself.
+* **Client (shared, `shim/platform/ran_plat.cpp`):** every `RanPlat_Log` line also goes
+  into a 128 KB ring inside a memory-mapped `lastrun.bin` (diag root), which survives a
+  SIGKILL. A crash-signal handler writes signal, registers and backtrace (library
+  offsets) into it, then hands the signal on (tombstone / iOS report still happen).
+  Header state: foreground / background / crashed / clean. `RanCrash_Begin()` (right
+  before `RanApp_Boot`, both platforms) turns a crashed or killed-on-screen previous run
+  into `crash_pending/<time>.txt` and asks the platform to upload. Background deaths
+  (swipe-away) are not reported. Test hook: `adb push` a file named `crashtest` into the
+  data root, which faults right after arming.
+* **Upload:** Android `RanActivity.ranUploadCrashReports`, iOS `ran_ios_plat.mm`.
+  Both POST to `https://ran-legacy-m.com/crash/upload.php` (X-Ran-Crash: 1, X-Ran-App:
+  build), oldest first, delete on 200, stop at the first failure. Pending is capped at 10.
+* **Server:** `RAN/crash/` (upload.php, index.php viewer behind the admin password in
+  `crashcfgkey.php`, `.htaccess`). Saved under `crash/logs/YYYY-MM/`, rate limit 20/h per IP.
+* **Symbols:** `build-apk.sh` archives each `libran.debug` (zlib) under
+  `native/out/symbols/<build-id>/<abi>/`, and the publish sweep keeps it.
+  `bash tools/crash/symbolize.sh report.txt` gives function + file:line.
+  iOS reports have frames but no build-id; their symbols would need the CI dSYM (not done).
+* **Verified on LDPlayer x86_64:** forced SIGSEGV report with backtrace, symbolized to
+  `ran_plat.cpp:990` / `android_main.cpp:983`; kill while on screen gave a "killed"
+  report with 40 s of log; Home then kill gave no report; upload got HTTP 404 (endpoint not
+  deployed yet) and kept the files. **iOS: compiled by CI only, not run on a phone.**
+* **Still open:** the original world-entry crash on 171. Wait for its report.
+
 ## 2026-10-02 — PK button = Z held; AUTO locks enemy players in events (v171)
 
 * **Bug (user):** PK lock on, press attack, nothing - PC attacks a player with Z held.
