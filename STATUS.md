@@ -12,6 +12,22 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (5) — Club emblems now actually show on phones (v179)
+
+* **Cause (proven):** `DxClubMan::DrawClubTex` draws the 16x11 emblem into a DDS page,
+  then `D3DXSaveTextureToFile` + `TextureManager::LoadTexture` reload the page from disk.
+  The shim's `D3DXSaveTextureToFileA` is a stub (d3dx_loaders.cpp:334), so the reload
+  returned the page shipped in the patch - a dev PC cache (`textures/club/Club_00_00.dds`:
+  red flag cell 0, green cross cell 1; `Club_Tex.dat` id->cell map). Every emblem on every
+  phone was the shipped cell, never the server's.
+* **Fix (RAN_MOBILE, DxClubMan):** pages made/cleared in memory and owned (released
+  directly); DrawClubTex stops after UnlockRect; Club_Tex.dat neither loaded nor saved, so
+  each session fetches emblems via ReqClubMarkInfo. DrawClubTex also locks the full 16x11
+  cell (its 15/10 RECT is exclusive; the shim uploads only the locked rect, so the last
+  column/row kept the previous emblem).
+* **LDPlayer:** re-login shows the server's emblem; live change redraws with no leftover;
+  DB GuMarkVer 4 with the matching centre pixel. iOS compiled only.
+
 ## 2026-10-03 (4) — Club emblem from the phone's gallery (v178)
 
 * **Request (user):** change the club emblem by picking a picture on the phone, not by
@@ -25,13 +41,9 @@ If anything here disagrees with another file, this file wins.
   on mobile -> "เปลี่ยนตราคลับไม่สำเร็จ" on FAIL.
 * **LDPlayer:** picker opens, image arrives 16x11, request sent (club 2, centre pixel =
   the picture's yellow).
-* **OPEN - server does not apply it:** no FB and no _2CLT came back; after re-login the
-  emblem is still the stored green cross (club_nomark is a blue "?", so display works).
-  Full path traced (agent forwards MARK_CHANGE to GLCharAG::MsgClubMarkChange; master and
-  EMCLUB_SUBMASTER_MARK pass; every refusal replies). Remaining silent drops are on the
-  agent (GLAgentServerMsg.cpp:6060-6061) or a deployed agent not built from this source.
-  Needs a server-side check: `SELECT GuMarkVer FROM GuildInfo WHERE GuNum=2` before/after,
-  or the same change from the PC client.
+* **Server was fine; the phone's display was the bug (fixed in v179, below).** DB read
+  (sqlcmd, login from cfg/[1]ServerSession.cfg): GuildInfo club 2 GuMarkVer 2, 704 bytes,
+  centre pixel = the picked picture's.
 
 ## 2026-10-03 (3) — Crash entering Tyranny fixed (v177)
 
