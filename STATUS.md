@@ -12,6 +12,19 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-02 (3) — World-entry crash on Galaxy S25 Ultra fixed (v173)
+
+* **Found by the first crash report sent home** (app 172, SM-S938B, Android 16, Adreno):
+  SIGSEGV SEGV_ACCERR inside `glTexImage2D` <- `RanGLR_UploadTextureLevel` <-
+  `DxMeshes::RenderOctree`, right after entering the world; fault address page-aligned.
+* **Cause:** the R8G8B8 upload path reset `GL_UNPACK_ALIGNMENT` to 4 after itself. Every
+  later R5G6B5 / A8 level whose row is not a multiple of 4 bytes (1x2, 2x2 mips) was then
+  read as padded rows, so the driver read past the end of the pixel data. Harmless until the
+  buffer ends on a page boundary.
+* **Fix (`shim/gl/gl_render.cpp`, shared):** alignment 1 at the start of every upload, never
+  restored to 4. LDPlayer: world, map and R8G8B8 item icons render as before.
+* **Not verified on the S25 itself.** The next report (or its absence) from that phone is the check.
+
 ## 2026-10-02 (2) — Crash reports sent home (v172)
 
 * **Why:** user reported "crash entering the world" on Android 171; LDPlayer could not
