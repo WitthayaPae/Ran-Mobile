@@ -70,6 +70,21 @@ void        RanPlat_WatchdogDisarm ( void );
 //  Open a flag file for reading, or NULL. The caller closes it.
 FILE       *RanPlat_DiagOpen ( const char *name );
 
+//  Crash reports (ran_plat.cpp).
+//
+//  RanCrash_Begin, once, right before RanApp_Boot: turns the previous run into
+//  a report under <diag root>/crash_pending/ if it ended badly, arms the
+//  recorder for this run, and asks the platform to upload what is pending.
+//  The other two follow the app in and out of the foreground, which is how a
+//  system kill while playing is told apart from the player swiping it away.
+void        RanCrash_Begin ( void );
+void        RanCrash_SetForeground ( int foreground );
+void        RanCrash_CleanExit ( void );
+
+//  Each platform layer: POST every *.txt in dir to the crash endpoint on a
+//  background thread, deleting each one the server accepts.
+void        RanPlat_UploadCrashReports ( const char *dir );
+
 #ifdef __cplusplus
 }
 #endif

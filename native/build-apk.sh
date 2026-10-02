@@ -68,6 +68,23 @@ for A in $ABIS; do
        ! "$NDKBIN/llvm-strip.exe" --strip-debug "$(cygpath -w "$OUT/lib/$A/libran.so")"; then
       echo "[!] could not split debug info from $A - APK NOT built"; exit 1
     fi
+    #  Kept by build-id as well, for good. Crash reports from players name the
+    #  build-id of the library that crashed (RanCrash, ran_plat.cpp), and the
+    #  next build overwrites out/$A/libran.debug - so without this a report
+    #  from last week's APK could not be symbolised. tools/crash/symbolize.sh
+    #  looks here.
+    BID=$("$NDKBIN/llvm-readelf.exe" -n "$(cygpath -w "$SO")" 2>/dev/null |
+          awk '/Build ID:/ {print $3; exit}')
+    if [ -n "$BID" ]; then
+      mkdir -p "$HERE/out/symbols/$BID/$A"
+      #  Compressed: the DWARF is ~150 MB a build, a fifth of that zipped,
+      #  and llvm-symbolizer reads it either way.
+      [ -f "$HERE/out/symbols/$BID/$A/libran.debug" ] ||
+        "$NDKBIN/llvm-objcopy.exe" --compress-debug-sections=zlib           "$(cygpath -w "$HERE/out/$A/libran.debug")"           "$(cygpath -w "$HERE/out/symbols/$BID/$A/libran.debug")"
+      echo "  symbols  out/symbols/$BID/$A"
+    else
+      echo "  [!] no build-id in $A - its crash reports cannot be symbolised"
+    fi
     RAW=$(stat -c%s "$SO"); CUT=$(stat -c%s "$OUT/lib/$A/libran.so")
     echo "  + $A    $(awk -v r=$RAW -v c=$CUT 'BEGIN{printf "%.1f -> %.1f MB stripped", r/1048576, c/1048576}')"
   else

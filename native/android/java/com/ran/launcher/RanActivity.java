@@ -22,6 +22,12 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
 /*  The game activity, with something for the keyboard to type into.
  *
  *  The client used to be a plain NativeActivity, and raising the keyboard was
@@ -144,6 +150,69 @@ public class RanActivity extends NativeActivity {
                 Log.e("RanActivity", "ranOpenUrl failed: " + e);
             }
         }});
+    }
+
+    /*  Crash reports, sent home (native: RanCrash_Begin -> RanPlat_UploadCrashReports).
+     *
+     *  The native side writes each report as a text file in crash_pending/;
+     *  this POSTs them to the site, oldest first, and deletes each one the
+     *  server answers 200 for. Anything else stops the round and leaves the
+     *  files for the next launch - no retry loop, it is not worth the battery.
+     *  Its own thread: called from the game thread during boot, which must
+     *  not wait on a network.
+     *
+     *  iOS does the same in ran_ios_plat.mm: same URL, same headers, same
+     *  order, same rules.                                                   */
+    private static final String CRASH_URL = "https://ran-legacy-m.com/crash/upload.php";
+
+    public void ranUploadCrashReports(final String dir) {
+        String app = "?";
+        try {
+            app = String.valueOf(getPackageManager().getPackageInfo(getPackageName(), 0).versionCode);
+        } catch (Exception e) { /* keep "?" */ }
+        final String appVer = app;
+        new Thread(new Runnable() { public void run() {
+            File[] files = new File(dir).listFiles();
+            if (files == null || files.length == 0) return;
+            java.util.Arrays.sort(files);
+            for (File f : files) {
+                if (!f.getName().endsWith(".txt")) continue;
+                HttpURLConnection c = null;
+                try {
+                    byte[] body = new byte[(int) Math.min(f.length(), 600 * 1024)];
+                    FileInputStream in = new FileInputStream(f);
+                    int got = 0;
+                    while (got < body.length) {
+                        int k = in.read(body, got, body.length - got);
+                        if (k <= 0) break;
+                        got += k;
+                    }
+                    in.close();
+
+                    c = (HttpURLConnection) new URL(CRASH_URL).openConnection();
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(20000);
+                    c.setDoOutput(true);
+                    c.setRequestMethod("POST");
+                    c.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
+                    c.setRequestProperty("X-Ran-Crash", "1");
+                    c.setRequestProperty("X-Ran-App", appVer);
+                    c.setFixedLengthStreamingMode(got);
+                    OutputStream out = c.getOutputStream();
+                    out.write(body, 0, got);
+                    out.close();
+                    final int code = c.getResponseCode();
+                    Log.i("RanCrash", "sent " + f.getName() + " -> HTTP " + code);
+                    if (code != 200) break;
+                    f.delete();
+                } catch (Throwable t) {
+                    Log.w("RanCrash", "upload failed: " + t);
+                    break;
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }
+        }}, "RanCrashUpload").start();
     }
 
     public void ranHideKeyboard() {

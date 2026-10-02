@@ -340,6 +340,9 @@ static int  g_imeInsetPerMille = 0;
         const char *root = RanIOS_DataRoot();
         //  Something on screen before the client boots: it loads for seconds
         //  with no device of its own, and the window is otherwise black.
+        //  Report the last run if it ended badly, and record this one -
+        //  as android_main does just before its own RanApp_Boot.
+        RanCrash_Begin ();
         RanSplash_Begin ( root );
         const int ok = RanApp_Boot ( root, RanGL_LogicalWidth(), RanGL_LogicalHeight() );
         RanSplash_End ();
@@ -1102,8 +1105,11 @@ static NSString *RanPatchReasonCode ( NSString *error )
 @implementation RanAppDelegate
 //  Sound follows the app, exactly as APP_CMD_PAUSE / APP_CMD_RESUME do on
 //  Android.
-- (void)applicationDidEnterBackground:(UIApplication *)app { RanAudioSink_Pause ( 1 ); }
-- (void)applicationWillEnterForeground:(UIApplication *)app { RanAudioSink_Pause ( 0 ); }
+//  The crash recorder follows it too: a death in the background is the player
+//  swiping the app away, not a crash.
+- (void)applicationDidEnterBackground:(UIApplication *)app { RanAudioSink_Pause ( 1 ); RanCrash_SetForeground ( 0 ); }
+- (void)applicationWillEnterForeground:(UIApplication *)app { RanAudioSink_Pause ( 0 ); RanCrash_SetForeground ( 1 ); }
+- (void)applicationWillTerminate:(UIApplication *)app { RanCrash_CleanExit (); }
 
 //  AltStore / SideStore add a URL scheme when they re-sign the app and launch
 //  it through that URL ("Open" after an update). With no handler here UIKit

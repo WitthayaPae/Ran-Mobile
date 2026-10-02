@@ -362,6 +362,32 @@ extern "C" void RanPlat_OpenURL(const char *url) {
     g_app->activity->vm->DetachCurrentThread();
 }
 
+//  Send crash_pending/*.txt home. The work is in Java - HttpURLConnection, on
+//  its own thread (RanActivity.ranUploadCrashReports) - because the native
+//  side has no HTTPS of its own. Same attach/call/detach as RanPlat_OpenURL.
+extern "C" void RanPlat_UploadCrashReports(const char *dir) {
+    if (!dir || !*dir || !g_app || !g_app->activity) return;
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) return;
+
+    jobject act  = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+    if (cAct) {
+        jmethodID m = env->GetMethodID(cAct, "ranUploadCrashReports", "(Ljava/lang/String;)V");
+        if (m) {
+            jstring js = env->NewStringUTF(dir);
+            if (js) {
+                env->CallVoidMethod(act, m, js);
+                env->DeleteLocalRef(js);
+            }
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        env->DeleteLocalRef(cAct);
+    }
+    g_app->activity->vm->DetachCurrentThread();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_ran_launcher_RanActivity_nativeEnter(JNIEnv *, jclass) {
     //  0x1C is DIK_RETURN. The client wants the same thing a hardware Return
@@ -810,9 +836,11 @@ void onAppCmd(android_app *app, int32_t cmd) {
         //  keeps playing over whatever the player switched to.
         case APP_CMD_PAUSE:
             RanAudioSink_Pause(1);
+            RanCrash_SetForeground(0);     //  a death from here on is a swipe-away, not a crash
             break;
         case APP_CMD_RESUME:
             RanAudioSink_Pause(0);
+            RanCrash_SetForeground(1);
             break;
 
         case APP_CMD_INIT_WINDOW:
@@ -873,6 +901,7 @@ void onAppCmd(android_app *app, int32_t cmd) {
             RanGL_SurfaceLost();
             break;
         case APP_CMD_DESTROY:
+            RanCrash_CleanExit();
             st->quit = true;
             break;
         default:
@@ -942,6 +971,11 @@ extern "C" void android_main(android_app *app) {
             //  other app can reach on Android 11 and up. adb can still drop a
             //  switch in for a development device, which is all these were for.
             RanPlat_SetDiagRoot(root);
+
+            //  Report the last run if it ended badly, and record this one.
+            //  After the root (the record lives there), before the boot (which
+            //  is where the crashes are).
+            RanCrash_Begin();
 
             //  Put something on screen before the client boots. RanApp_Boot
             //  loads for many seconds with no device of its own yet, so without

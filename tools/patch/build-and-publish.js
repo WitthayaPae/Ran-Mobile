@@ -228,7 +228,11 @@ function sweepOut() {
                         'upload', 'UPLOAD.txt',
                         //  Blobs make-manifest's audit has seen on the server.
                         //  Losing it only costs one full re-check.
-                        '.server-blobs']),
+                        '.server-blobs',
+                        //  Debug info of every shipped build, by build-id
+                        //  (build-apk.sh). Crash reports from players name the
+                        //  build-id; without these they cannot be symbolised.
+                        'symbols']),
                'out/');
 }
 

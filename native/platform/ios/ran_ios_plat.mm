@@ -42,6 +42,63 @@ extern "C" int RanPlat_MemHeadroomMB ( void )
     return -1;
 }
 
+//  Send crash_pending/*.txt home (native: RanCrash_Begin).
+//
+//  The same job as RanActivity.ranUploadCrashReports on Android, with the same
+//  rules: same URL and headers, oldest first, delete on HTTP 200, stop at the
+//  first failure and leave the rest for the next launch. Off the main thread
+//  and off the game thread - boot must not wait on a network.
+static NSString *const kCrashURL = @"https://ran-legacy-m.com/crash/upload.php";
+
+extern "C" void RanPlat_UploadCrashReports ( const char *dir )
+{
+    if ( !dir || !*dir )    return;
+    NSString *d = [NSString stringWithUTF8String:dir];
+    if ( !d )   return;
+    NSString *app = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?";
+
+    dispatch_async ( dispatch_get_global_queue ( QOS_CLASS_UTILITY, 0 ), ^{
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSArray<NSString *> *names =
+            [[fm contentsOfDirectoryAtPath:d error:nil] sortedArrayUsingSelector:@selector(compare:)];
+        if ( names.count == 0 )  return;
+
+        NSURLSession *session =
+            [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.ephemeralSessionConfiguration];
+        for ( NSString *n in names ) {
+            if ( ![n hasSuffix:@".txt"] )   continue;
+            NSString *path = [d stringByAppendingPathComponent:n];
+            NSData *body = [NSData dataWithContentsOfFile:path];
+            if ( !body )    continue;
+            if ( body.length > 600 * 1024 ) body = [body subdataWithRange:NSMakeRange ( 0, 600 * 1024 )];
+
+            NSMutableURLRequest *r =
+                [NSMutableURLRequest requestWithURL:[NSURL URLWithString:kCrashURL]
+                                        cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                    timeoutInterval:20];
+            r.HTTPMethod = @"POST";
+            [r setValue:@"text/plain; charset=utf-8" forHTTPHeaderField:@"Content-Type"];
+            [r setValue:@"1" forHTTPHeaderField:@"X-Ran-Crash"];
+            [r setValue:app forHTTPHeaderField:@"X-Ran-App"];
+
+            __block NSInteger code = 0;
+            dispatch_semaphore_t done = dispatch_semaphore_create ( 0 );
+            [[session uploadTaskWithRequest:r fromData:body
+                          completionHandler:^( NSData *data, NSURLResponse *resp, NSError *err ) {
+                if ( !err && [resp isKindOfClass:NSHTTPURLResponse.class] )
+                    code = ((NSHTTPURLResponse *) resp).statusCode;
+                dispatch_semaphore_signal ( done );
+            }] resume];
+            dispatch_semaphore_wait ( done, dispatch_time ( DISPATCH_TIME_NOW, 40 * NSEC_PER_SEC ) );
+
+            RanPlat_Log ( RANLOG_INFO, "RanCrash", "sent %s -> HTTP %ld", n.UTF8String, (long) code );
+            if ( code != 200 )  break;
+            [fm removeItemAtPath:path error:nil];
+        }
+        [session finishTasksAndInvalidate];
+    } );
+}
+
 static NSString *EnsureDir(NSSearchPathDirectory what, NSString *leaf)
 {
     NSArray<NSURL *> *dirs =
