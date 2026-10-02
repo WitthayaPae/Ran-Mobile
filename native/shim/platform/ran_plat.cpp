@@ -436,7 +436,12 @@ const uint32_t kHeadBytes = 16384;                  //  header + crash text
 const uint32_t kCrashMax  = kHeadBytes - kHdrBytes;
 const uint32_t kRingBytes = 131072;                 //  power of two: the index wraps by mask
 const uint32_t kRunBytes  = kHeadBytes + kRingBytes;
-const char     kRunMagic[8] = { 'R','A','N','R','U','N','0','1' };
+//  02: the header carries the build-id of the run. 01 named only the patch,
+//  and the report took the build-id from the library WRITING it - the next
+//  launch, often a newer build. A 172 crash sent by 173 was filed as "173
+//  crashed" (2026-10-02 23:00, Galaxy S25), right after 173 had fixed it.
+const char     kRunMagic[8]   = { 'R','A','N','R','U','N','0','2' };
+const char     kRunMagicV1[8] = { 'R','A','N','R','U','N','0','1' };
 
 struct RunHdr {
     char              magic[8];
@@ -445,7 +450,8 @@ struct RunHdr {
     uint32_t          ringBytes;
     volatile uint32_t crashLen;
     int64_t           startUnix;
-    char              build[32];    //  .patchver: the patch the run was on
+    char              build[12];    //  .patchver: the patch the run was on
+    unsigned char     buildId[20];  //  GNU build-id of the library that ran
 };
 static_assert ( sizeof(RunHdr) == 64, "lastrun.bin header is 64 bytes" );
 
@@ -768,9 +774,8 @@ int FindBuildId ( struct dl_phdr_info *info, size_t, void *arg )
             const char *name = p + 12;
             const char *desc = name + ( ( nsz + 3 ) & ~3u );
             if ( typ == 3 && nsz == 4 && memcmp ( name, "GNU", 4 ) == 0 ) {
-                char *out = (char *) arg;
-                for ( uint32_t k = 0; k < dsz && k < 32; ++k )
-                    snprintf ( out + k * 2, 3, "%02x", (unsigned char) desc[k] );
+                unsigned char *out = (unsigned char *) arg;     //  20 bytes
+                for ( uint32_t k = 0; k < dsz && k < 20; ++k ) out[k] = (unsigned char) desc[k];
                 return 1;
             }
             p = desc + ( ( dsz + 3 ) & ~3u );
@@ -794,14 +799,17 @@ void WritePending ( const RunHdr &h, const char *crash, uint32_t crashLen,
         ? "kind: crash\n"
         : "kind: killed\n"
           "note: closed while on screen with no crash signal - usually the system killing it for memory\n" );
-    char build[33];
-    memcpy ( build, h.build, 32 ); build[32] = 0;
+    //  Everything here describes the run that ENDED, which may be an older
+    //  build than the one writing this.
+    char build[13];
+    memcpy ( build, h.build, 12 ); build[12] = 0;
     t.addf ( "patch: %s\n", build[0] ? build : "?" );
-    char bid[65] = "";
-#if defined(__ANDROID__)
-    dl_iterate_phdr ( FindBuildId, bid );
-#endif
-    t.addf ( "build-id: %s\n", bid[0] ? bid : "?" );
+    int haveId = 0;
+    for ( int k = 0; k < 20; ++k ) haveId |= h.buildId[k];
+    char bid[41] = "";
+    if ( haveId )
+        for ( int k = 0; k < 20; ++k ) snprintf ( bid + k * 2, 3, "%02x", h.buildId[k] );
+    t.addf ( "build-id: %s\n", haveId ? bid : "? (recorded by an older version)" );
     AddDevice ( t );
     const time_t start = (time_t) h.startUnix, now = time ( NULL );
     char ts[32] = "", tn[32] = "";
@@ -898,6 +906,13 @@ void ReportPreviousRun ( const char *path )
 
     RunHdr h;
     memcpy ( &h, buf, sizeof(h) );
+    //  A record in the previous layout: same offsets, except that its patch
+    //  field ran on over where the build-id now is - so it has none.
+    if ( memcmp ( h.magic, kRunMagicV1, 8 ) == 0 ) {
+        memcpy ( h.magic, kRunMagic, 8 );
+        h.build[11] = 0;
+        memset ( h.buildId, 0, sizeof(h.buildId) );
+    }
     if ( got == (ssize_t) kRunBytes && memcmp ( h.magic, kRunMagic, 8 ) == 0 &&
          h.ringBytes == kRingBytes &&
          ( h.state == RUN_CRASHED || h.state == RUN_FOREGROUND ) ) {
@@ -960,6 +975,9 @@ extern "C" void RanCrash_Begin ( void )
         h->ringBytes = kRingBytes;
         h->startUnix = (int64_t) time ( NULL );
         ReadSmallFile ( RanPlat_DiagPath ( ".patchver" ), h->build, sizeof(h->build) );
+#if defined(__ANDROID__)
+        dl_iterate_phdr ( FindBuildId, h->buildId );
+#endif
 
         //  Move the ring onto the file, oldest line first.
         pthread_mutex_lock ( &g_ringLock );
