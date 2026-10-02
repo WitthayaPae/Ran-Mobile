@@ -12,6 +12,24 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (3) — Crash entering Tyranny fixed (v177)
+
+* **From the crash report** (app 176, LDPlayer): SIGSEGV fault addr 0 in
+  `DxEffectRiver::UpdateWaveTex` (DxEffectRiverDraw.cpp:134) right after loading
+  `sps_ground.wld` (Tyranny). User: Android and iPhone both crash on entering.
+* **Cause:** `DxEffectRiver::CreateDevice` returns E_FAIL at its first shader call - the
+  shim answers every CreateVertexShader/PixelShader/VertexDeclaration with
+  D3DERR_NOTAVAILABLE - before `m_pWaveTexVB`/IB and the rain-drop buffers are created.
+  Rivers flagged USEDARK draw through `RenderDark -> UpdateWaveTex -> m_pWaveTexVB->Lock`.
+* **Fix (RAN_MOBILE):** shader blocks skipped on mobile so the buffers are made (shader
+  pointers stay NULL, as the failure already left them); `UpdateWaveTex` returns if the
+  buffers are missing. Scanned every effect's CreateDevice for the same pattern: only River.
+* **LDPlayer:** test01 into Tyranny on the fixed build, 60 fps, alive after a minute (the old
+  build died 1-2 s after the map loaded). iOS: same shared SOURCE, compiled by CI only.
+* **Club creation (iPhone, open):** chat shows EMCLUB_NEW_FB_BADNAME for "test02" (name
+  filter) and then EMCLUB_NEW_FB_FAIL. Not yet traced to which of the FAIL sites (field NPC
+  check / agent / DB CreateClub).
+
 ## 2026-10-03 (2) — Moving slot 1 no longer drags F1-F4; key settings gone from the menu (v176)
 
 * **Bug (user):** dragging skill slot 1 in the HUD editor moved the page row too.
