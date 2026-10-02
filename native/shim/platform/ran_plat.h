@@ -81,6 +81,10 @@ void        RanCrash_Begin ( void );
 void        RanCrash_SetForeground ( int foreground );
 void        RanCrash_CleanExit ( void );
 
+//  End the app, completely: the game's own Exit (WM_CLOSE, win_impl.cpp).
+//  Android finishes and removes the task, then ends the process; iOS exits.
+void        RanPlat_Quit ( void );
+
 //  Each platform layer: POST every *.txt in dir to the crash endpoint on a
 //  background thread, deleting each one the server accepts.
 void        RanPlat_UploadCrashReports ( const char *dir );

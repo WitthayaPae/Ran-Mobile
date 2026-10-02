@@ -42,6 +42,18 @@ extern "C" int RanPlat_MemHeadroomMB ( void )
     return -1;
 }
 
+//  The game's Exit (WM_CLOSE, shim win_impl.cpp) - the same job as
+//  RanActivity.ranQuit on Android: silence, then end the process. iOS has no
+//  "close the app" call; exit(0) is what is left, on the main queue so UIKit
+//  is not torn down under a frame in progress.
+extern "C" void RanAudioSink_Pause ( int paused );
+
+extern "C" void RanPlat_Quit ( void )
+{
+    RanAudioSink_Pause ( 1 );
+    dispatch_async ( dispatch_get_main_queue(), ^{ exit ( 0 ); } );
+}
+
 //  Send crash_pending/*.txt home (native: RanCrash_Begin).
 //
 //  The same job as RanActivity.ranUploadCrashReports on Android, with the same

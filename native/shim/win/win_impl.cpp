@@ -969,7 +969,21 @@ BOOL  ShowWindow(HWND, int)    { return TRUE; }
 BOOL  UpdateWindow(HWND)       { return TRUE; }
 BOOL  InvalidateRect(HWND, const RECT *, BOOL) { return TRUE; }
 LRESULT SendMessageA(HWND, UINT, WPARAM, LPARAM) { return 0; }
-BOOL  PostMessageA(HWND, UINT, WPARAM, LPARAM)   { return TRUE; }
+//  WM_CLOSE is the game quitting. DxGlobalStage::CloseGame - the Exit
+//  button, and the "disconnected" messages - sets EM_CLOSE and posts it, and
+//  on PC the window closing ends the process. Here it went nowhere: the game
+//  stopped updating and the player was left on a blank screen with the music
+//  still playing. The platform ends the app instead.
+BOOL  PostMessageA(HWND, UINT msg, WPARAM, LPARAM)
+{
+    if ( msg == 0x0010 /* WM_CLOSE */ )
+    {
+        RanPlat_Log ( RANLOG_INFO, "RanApp", "WM_CLOSE posted - quitting the app" );
+        RanCrash_CleanExit ();
+        RanPlat_Quit ();
+    }
+    return TRUE;
+}
 BOOL  PeekMessageA(LPMSG, HWND, UINT, UINT, UINT) { return FALSE; }
 HWND  GetActiveWindow(void)      { return NULL; }
 HWND  GetForegroundWindow(void)  { return NULL; }

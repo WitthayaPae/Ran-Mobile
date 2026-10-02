@@ -362,6 +362,30 @@ extern "C" void RanPlat_OpenURL(const char *url) {
     g_app->activity->vm->DetachCurrentThread();
 }
 
+//  The game's Exit (WM_CLOSE). RanActivity.ranQuit does the work on the UI
+//  thread: finishAndRemoveTask, so nothing is left in recents, then the
+//  process goes - a NativeActivity process left alive would keep the music,
+//  the socket and every static the next launch expects fresh.
+extern "C" void RanPlat_Quit(void) {
+    RanAudioSink_Pause(1);          //  silence at once, not when the process finally goes
+    if (!g_app || !g_app->activity) { _exit(0); }
+
+    JNIEnv *env = NULL;
+    if (g_app->activity->vm->AttachCurrentThread(&env, NULL) != JNI_OK || !env) { _exit(0); }
+
+    bool called = false;
+    jobject act  = g_app->activity->clazz;
+    jclass  cAct = env->GetObjectClass(act);
+    if (cAct) {
+        jmethodID m = env->GetMethodID(cAct, "ranQuit", "()V");
+        if (m) { env->CallVoidMethod(act, m); called = true; }
+        if (env->ExceptionCheck()) { env->ExceptionClear(); called = false; }
+        env->DeleteLocalRef(cAct);
+    }
+    g_app->activity->vm->DetachCurrentThread();
+    if (!called) _exit(0);
+}
+
 //  Send crash_pending/*.txt home. The work is in Java - HttpURLConnection, on
 //  its own thread (RanActivity.ranUploadCrashReports) - because the native
 //  side has no HTTPS of its own. Same attach/call/detach as RanPlat_OpenURL.

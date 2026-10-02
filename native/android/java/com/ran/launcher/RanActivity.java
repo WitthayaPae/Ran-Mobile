@@ -215,6 +215,20 @@ public class RanActivity extends NativeActivity {
         }}, "RanCrashUpload").start();
     }
 
+    /*  The game's Exit (native RanPlat_Quit). Off the screen and out of recents
+     *  first, then the process: the native side keeps state that a relaunch in
+     *  the same process would find half-torn-down. The short delay lets the
+     *  task animation finish instead of the window vanishing mid-frame.
+     *  iOS: ran_ios_plat.mm RanPlat_Quit does the same with exit(0).         */
+    public void ranQuit() {
+        runOnUiThread(new Runnable() { public void run() {
+            try { finishAndRemoveTask(); } catch (Exception e) { finish(); }
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                public void run() { android.os.Process.killProcess(android.os.Process.myPid()); }
+            }, 300);
+        }});
+    }
+
     public void ranHideKeyboard() {
         runOnUiThread(new Runnable() { public void run() {
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);

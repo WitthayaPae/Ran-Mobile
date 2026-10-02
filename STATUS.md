@@ -12,6 +12,21 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-02 (4) — Stat prompt label, Exit quits the app, report names the crashed build (v174)
+
+* **Stat prompt:** `CCharacterWindow::MobileAskStatsUp` indexed `CHARACTER_STAT_STATIC`
+  (Pow Dex Spi Int Str Stm) with an identity table over EMSTATS (POW STR SPI DEX INT STA):
+  DEX asked "Int", STR asked "Dex". Points always went to the tapped stat. Table fixed.
+  LDPlayer: DEX + asks "Dex", STR + asks "Str".
+* **Exit:** `DxGlobalStage::CloseGame` posts WM_CLOSE; the shim's PostMessageA ignored it,
+  leaving a blank screen with music. PostMessageA(WM_CLOSE) now calls `RanCrash_CleanExit` +
+  new `RanPlat_Quit`: Android `RanActivity.ranQuit` (finishAndRemoveTask, then kill the
+  process), iOS `exit(0)` on the main queue. LDPlayer: menu > ระบบ > ออกจากเกม > ใช่ gives
+  process gone, not in recents, no crash report on the next launch. iOS compiled only.
+* **Crash report:** lastrun.bin v02 stores the run's own build-id (a 172 crash sent by 173
+  had read as "173 crashed"). Viewer (`RAN/crash/index.php`) leads with when it happened and
+  the patch that crashed.
+
 ## 2026-10-02 (3) — World-entry crash on Galaxy S25 Ultra fixed (v173)
 
 * **Found by the first crash report sent home** (app 172, SM-S938B, Android 16, Adreno):
