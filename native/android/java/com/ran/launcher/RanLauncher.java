@@ -725,7 +725,7 @@ public class RanLauncher extends Activity {
             throw new Exception("cannot create " + ROOT);
 
         int localVersion = readVersion();
-        if (localVersion == version) { say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + version, 1000); return; }
+        if (localVersion == version) { say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + label(), 1000); return; }
 
         /*  Never go backwards.
          *
@@ -780,7 +780,7 @@ public class RanLauncher extends Activity {
         if (todo.isEmpty()) {
             writeIndexFrom(arr, rootDir);
             writeVersion(version);
-            say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + version, 1000);
+            say("เป็นเวอร์ชันล่าสุด", "เวอร์ชัน " + label(), 1000);
             return;
         }
 
@@ -789,7 +789,7 @@ public class RanLauncher extends Activity {
 
         writeIndexFrom(arr, rootDir);
         writeVersion(version);                 //  last, always
-        say("อัปเดตเสร็จแล้ว", "เวอร์ชัน " + version, 1000);
+        say("อัปเดตเสร็จแล้ว", "เวอร์ชัน " + label(), 1000);
     }
 
     /*  The key the manifest must be signed with.
@@ -1260,6 +1260,18 @@ public class RanLauncher extends Activity {
                             : "จะเล่นด้วยเวอร์ชันที่ติดตั้งไว้";
     }
 
+    /*  What the player is told the version is: the app's own label (1.1.0 at
+     *  the 2026-10-03 launch, then 1.1.1, ...), not the patch number - that one
+     *  counts data patches and means nothing to a player. iOS shows the same
+     *  label (CFBundleShortVersionString, ran_ios_patch.mm).                  */
+    private String label() {
+        try {
+            String n = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (n != null && n.length() > 0) return n;
+        } catch (Exception e) { /* fall through */ }
+        return "?";
+    }
+
     private boolean offerApk(JSONObject apk, int myApk) throws Exception {
         if (apk == null) return false;
 
@@ -1269,7 +1281,7 @@ public class RanLauncher extends Activity {
         final String sha  = apk.getString("sha256");
         final long   size = apk.getLong("size");
         final String name = apk.optString("versionName", "");
-        final String what = "version " + want + (name.length() == 0 ? "" : " (" + name + ")");
+        final String what = "เวอร์ชัน " + (name.length() == 0 ? String.valueOf(want) : name);
 
         /*  Installing needs the player's consent once, in Settings. Asking is
          *  all this can do, and being refused is not a reason to keep them out

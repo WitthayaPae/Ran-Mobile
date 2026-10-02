@@ -315,7 +315,16 @@ if(RAN_IOS)
   if(NOT RAN_PRODUCT_BUILD)
     message(FATAL_ERROR "no android:versionCode in AndroidManifest.xml")
   endif()
-  set(RAN_PRODUCT_VERSION "1.0.${RAN_PRODUCT_BUILD}")
+  #  The visible version is Android's versionName when it is major.minor.patch
+  #  (1.1.0 from the 2026-10-03 launch on), so both platforms show the same
+  #  label; the build number stays the versionCode. Older V-style names fall
+  #  back to 1.0.<build>.
+  string(REGEX MATCH "android:versionName=\"([0-9]+[.][0-9]+[.][0-9]+)\"" _n "${RAN_AMF}")
+  if(CMAKE_MATCH_1)
+    set(RAN_PRODUCT_VERSION "${CMAKE_MATCH_1}")
+  else()
+    set(RAN_PRODUCT_VERSION "1.0.${RAN_PRODUCT_BUILD}")
+  endif()
   message(STATUS "iOS bundle version ${RAN_PRODUCT_VERSION} (build ${RAN_PRODUCT_BUILD})")
 
   file(GLOB IOS_ART ${CMAKE_CURRENT_SOURCE_DIR}/platform/ios/art/*.png)

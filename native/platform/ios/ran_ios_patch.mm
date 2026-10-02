@@ -158,6 +158,15 @@ static NSString *SafeDest ( NSString *root, NSString *rel, NSString **err )
 //  the whole reason the iPhone patched far slower than Android.
 static const int kDlThreads = 8;
 
+//  What the player is told the version is: the app's own label (1.1.0 at the
+//  2026-10-03 launch, then 1.1.1, ...), not the patch number - the same as
+//  RanLauncher.label() on Android.
+static NSString *AppLabel ( void )
+{
+    NSString *v = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    return v.length ? v : @"?";
+}
+
 static NSURLSession *PatchSession ( void )
 {
     static NSURLSession *s;
@@ -526,7 +535,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
 
         const int localVersion = ReadVersion ();
         if (localVersion == version) {
-            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %@", AppLabel ()], 1000 );
             done ( YES, NO, nil );
             return;
         }
@@ -597,7 +606,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
         if (todo.count == 0) {
             WriteIndexFrom ( files, root );
             WriteVersion ( version );
-            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+            say ( @"เป็นเวอร์ชันล่าสุด", [NSString stringWithFormat:@"เวอร์ชัน %@", AppLabel ()], 1000 );
             done ( YES, NO, nil );
             return;
         }
@@ -658,7 +667,7 @@ extern "C" void RanIOS_RunPatch ( RanPatchProgress say, RanPatchDone done )
 
         WriteIndexFrom ( files, root );
         WriteVersion ( version );                   //  last, always
-        say ( @"อัปเดตเสร็จแล้ว", [NSString stringWithFormat:@"เวอร์ชัน %d", version], 1000 );
+        say ( @"อัปเดตเสร็จแล้ว", [NSString stringWithFormat:@"เวอร์ชัน %@", AppLabel ()], 1000 );
         done ( YES, NO, nil );
     });
 }

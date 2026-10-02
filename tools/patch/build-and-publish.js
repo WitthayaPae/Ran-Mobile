@@ -157,7 +157,27 @@ function bumpVersion(bumpName) {
       the scheme, or a first build, publishes V001 rather than skipping to V002 -
       while versionCode still goes up, because Android compares that one and it
       may never repeat.                                                        */
-  const v = bumpName ? /^V(\d+)$/.exec(nameWas) : null;
+  /*  The launch label, 1.1.0 (2026-10-03), and every release after it:
+      major.minor.patch, the patch number moving once the current label has
+      actually been published - read from the published android/version.json,
+      so the first build under a new label ships as that label (1.1.0, not
+      1.1.1). It is also the iPhone's visible version (CMakeLists.txt), and
+      AltStore offers an update only when that string goes up, so it must move
+      on every release.                                                       */
+  const sem = /^(\d+)\.(\d+)\.(\d+)$/.exec(nameWas);
+  if (sem) {
+    let published = null;
+    try {
+      published = JSON.parse(fs.readFileSync(path.join(NATIVE, 'out', 'launcher_mobile',
+                                                        'android', 'version.json'), 'utf8')).versionName;
+    } catch (e) { /* nothing published yet: keep the label */ }
+    if (published === nameWas) {
+      nameNow = sem[1] + '.' + sem[2] + '.' + (parseInt(sem[3], 10) + 1);
+      src = src.replace('android:versionName="' + nameWas + '"',
+                        'android:versionName="' + nameNow + '"');
+    }
+  }
+  const v = (bumpName && !sem) ? /^V(\d+)$/.exec(nameWas) : null;
   if (v) {
     const n = parseInt(v[1], 10) + 1;
     nameNow = 'V' + String(n).padStart(v[1].length, '0');

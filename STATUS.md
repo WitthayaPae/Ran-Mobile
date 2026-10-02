@@ -12,6 +12,20 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (6) — Launch label 1.1.0 (build 180)
+
+* **Request (user):** "initial version 1.1.0". Internal numbers kept counting (a reset to 1
+  would force every install to be deleted: Android refuses lower versionCodes, the
+  launcher only offers newer ones, AltStore compares the version string).
+* **Label:** `android:versionName` = `1.1.0`. build-and-publish.js: an `x.y.z` label moves
+  its patch number once the current label is published (out/launcher_mobile/android/
+  version.json), so the launch build is 1.1.0 and the next 1.1.1. CMakeLists.txt: the iOS
+  CFBundleShortVersionString is that label (was 1.0.<build>); CFBundleVersion stays the
+  versionCode. AltStore sees 1.1.0 > 1.0.179 and offers it.
+* **Screens:** Android `RanLauncher.label()` / iOS `AppLabel()` - the update page says
+  "เวอร์ชัน 1.1.0" (was the patch number, e.g. 606); the APK offer says "เวอร์ชัน 1.1.0".
+* **LDPlayer:** installed build 180, versionName 1.1.0, page "เป็นเวอร์ชันล่าสุด · เวอร์ชัน 1.1.0".
+
 ## 2026-10-03 (5) — Club emblems now actually show on phones (v179)
 
 * **Cause (proven):** `DxClubMan::DrawClubTex` draws the 16x11 emblem into a DDS page,
