@@ -12,6 +12,18 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 — HUD editor: F1-F4 page row no longer swallows skill slot 1 (v175)
+
+* **Bug (user):** in ปรับแต่งปุ่ม HUD the page row F1-F4 looked joined to skill slot 1.
+* **Cause:** `groupCircle(kGrpPage)` is one circle around the row, radius half the row's
+  width, so it reached over slot 1. The editor drew that circle (slot 1 inside it) and
+  `groupAt` used it to pick, so a press just beside slot 1 grabbed the page row.
+* **Fix (`shim/platform/touch_ui.cpp`, shared):** the page row is outlined and picked by
+  each F button's own ring (radius x1.3, like skill slots); all four light up together and
+  still move as one group. `groupCircle(kGrpPage)` is kept only as the row's extent.
+* **LDPlayer:** four separate rings; a tap beside slot 1 selects nothing; F2 selects the row;
+  dragging the row leaves slot 1 in place; cancel restores the layout. iOS compiled only.
+
 ## 2026-10-02 (4) — Stat prompt label, Exit quits the app, report names the crashed build (v174)
 
 * **Stat prompt:** `CCharacterWindow::MobileAskStatsUp` indexed `CHARACTER_STAT_STATIC`

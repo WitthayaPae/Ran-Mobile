@@ -180,6 +180,7 @@ const int kSlotFist     = RANTOUCH_SLOT_FIST;
 //  from layout(), not from their position here.
 const int kButtonCount = 13;
 const int kBtnF1 = 1, kBtnF2 = 2, kBtnF3 = 9, kBtnF4 = 10;
+const int kPageBtn[4] = { kBtnF1, kBtnF2, kBtnF3, kBtnF4 };
 //  The chat button, placed by the client like the ride button below it.
 const int kBtnChat = 11;
 //  Peace / battle (X), placed straight above the ride button and shown with it.
@@ -1245,6 +1246,18 @@ int groupAt(float x, float y) {
                     g_editSlot = i;
                     return kGrpCorner;
                 }
+            continue;
+        }
+        if (g == kGrpPage) {
+            //  The page buttons by their own rings, not by the circle around
+            //  the row. That circle is half the row wide, so it reached up over
+            //  skill slot 1: a press just beside the slot took the whole page
+            //  row, and the outline drew slot 1 inside the page group as if the
+            //  two were one control. The four still move together.
+            for (int k = 0; k < 4; ++k) {
+                const Button &b = g_buttons[kPageBtn[k]];
+                if (b.radius > 0.0f && hit(b.centre, b.radius * 1.3f, x, y)) return g;
+            }
             continue;
         }
         Vec2 c; float r;
@@ -2818,9 +2831,21 @@ void drawEditor() {
                      kInk.r, kInk.g, kInk.b, 0.5f);
         }
     }
+    //  The page buttons: a ring each, all four lit together when the row is
+    //  selected - it is one group, but drawn as one big circle it enclosed
+    //  skill slot 1 and the two read as joined.
+    for (int k = 0; k < 4; ++k) {
+        const Button &b = g_buttons[kPageBtn[k]];
+        if (b.radius <= 0.0f) continue;
+        const float rr = b.radius * 1.3f;
+        if (g_editSel == kGrpPage)
+            drawRing(b.centre.x, b.centre.y, rr - u * 0.016f, rr, kAmber.r, kAmber.g, kAmber.b, 0.95f);
+        else
+            drawRing(b.centre.x, b.centre.y, rr - u * 0.018f, rr, kInk.r, kInk.g, kInk.b, 0.5f);
+    }
     for (int g = 0; g < kGrpCount; ++g) {
         //  outlined one by one above
-        if (g == kGrpSkill || g == kGrpPotion || g == kGrpCorner) continue;
+        if (g == kGrpSkill || g == kGrpPotion || g == kGrpCorner || g == kGrpPage) continue;
         Vec2 c; float r;
         if (!groupCircle(g, c, r)) continue;
         if (g == g_editSel) {
