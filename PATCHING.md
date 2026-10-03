@@ -419,6 +419,21 @@ the first allowlist.
   fails. Upload them together, after the blobs.
 * Re-uploading the whole folder is fine, just wasteful. Any tool that skips
   identical files moves only the new blobs.
+* **Then purge the manifest from Cloudflare - every time.** Since 2026-10-03 a
+  Cache Rule caches `/launcher_mobile/manifest.json` and `manifest.sig` at the
+  edge for 2 hours (the Free plan minimum; 1 minute is not offered). Without a
+  purge, players keep the old patch for up to 2 hours, and if only one of the
+  pair has expired they get the new list with the old signature (or the
+  reverse) and retry until both match. Caching -> Configuration -> Purge Cache
+  -> Custom Purge -> URL:
+  `https://ran-legacy-m.com/launcher_mobile/manifest.json` and
+  `https://ran-legacy-m.com/launcher_mobile/manifest.sig`. Check with
+  `curl -sI .../manifest.json` that `cf-cache-status` reads MISS once, then HIT.
+  Why the rule exists: uncached, every launch pulled the 3.6 MB manifest from
+  the origin at ~0.3 MB/s (11 s for one client, measured 2026-10-03); with the
+  download page just opened, players starting together shared that uplink and
+  hit the launcher's 30 s read timeout ("เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้").
+  Cached, it is 0.1-0.3 s.
 
 ---
 

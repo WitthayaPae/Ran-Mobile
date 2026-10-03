@@ -12,6 +12,34 @@ If anything here disagrees with another file, this file wins.
 
 ---
 
+## 2026-10-03 (8) — Android launcher stuck forever on "Exception 416" (v181, 1.1.1)
+
+A Realme C85 5G player sat on "เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้ (Exception 416)".
+Cause: `httpToFile` resumes from a leftover `<file>.tmp` with
+`Range: bytes=<length>-`. When the launcher was stopped after the last byte but
+before the hash check + rename, the leftover is exactly full size, the range
+starts at the end, the server answers 416, the leftover is kept, and every
+retry repeats it. Reproduced on LDPlayer with build 180 (a full-size
+`comment.ini.tmp` -> 416 loop). Fix: a full-size leftover skips the request and
+goes to the caller's hash check (kept if right, deleted and re-fetched if
+wrong); any other 416 deletes the leftover. Verified on build 181: correct
+leftover -> done; zero-filled leftover -> one retry, re-downloaded, sha OK.
+iOS: not affected - `HttpToFile` there never resumes (whole-file download
+task), so no iOS build; minIos stays 180. The launcher offers the new APK before
+any data download, so stuck phones get out by accepting the update.
+
+## 2026-10-03 (7) — Manifest cached at Cloudflare (players could not reach the patch server)
+
+After the website download buttons opened, players reported
+"เชื่อมต่อเซิร์ฟเวอร์อัปเดตไม่ได้". Measured: all 300 sampled blobs were HIT and
+fast, but `manifest.json` was `cf-cache-status: DYNAMIC` - 3.6 MB from the
+origin at ~0.3 MB/s, 11 s for one client, so a crowd starting together runs
+into the launcher's 30 s read timeout. A Cloudflare Cache Rule now caches
+`manifest.json` + `manifest.sig` for 2 hours (Free plan minimum); verified HIT,
+0.1-0.3 s, byte-identical to patch 608. **Every upload must now be followed by
+a purge of those two URLs** - see PATCHING.md "Uploading". No app change.
+Not yet confirmed from a player's reason code that the timeout was their cause.
+
 ## 2026-10-03 (6) — Launch label 1.1.0 (build 180)
 
 * **Request (user):** "initial version 1.1.0". Internal numbers kept counting (a reset to 1

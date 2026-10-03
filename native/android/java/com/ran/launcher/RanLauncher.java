@@ -1083,12 +1083,22 @@ public class RanLauncher extends Activity {
         long have = tmp.exists() ? tmp.length() : 0;
         /*  A part-file bigger than the whole is not a resume point.           */
         if (expected >= 0 && have > expected) { tmp.delete(); have = 0; }
+        /*  A part-file exactly the size of the whole is already downloaded -
+         *  the launcher was stopped between the last byte and the rename. It
+         *  used to ask for "bytes=<size>-", which no server can satisfy: 416,
+         *  the file was kept, and every retry asked again, forever (a Realme
+         *  C85 sat on "Exception 416", 2026-10-03). Hand it to the caller's
+         *  hash check instead; a wrong file is deleted there and fetched anew. */
+        if (expected > 0 && have == expected) return;
 
         HttpURLConnection c = open(url);
         if (have > 0) c.setRequestProperty("Range", "bytes=" + have + "-");
         boolean bad = false;
         try {
             int code = c.getResponseCode();
+            //  Any other unsatisfiable resume point is not one either: drop it,
+            //  so the next attempt starts the file from zero.
+            if (code == 416) bad = true;
             boolean append = (code == 206);
             if (!append && have > 0) have = 0;          //  server ignored Range
             if (code != 200 && code != 206) throw new Exception("HTTP " + code);
